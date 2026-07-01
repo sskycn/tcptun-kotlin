@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.gostartkit.tcptun"
+    namespace = "com.sskycn.tcptun"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -12,7 +12,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.gostartkit.tcptun"
+        applicationId = "com.sskycn.tcptun"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
@@ -38,6 +38,7 @@ android {
 }
 
 dependencies {
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
