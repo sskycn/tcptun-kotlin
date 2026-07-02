@@ -47,7 +47,16 @@ func Status() string
   "tunnel_path": "/proxy",
   "tunnel_tls": false,
   "tunnel_tls_server_name": "",
+  "tunnel_tls_insecure": false,
+  "tunnel_security": "",
+  "tunnel_flow": "",
+  "reality_server_name": "",
+  "reality_public_key": "",
+  "reality_short_id": "",
+  "reality_fingerprint": "",
+  "reality_spider_x": "",
   "tunnel_mux": true,
+  "upstream_protocol": "socks5",
   "enable_udp": true,
   "config_path": "",
   "route_config_path": "",
@@ -102,7 +111,7 @@ For VLESS/VMess/Trojan, use the same protocol, transport, token/UUID/password, T
 1. Run `./scripts/build-androidbridge.sh` to create `app/libs/androidbridge.aar`, then install the app.
 2. Open the app. The first screen is the profile list.
 3. Tap `+` to add a profile, or tap the pen icon to edit an existing profile.
-4. Tap `⇩` to import a URI share link, or enter profile name, server address, port, protocol, transport, UUID/password/token, SNI, path, TLS, mux, and UDP settings manually.
+4. Tap `⇩` to import a URI share link, or enter profile name, server address, port, protocol, transport, UUID/password/token, SNI, path, TLS, REALITY, mux, upstream, and UDP settings manually.
 5. Tap a profile row to select it. The selected profile has a black bar on the left.
 6. Tap the share icon to export a URI link for the profile protocol.
 7. Tap the orange floating button and approve the Android VPN prompt.
@@ -134,9 +143,9 @@ vless://00000000-0000-4000-8000-000000000000@203.0.113.10:443?security=reality&e
 - `VpnService` with foreground service notification.
 - Config persistence with `SharedPreferences`.
 - Multiple local profiles with select, add, edit, delete, and share actions.
-- URI import/export for native, VLESS, VMess, and Trojan profiles, including REALITY `pbk`, `fp`, `spx`, `flow`, and `sni`.
+- URI import/export for native, VLESS, VMess, and Trojan profiles, including REALITY `pbk`, `sid`, `fp`, `spx`, `flow`, and `sni`.
 - Protocol and transport selection UI.
-- Optional token, SNI, path, TLS, mux, and UDP UI.
+- Optional token, SNI, path, TLS, TLS insecure, REALITY short ID, mux, upstream protocol, and UDP UI.
 - Status display: `Stopped`, `Starting`, `Running`, `Error`.
 - Recent log display.
 - IPv4 TCP forwarding from TUN to local SOCKS5 CONNECT.

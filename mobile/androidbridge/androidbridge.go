@@ -27,6 +27,7 @@ type mobileConfig struct {
 	TunnelPath          string     `json:"tunnel_path"`
 	TunnelTLS           bool       `json:"tunnel_tls"`
 	TunnelTLSServerName string     `json:"tunnel_tls_server_name"`
+	TunnelTLSInsecure   bool       `json:"tunnel_tls_insecure"`
 	TunnelSecurity      string     `json:"tunnel_security"`
 	TunnelFlow          string     `json:"tunnel_flow"`
 	RealityServerName   string     `json:"reality_server_name"`
@@ -35,6 +36,8 @@ type mobileConfig struct {
 	RealityShortID      string     `json:"reality_short_id"`
 	RealitySpiderX      string     `json:"reality_spider_x"`
 	TunnelMux           bool       `json:"tunnel_mux"`
+	UpstreamProtocol    string     `json:"upstream_protocol"`
+	EnableUDP           bool       `json:"enable_udp"`
 	ConfigPath          string     `json:"config_path"`
 	RouteConfigPath     string     `json:"route_config_path"`
 	Verbose             bool       `json:"verbose"`
@@ -200,6 +203,7 @@ func parseConfig(configJSON string) (tcptun.Config, error) {
 	cfg.TunnelPath = valueOrDefault(in.TunnelPath, "/proxy")
 	cfg.TunnelTLS = in.TunnelTLS
 	cfg.TunnelTLSServerName = strings.TrimSpace(in.TunnelTLSServerName)
+	cfg.TunnelTLSInsecure = in.TunnelTLSInsecure
 	cfg.TunnelSecurity = strings.TrimSpace(in.TunnelSecurity)
 	cfg.TunnelFlow = strings.TrimSpace(in.TunnelFlow)
 	cfg.RealityServerName = valueOrDefault(in.RealityServerName, in.TunnelTLSServerName)
@@ -208,6 +212,7 @@ func parseConfig(configJSON string) (tcptun.Config, error) {
 	cfg.RealityShortID = strings.TrimSpace(in.RealityShortID)
 	cfg.RealitySpiderX = strings.TrimSpace(in.RealitySpiderX)
 	cfg.TunnelMux = in.TunnelMux
+	cfg.UpstreamProtocol = valueOrDefault(in.UpstreamProtocol, tcptun.UpstreamProtocolSOCKS5)
 	cfg.ConfigPath = strings.TrimSpace(in.ConfigPath)
 	cfg.RouteConfigPath = strings.TrimSpace(in.RouteConfigPath)
 	cfg.Verbose = in.Verbose

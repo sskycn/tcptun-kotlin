@@ -16,13 +16,16 @@ data class AppConfig(
     val sni: String = "",
     val path: String = "/proxy",
     val tls: Boolean = false,
+    val tlsInsecure: Boolean = false,
     val tunnelSecurity: String = "",
     val flow: String = "",
     val realityPublicKey: String = "",
+    val realityShortId: String = "",
     val realityFingerprint: String = "",
     val realitySpiderX: String = "",
     val mux: Boolean = true,
     val udp: Boolean = true,
+    val upstreamProtocol: String = "socks5",
 ) {
     val serverAddr: String
         get() = "${serverHost.trim()}:${serverPort.trim()}"
@@ -34,6 +37,7 @@ data class AppConfig(
         if (port !in 1..65535) return "server port must be between 1 and 65535"
         if (protocol !in Protocols) return "unsupported protocol: $protocol"
         if (transport !in Transports) return "unsupported transport: $transport"
+        if (upstreamProtocol !in UpstreamProtocols) return "unsupported upstream protocol: $upstreamProtocol"
         if (path.isBlank()) return "path is required"
         return null
     }
@@ -50,13 +54,16 @@ data class AppConfig(
             .put("tunnel_path", normalizedPath())
             .put("tunnel_tls", tls)
             .put("tunnel_tls_server_name", sni.trim())
+            .put("tunnel_tls_insecure", tlsInsecure)
             .put("tunnel_security", tunnelSecurity.trim())
             .put("tunnel_flow", flow.trim())
             .put("reality_server_name", sni.trim())
             .put("reality_public_key", realityPublicKey.trim())
+            .put("reality_short_id", realityShortId.trim())
             .put("reality_fingerprint", realityFingerprint.trim())
             .put("reality_spider_x", realitySpiderX.trim())
             .put("tunnel_mux", mux)
+            .put("upstream_protocol", upstreamProtocol)
             .put("enable_udp", udp)
             .put("config_path", "")
             .put("route_config_path", routeConfigPath)
@@ -72,6 +79,7 @@ data class AppConfig(
     companion object {
         val Protocols = listOf("native", "vless", "vmess", "trojan")
         val Transports = listOf("raw", "ws", "h2", "h3")
+        val UpstreamProtocols = listOf("socks5", "mixed")
 
         fun load(context: Context): AppConfig {
             return ProfileStore.load(context).profiles.firstOrNull()
@@ -90,13 +98,16 @@ data class AppConfig(
                 sni = obj.optString("sni"),
                 path = obj.optString("path", "/proxy"),
                 tls = obj.optBoolean("tls", false),
+                tlsInsecure = obj.optBoolean("tlsInsecure", false),
                 tunnelSecurity = obj.optString("tunnelSecurity"),
                 flow = obj.optString("flow"),
                 realityPublicKey = obj.optString("realityPublicKey"),
+                realityShortId = obj.optString("realityShortId"),
                 realityFingerprint = obj.optString("realityFingerprint"),
                 realitySpiderX = obj.optString("realitySpiderX"),
                 mux = obj.optBoolean("mux", true),
                 udp = obj.optBoolean("udp", true),
+                upstreamProtocol = obj.optString("upstreamProtocol", "socks5"),
             )
         }
     }
@@ -146,13 +157,16 @@ data class AppConfig(
             .put("sni", sni)
             .put("path", path)
             .put("tls", tls)
+            .put("tlsInsecure", tlsInsecure)
             .put("tunnelSecurity", tunnelSecurity)
             .put("flow", flow)
             .put("realityPublicKey", realityPublicKey)
+            .put("realityShortId", realityShortId)
             .put("realityFingerprint", realityFingerprint)
             .put("realitySpiderX", realitySpiderX)
             .put("mux", mux)
             .put("udp", udp)
+            .put("upstreamProtocol", upstreamProtocol)
     }
 
     fun shareText(): String {

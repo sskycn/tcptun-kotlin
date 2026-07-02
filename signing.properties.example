@@ -1,0 +1,4 @@
+storeFile=/absolute/path/to/tcptun-release.jks
+storePassword=change-me
+keyAlias=tcptun-release
+keyPassword=change-me

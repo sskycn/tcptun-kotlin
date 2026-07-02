@@ -54,13 +54,20 @@ object ProfileUriCodec {
             sni = uri.getQueryParameter("sni").orEmpty(),
             path = path.ifBlank { "/" },
             tls = security == "tls",
+            tlsInsecure = uri.getBooleanParameterCompat("allowInsecure", false) ||
+                uri.getBooleanParameterCompat("tlsInsecure", false),
             tunnelSecurity = if (security == "reality") "reality" else "",
             flow = uri.getQueryParameter("flow").orEmpty(),
             realityPublicKey = uri.getQueryParameter("pbk").orEmpty(),
+            realityShortId = uri.getQueryParameter("sid").orEmpty()
+                .ifBlank { uri.getQueryParameter("reality_short_id").orEmpty() },
             realityFingerprint = uri.getQueryParameter("fp").orEmpty(),
             realitySpiderX = uri.getQueryParameter("spx").orEmpty(),
             mux = uri.getBooleanParameterCompat("mux", true),
             udp = uri.getBooleanParameterCompat("udp", true),
+            upstreamProtocol = uri.getQueryParameter("upstream").orEmpty()
+                .ifBlank { uri.getQueryParameter("upstream_protocol").orEmpty() }
+                .ifBlank { "socks5" },
         )
     }
 
@@ -102,13 +109,18 @@ object ProfileUriCodec {
             sni = obj.optString("sni").ifBlank { obj.optString("host") },
             path = obj.optString("path", "/proxy").ifBlank { "/proxy" },
             tls = tls,
+            tlsInsecure = obj.optBoolean("allowInsecure", false) || obj.optBoolean("tlsInsecure", false),
             tunnelSecurity = if (security == "reality") "reality" else "",
             flow = obj.optString("flow"),
             realityPublicKey = obj.optString("pbk"),
+            realityShortId = obj.optString("sid").ifBlank { obj.optString("reality_short_id") },
             realityFingerprint = obj.optString("fp"),
             realitySpiderX = obj.optString("spx"),
             mux = obj.optBoolean("mux", true),
             udp = obj.optBoolean("udp", true),
+            upstreamProtocol = obj.optString("upstream").ifBlank {
+                obj.optString("upstream_protocol", "socks5")
+            },
         )
     }
 
@@ -131,11 +143,14 @@ object ProfileUriCodec {
             .put("path", config.path)
             .put("tls", if (config.tls) "tls" else "")
             .put("sni", config.sni)
+            .put("allowInsecure", config.tlsInsecure)
             .put("mux", config.mux)
             .put("udp", config.udp)
+            .put("upstream", config.upstreamProtocol)
         if (config.tunnelSecurity == "reality") obj.put("security", "reality")
         putJsonIfNotBlank(obj, "flow", config.flow)
         putJsonIfNotBlank(obj, "pbk", config.realityPublicKey)
+        putJsonIfNotBlank(obj, "sid", config.realityShortId)
         putJsonIfNotBlank(obj, "fp", config.realityFingerprint)
         putJsonIfNotBlank(obj, "spx", config.realitySpiderX)
         return "vmess://" + Base64.encodeToString(obj.toString().toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)
@@ -152,6 +167,7 @@ object ProfileUriCodec {
         if (config.protocol == "vless") params["encryption"] = "none"
         if (security == "reality") {
             putIfNotBlank(params, "pbk", config.realityPublicKey)
+            putIfNotBlank(params, "sid", config.realityShortId)
             params["headerType"] = "none"
             putIfNotBlank(params, "fp", config.realityFingerprint)
             putIfNotBlank(params, "spx", config.realitySpiderX.ifBlank { config.path })
@@ -159,9 +175,11 @@ object ProfileUriCodec {
         params["type"] = typeFromTransport(config.transport)
         putIfNotBlank(params, "flow", config.flow)
         putIfNotBlank(params, "sni", config.sni)
+        if (config.tlsInsecure) params["allowInsecure"] = "1"
         if (config.transport != "raw") putIfNotBlank(params, "path", config.path)
         params["mux"] = if (config.mux) "1" else "0"
         params["udp"] = if (config.udp) "1" else "0"
+        if (config.upstreamProtocol != "socks5") params["upstream"] = config.upstreamProtocol
         return params
     }
 

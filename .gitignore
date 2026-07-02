@@ -5,6 +5,7 @@ build/
 
 # Local configuration
 local.properties
+signing.properties
 *.local
 
 # Android Studio / IntelliJ

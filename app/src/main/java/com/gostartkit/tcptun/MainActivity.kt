@@ -1,10 +1,14 @@
 package com.sskycn.tcptun
 
+import android.Manifest
 import android.content.Context
+import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -32,12 +36,15 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -53,6 +60,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -63,6 +73,7 @@ import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        setTheme(R.style.Theme_TcpTun)
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
@@ -78,8 +89,8 @@ fun TcptunScreen() {
     val context = LocalContext.current
     var state by remember { mutableStateOf(ProfileStore.load(context)) }
     var pendingConfig by remember { mutableStateOf<AppConfig?>(null) }
+    var pendingNotificationConfig by remember { mutableStateOf<AppConfig?>(null) }
     var editing by remember { mutableStateOf<AppConfig?>(null) }
-    var importing by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
     val vpnLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         pendingConfig?.let {
@@ -87,10 +98,41 @@ fun TcptunScreen() {
             pendingConfig = null
         }
     }
+    val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        pendingNotificationConfig?.let { config ->
+            pendingNotificationConfig = null
+            if (!granted) {
+                TcptunState.appendLog("notification permission denied; foreground notification may be hidden")
+            }
+            val prepare = VpnService.prepare(context)
+            if (prepare != null) {
+                pendingConfig = config
+                vpnLauncher.launch(prepare)
+            } else {
+                startVpn(context, config)
+            }
+        }
+    }
 
     fun save(next: ProfilesState) {
         ProfileStore.save(context, next)
         state = ProfileStore.load(context)
+    }
+
+    fun importFromClipboard() {
+        val link = clipboardText(context).trim()
+        if (link.isBlank()) {
+            TcptunState.error("剪切板为空")
+            return
+        }
+        ProfileUriCodec.decode(link).fold(
+            onSuccess = { profile ->
+                save(ProfilesState(state.profiles + profile, profile.id))
+            },
+            onFailure = { err ->
+                TcptunState.error(err.message ?: "import failed")
+            },
+        )
     }
 
     fun startSelected() {
@@ -103,6 +145,11 @@ fun TcptunScreen() {
         }
         save(state.copy(selectedId = config.id))
         TcptunState.clearLogs()
+        if (needsNotificationPermission(context)) {
+            pendingNotificationConfig = config
+            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
         val prepare = VpnService.prepare(context)
         if (prepare != null) {
             pendingConfig = config
@@ -143,8 +190,8 @@ fun TcptunScreen() {
         ) {
             TopBar(
                 onAdd = { editing = AppConfig(id = UUID.randomUUID().toString(), name = "proxy") },
-                onImport = { importing = true },
-                onLogs = { showLogs = true },
+                onImport = ::importFromClipboard,
+                onBatterySettings = { openBatteryOptimizationSettings(context) },
             )
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(state.profiles, key = { it.id }) { profile ->
@@ -195,28 +242,12 @@ fun TcptunScreen() {
     if (showLogs) {
         LogsDialog(onDismiss = { showLogs = false })
     }
-    if (importing) {
-        ImportDialog(
-            onDismiss = { importing = false },
-            onImport = { link ->
-                val parsed = ProfileUriCodec.decode(link)
-                parsed.fold(
-                    onSuccess = { profile ->
-                        save(ProfilesState(state.profiles + profile, profile.id))
-                        importing = false
-                    },
-                    onFailure = { err ->
-                        TcptunState.error(err.message ?: "import failed")
-                        showLogs = true
-                    },
-                )
-            },
-        )
-    }
 }
 
 @Composable
-private fun TopBar(onAdd: () -> Unit, onImport: () -> Unit, onLogs: () -> Unit) {
+private fun TopBar(onAdd: () -> Unit, onImport: () -> Unit, onBatterySettings: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -227,16 +258,161 @@ private fun TopBar(onAdd: () -> Unit, onImport: () -> Unit, onLogs: () -> Unit) 
         Spacer(Modifier.width(24.dp))
         Text("配置项", style = MaterialTheme.typography.headlineLarge)
         Spacer(Modifier.weight(1f))
-        TextButton(onClick = onImport) {
-            Text("⇩", style = MaterialTheme.typography.headlineLarge, color = Color.Black)
-        }
-        TextButton(onClick = onAdd) {
-            Text("+", style = MaterialTheme.typography.headlineLarge, color = Color.Black)
-        }
-        TextButton(onClick = onLogs) {
-            Text("⋮", style = MaterialTheme.typography.headlineLarge, color = Color.Black)
+        Box {
+            IconButton(onClick = { expanded = true }) {
+                Icon(AppIcons.More, contentDescription = "更多", tint = Color.Black)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(AppIcons.Import, contentDescription = "从剪切板导入配置", tint = Color.Black)
+                            Text("从剪切板导入")
+                        }
+                    },
+                    onClick = {
+                        expanded = false
+                        onImport()
+                    },
+                )
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(AppIcons.Add, contentDescription = "添加配置", tint = Color.Black)
+                            Text("添加配置")
+                        }
+                    },
+                    onClick = {
+                        expanded = false
+                        onAdd()
+                    },
+                )
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(AppIcons.Battery, contentDescription = "省电设置", tint = Color.Black)
+                            Text("省电设置")
+                        }
+                    },
+                    onClick = {
+                        expanded = false
+                        onBatterySettings()
+                    },
+                )
+            }
         }
     }
+}
+
+private object AppIcons {
+    val More: ImageVector = ImageVector.Builder(
+        name = "MoreVertical",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(11f, 5f)
+            horizontalLineTo(13f)
+            verticalLineTo(7f)
+            horizontalLineTo(11f)
+            close()
+            moveTo(11f, 11f)
+            horizontalLineTo(13f)
+            verticalLineTo(13f)
+            horizontalLineTo(11f)
+            close()
+            moveTo(11f, 17f)
+            horizontalLineTo(13f)
+            verticalLineTo(19f)
+            horizontalLineTo(11f)
+            close()
+        }
+    }.build()
+
+    val Import: ImageVector = ImageVector.Builder(
+        name = "Import",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(11f, 4f)
+            horizontalLineTo(13f)
+            verticalLineTo(12f)
+            horizontalLineTo(16f)
+            lineTo(12f, 16f)
+            lineTo(8f, 12f)
+            horizontalLineTo(11f)
+            close()
+            moveTo(5f, 18f)
+            horizontalLineTo(19f)
+            verticalLineTo(20f)
+            horizontalLineTo(5f)
+            close()
+        }
+    }.build()
+
+    val Add: ImageVector = ImageVector.Builder(
+        name = "Add",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(11f, 5f)
+            horizontalLineTo(13f)
+            verticalLineTo(11f)
+            horizontalLineTo(19f)
+            verticalLineTo(13f)
+            horizontalLineTo(13f)
+            verticalLineTo(19f)
+            horizontalLineTo(11f)
+            verticalLineTo(13f)
+            horizontalLineTo(5f)
+            verticalLineTo(11f)
+            horizontalLineTo(11f)
+            close()
+        }
+    }.build()
+
+    val Battery: ImageVector = ImageVector.Builder(
+        name = "Battery",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(4f, 8f)
+            horizontalLineTo(18f)
+            verticalLineTo(16f)
+            horizontalLineTo(4f)
+            close()
+            moveTo(6f, 10f)
+            verticalLineTo(14f)
+            horizontalLineTo(13f)
+            verticalLineTo(10f)
+            close()
+            moveTo(19f, 10f)
+            horizontalLineTo(21f)
+            verticalLineTo(14f)
+            horizontalLineTo(19f)
+            close()
+        }
+    }.build()
 }
 
 @Composable
@@ -427,14 +603,25 @@ private fun EditProfileDialog(initial: AppConfig, onDismiss: () -> Unit, onSave:
                         modifier = Modifier.weight(1f),
                     )
                     OutlinedTextField(
-                        value = config.realitySpiderX,
-                        onValueChange = { config = config.copy(realitySpiderX = it) },
-                        label = { Text("SpiderX") },
+                        value = config.realityShortId,
+                        onValueChange = { config = config.copy(realityShortId = it) },
+                        label = { Text("Short ID") },
                         singleLine = true,
                         modifier = Modifier.weight(1f),
                     )
                 }
+                OutlinedTextField(
+                    value = config.realitySpiderX,
+                    onValueChange = { config = config.copy(realitySpiderX = it) },
+                    label = { Text("SpiderX") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                ChoiceRow("Upstream", config.upstreamProtocol, AppConfig.UpstreamProtocols) {
+                    config = config.copy(upstreamProtocol = it)
+                }
                 ToggleRow("TLS", config.tls) { config = config.copy(tls = it) }
+                ToggleRow("TLS insecure", config.tlsInsecure) { config = config.copy(tlsInsecure = it) }
                 ToggleRow("Mux", config.mux) { config = config.copy(mux = it) }
                 ToggleRow("UDP", config.udp) { config = config.copy(udp = it) }
             }
@@ -499,12 +686,20 @@ private fun LogsDialog(onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text("运行日志") },
         text = {
-            SelectionContainer {
-                Text(
-                    TcptunState.logs.joinToString("\n").ifBlank { "No logs yet." },
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                )
+            val scrollState = rememberScrollState()
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(scrollState),
+            ) {
+                SelectionContainer {
+                    Text(
+                        TcptunState.logs.joinToString("\n").ifBlank { "No logs yet." },
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         },
         confirmButton = {
@@ -520,39 +715,29 @@ private fun LogsDialog(onDismiss: () -> Unit) {
     )
 }
 
-@Composable
-private fun ImportDialog(onDismiss: () -> Unit, onImport: (String) -> Unit) {
-    var link by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("导入配置") },
-        text = {
-            OutlinedTextField(
-                value = link,
-                onValueChange = { link = it },
-                label = { Text("native:// / vless:// / vmess:// / trojan://") },
-                minLines = 4,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        },
-        confirmButton = {
-            Button(onClick = { onImport(link) }) {
-                Text("导入")
-            }
-        },
-        dismissButton = {
-            OutlinedButton(onClick = onDismiss) {
-                Text("取消")
-            }
-        },
-    )
-}
-
 private fun shareProfile(context: Context, profile: AppConfig) {
     val send = Intent(Intent.ACTION_SEND)
         .setType("text/plain")
         .putExtra(Intent.EXTRA_TEXT, profile.shareText())
     context.startActivity(Intent.createChooser(send, "分享配置"))
+}
+
+private fun clipboardText(context: Context): String {
+    val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return ""
+    val clip = clipboard.primaryClip ?: return ""
+    if (clip.itemCount == 0) return ""
+    return clip.getItemAt(0).coerceToText(context)?.toString().orEmpty()
+}
+
+private fun needsNotificationPermission(context: Context): Boolean {
+    return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+}
+
+private fun openBatteryOptimizationSettings(context: Context) {
+    val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+    runCatching { context.startActivity(intent) }
+        .onFailure { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
 }
 
 private fun startVpn(context: Context, config: AppConfig) {

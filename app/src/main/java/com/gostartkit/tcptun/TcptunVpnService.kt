@@ -1,16 +1,20 @@
 package com.sskycn.tcptun
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.ProxyInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import java.io.File
 
 class TcptunVpnService : VpnService() {
     private val bridge: TcptunBridge = ReflectionTcptunBridge()
@@ -53,8 +57,16 @@ class TcptunVpnService : VpnService() {
                     sni = intent.getStringExtra("sni").orEmpty(),
                     path = intent.getStringExtra("path") ?: "/proxy",
                     tls = intent.getBooleanExtra("tls", false),
+                    tlsInsecure = intent.getBooleanExtra("tlsInsecure", false),
+                    tunnelSecurity = intent.getStringExtra("tunnelSecurity").orEmpty(),
+                    flow = intent.getStringExtra("flow").orEmpty(),
+                    realityPublicKey = intent.getStringExtra("realityPublicKey").orEmpty(),
+                    realityShortId = intent.getStringExtra("realityShortId").orEmpty(),
+                    realityFingerprint = intent.getStringExtra("realityFingerprint").orEmpty(),
+                    realitySpiderX = intent.getStringExtra("realitySpiderX").orEmpty(),
                     mux = intent.getBooleanExtra("mux", true),
                     udp = intent.getBooleanExtra("udp", true),
+                    upstreamProtocol = intent.getStringExtra("upstreamProtocol") ?: "socks5",
                 )
                 bridge.setLogCallback(TcptunState::appendLog)
                 bridge.start(json)
@@ -146,6 +158,12 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun updateNotification(state: String) {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(NOTIFICATION_ID, buildNotification(state))
     }
@@ -171,11 +189,19 @@ class TcptunVpnService : VpnService() {
         const val LOCAL_SOCKS_LISTEN_ADDR = "0.0.0.0:$LOCAL_SOCKS_PORT"
         private const val CHANNEL_ID = "tcptun_vpn"
         private const val NOTIFICATION_ID = 1001
+        private const val ROUTE_CONFIG_FILE = "android-route.json"
+        private const val ANDROID_FORCE_UPSTREAM_ROUTE_CONFIG = """{
+  "force_upstream": {
+    "domain_regexes": [".*"],
+    "ip_cidrs": ["0.0.0.0/0", "::/0"]
+  }
+}"""
 
         fun startIntent(context: Context, config: AppConfig): Intent {
+            val routeConfigPath = ensureAndroidRouteConfig(context)
             return Intent(context, TcptunVpnService::class.java)
                 .setAction(ACTION_START)
-                .putExtra(EXTRA_CONFIG, config.toBridgeJson(LOCAL_SOCKS_LISTEN_ADDR))
+                .putExtra(EXTRA_CONFIG, config.toBridgeJson(LOCAL_SOCKS_LISTEN_ADDR, routeConfigPath))
                 .putExtra("serverHost", config.serverHost)
                 .putExtra("serverPort", config.serverPort)
                 .putExtra("protocol", config.protocol)
@@ -184,12 +210,33 @@ class TcptunVpnService : VpnService() {
                 .putExtra("sni", config.sni)
                 .putExtra("path", config.path)
                 .putExtra("tls", config.tls)
+                .putExtra("tlsInsecure", config.tlsInsecure)
+                .putExtra("tunnelSecurity", config.tunnelSecurity)
+                .putExtra("flow", config.flow)
+                .putExtra("realityPublicKey", config.realityPublicKey)
+                .putExtra("realityShortId", config.realityShortId)
+                .putExtra("realityFingerprint", config.realityFingerprint)
+                .putExtra("realitySpiderX", config.realitySpiderX)
                 .putExtra("mux", config.mux)
                 .putExtra("udp", config.udp)
+                .putExtra("upstreamProtocol", config.upstreamProtocol)
         }
 
         fun stopIntent(context: Context): Intent {
             return Intent(context, TcptunVpnService::class.java).setAction(ACTION_STOP)
+        }
+
+        private fun ensureAndroidRouteConfig(context: Context): String {
+            val file = File(context.applicationContext.filesDir, ROUTE_CONFIG_FILE)
+            runCatching {
+                if (!file.exists() || file.readText() != ANDROID_FORCE_UPSTREAM_ROUTE_CONFIG) {
+                    file.writeText(ANDROID_FORCE_UPSTREAM_ROUTE_CONFIG)
+                }
+            }.onFailure { err ->
+                TcptunState.appendLog("write android route config failed: ${err.message}")
+                return ""
+            }
+            return file.absolutePath
         }
     }
 }

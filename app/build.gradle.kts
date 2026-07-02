@@ -1,7 +1,30 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
+
+val signingProperties = Properties().apply {
+    val signingPropertiesFile = rootProject.file("signing.properties")
+    if (signingPropertiesFile.isFile) {
+        signingPropertiesFile.inputStream().use(::load)
+    }
+}
+
+fun signingValue(propertyName: String, environmentName: String): String? =
+    signingProperties.getProperty(propertyName)?.takeIf { it.isNotBlank() }
+        ?: providers.environmentVariable(environmentName).orNull?.takeIf { it.isNotBlank() }
+
+val releaseStoreFile = signingValue("storeFile", "TCPTUN_RELEASE_STORE_FILE")
+val releaseStorePassword = signingValue("storePassword", "TCPTUN_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = signingValue("keyAlias", "TCPTUN_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = signingValue("keyPassword", "TCPTUN_RELEASE_KEY_PASSWORD")
+val hasReleaseSigningConfig =
+    !releaseStoreFile.isNullOrBlank() &&
+        !releaseStorePassword.isNullOrBlank() &&
+        !releaseKeyAlias.isNullOrBlank() &&
+        !releaseKeyPassword.isNullOrBlank()
 
 android {
     namespace = "com.sskycn.tcptun"
@@ -21,8 +44,22 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (hasReleaseSigningConfig) {
+            create("release") {
+                storeFile = rootProject.file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (hasReleaseSigningConfig) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             optimization {
                 enable = false
             }
