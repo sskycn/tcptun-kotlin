@@ -1,4 +1,4 @@
-package com.sskycn.tcptun.ui.theme
+package com.tcptun.client.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

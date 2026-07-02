@@ -27,7 +27,7 @@ val hasReleaseSigningConfig =
         !releaseKeyPassword.isNullOrBlank()
 
 android {
-    namespace = "com.sskycn.tcptun"
+    namespace = "com.tcptun.client"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -35,7 +35,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.sskycn.tcptun"
+        applicationId = "com.tcptun.client"
         minSdk = 24
         targetSdk = 36
         versionCode = 1

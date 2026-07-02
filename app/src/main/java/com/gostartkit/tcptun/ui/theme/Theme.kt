@@ -1,4 +1,4 @@
-package com.sskycn.tcptun.ui.theme
+package com.tcptun.client.ui.theme
 
 import android.app.Activity
 import android.os.Build

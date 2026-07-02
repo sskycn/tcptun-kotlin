@@ -1,4 +1,4 @@
-package com.sskycn.tcptun
+package com.tcptun.client
 
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf

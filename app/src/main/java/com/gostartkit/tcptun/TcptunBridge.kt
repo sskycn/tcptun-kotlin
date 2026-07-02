@@ -1,4 +1,4 @@
-package com.sskycn.tcptun
+package com.tcptun.client
 
 import java.lang.reflect.Proxy
 

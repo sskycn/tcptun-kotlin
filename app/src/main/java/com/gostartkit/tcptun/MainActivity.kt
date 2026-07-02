@@ -1,4 +1,4 @@
-package com.sskycn.tcptun
+package com.tcptun.client
 
 import android.Manifest
 import android.content.Context
@@ -68,7 +68,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.sskycn.tcptun.ui.theme.TcpTunTheme
+import com.tcptun.client.ui.theme.TcpTunTheme
 import java.util.UUID
 
 class MainActivity : ComponentActivity() {

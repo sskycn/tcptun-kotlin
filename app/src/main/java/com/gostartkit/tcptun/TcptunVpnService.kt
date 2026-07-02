@@ -1,4 +1,4 @@
-package com.sskycn.tcptun
+package com.tcptun.client
 
 import android.Manifest
 import android.app.Notification
@@ -180,8 +180,8 @@ class TcptunVpnService : VpnService() {
     }
 
     companion object {
-        const val ACTION_START = "com.sskycn.tcptun.START"
-        const val ACTION_STOP = "com.sskycn.tcptun.STOP"
+        const val ACTION_START = "com.tcptun.client.START"
+        const val ACTION_STOP = "com.tcptun.client.STOP"
         const val EXTRA_CONFIG = "config"
         const val LOCAL_SOCKS_HOST = "127.0.0.1"
         const val LOCAL_SOCKS_PORT = 1080

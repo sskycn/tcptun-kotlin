@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 
 ADB=${ADB:-adb}
 GRADLE=${GRADLE:-./gradlew}
-PACKAGE_NAME=${PACKAGE_NAME:-com.sskycn.tcptun}
+PACKAGE_NAME=${PACKAGE_NAME:-com.tcptun.client}
 BUILD_BRIDGE=${BUILD_BRIDGE:-0}
 FORCE_REINSTALL=${FORCE_REINSTALL:-0}
 APK="$ROOT_DIR/app/build/outputs/apk/release/app-release.apk"

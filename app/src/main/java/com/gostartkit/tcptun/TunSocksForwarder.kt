@@ -1,4 +1,4 @@
-package com.sskycn.tcptun
+package com.tcptun.client
 
 import android.os.ParcelFileDescriptor
 import java.io.Closeable
