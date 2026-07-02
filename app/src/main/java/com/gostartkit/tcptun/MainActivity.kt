@@ -5,9 +5,11 @@ import android.content.Context
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -30,6 +32,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -46,7 +49,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
@@ -69,6 +71,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.tcptun.client.ui.theme.TcpTunTheme
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.UUID
 
 class MainActivity : ComponentActivity() {
@@ -90,7 +94,8 @@ fun TcptunScreen() {
     var state by remember { mutableStateOf(ProfileStore.load(context)) }
     var pendingConfig by remember { mutableStateOf<AppConfig?>(null) }
     var pendingNotificationConfig by remember { mutableStateOf<AppConfig?>(null) }
-    var editing by remember { mutableStateOf<AppConfig?>(null) }
+    var editingProfile by remember { mutableStateOf<AppConfig?>(null) }
+    var showRouteEditor by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
     val vpnLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         pendingConfig?.let {
@@ -159,73 +164,75 @@ fun TcptunScreen() {
         }
     }
 
-    Scaffold(
-        containerColor = Color.White,
-        floatingActionButton = {
-            RunFloatingButton(
-                running = TcptunState.status.value == "Running" || TcptunState.status.value == "Starting",
-                enabled = state.selected != null,
-                onClick = {
-                    if (TcptunState.status.value == "Running" || TcptunState.status.value == "Starting") {
-                        stopVpn(context)
-                    } else {
-                        startSelected()
+    val editing = editingProfile
+    if (showRouteEditor) {
+        RouteConfigPage(
+            onBack = { showRouteEditor = false },
+        )
+    } else if (editing == null) {
+        Scaffold(
+            containerColor = Color.White,
+            floatingActionButton = {
+                RunFloatingButton(
+                    running = TcptunState.status.value == "Running" || TcptunState.status.value == "Starting",
+                    enabled = state.selected != null,
+                    onClick = {
+                        if (TcptunState.status.value == "Running" || TcptunState.status.value == "Starting") {
+                            stopVpn(context)
+                        } else {
+                            startSelected()
+                        }
+                    },
+                )
+            },
+            bottomBar = {
+                BottomStatus(
+                    status = TcptunState.status.value,
+                    error = TcptunState.lastError.value,
+                    onClick = { showLogs = true },
+                )
+            },
+        ) { padding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(horizontal = 16.dp),
+            ) {
+                TopBar(
+                    title = "配置项",
+                    onAdd = { editingProfile = AppConfig(id = UUID.randomUUID().toString(), name = "proxy") },
+                    onImport = ::importFromClipboard,
+                    onRouteRules = { showRouteEditor = true },
+                    onBatterySettings = { openBatteryOptimizationSettings(context) },
+                )
+                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    items(state.profiles, key = { it.id }) { profile ->
+                        ProfileRow(
+                            profile = profile,
+                            selected = profile.id == state.selected?.id,
+                            onSelect = { save(state.copy(selectedId = profile.id)) },
+                            onShare = { shareProfile(context, profile) },
+                            onEdit = { editingProfile = profile },
+                            onDelete = {
+                                val remaining = state.profiles.filterNot { it.id == profile.id }
+                                save(ProfilesState(remaining, remaining.firstOrNull()?.id))
+                            },
+                        )
                     }
-                },
-            )
-        },
-        bottomBar = {
-            BottomStatus(
-                status = TcptunState.status.value,
-                error = TcptunState.lastError.value,
-                onClick = { showLogs = true },
-            )
-        },
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp),
-        ) {
-            TopBar(
-                onAdd = { editing = AppConfig(id = UUID.randomUUID().toString(), name = "proxy") },
-                onImport = ::importFromClipboard,
-                onBatterySettings = { openBatteryOptimizationSettings(context) },
-            )
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(state.profiles, key = { it.id }) { profile ->
-                    ProfileRow(
-                        profile = profile,
-                        selected = profile.id == state.selected?.id,
-                        onSelect = { save(state.copy(selectedId = profile.id)) },
-                        onShare = { shareProfile(context, profile) },
-                        onEdit = { editing = profile },
-                        onDelete = {
-                            val remaining = state.profiles.filterNot { it.id == profile.id }
-                            save(ProfilesState(remaining, remaining.firstOrNull()?.id))
-                        },
-                    )
-                }
-                if (state.profiles.isEmpty()) {
-                    item {
-                        EmptyState(onAdd = { editing = AppConfig(id = UUID.randomUUID().toString(), name = "proxy") })
+                    if (state.profiles.isEmpty()) {
+                        item {
+                            EmptyState(onAdd = { editingProfile = AppConfig(id = UUID.randomUUID().toString(), name = "proxy") })
+                        }
                     }
                 }
             }
         }
-    }
-
-    editing?.let { original ->
-        EditProfileDialog(
-            initial = original,
-            onDismiss = { editing = null },
+    } else {
+        EditProfilePage(
+            initial = editing,
+            onBack = { editingProfile = null },
             onSave = { updated ->
-                val error = updated.validate()
-                if (error != null) {
-                    TcptunState.error(error)
-                    return@EditProfileDialog
-                }
                 val profiles = state.profiles.toMutableList()
                 val index = profiles.indexOfFirst { it.id == updated.id }
                 if (index >= 0) {
@@ -234,7 +241,7 @@ fun TcptunScreen() {
                     profiles.add(updated)
                 }
                 save(ProfilesState(profiles, updated.id))
-                editing = null
+                editingProfile = null
             },
         )
     }
@@ -245,7 +252,13 @@ fun TcptunScreen() {
 }
 
 @Composable
-private fun TopBar(onAdd: () -> Unit, onImport: () -> Unit, onBatterySettings: () -> Unit) {
+private fun TopBar(
+    title: String,
+    onAdd: () -> Unit,
+    onImport: () -> Unit,
+    onRouteRules: () -> Unit,
+    onBatterySettings: () -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
 
     Row(
@@ -254,9 +267,7 @@ private fun TopBar(onAdd: () -> Unit, onImport: () -> Unit, onBatterySettings: (
             .height(88.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("☰", style = MaterialTheme.typography.headlineLarge)
-        Spacer(Modifier.width(24.dp))
-        Text("配置项", style = MaterialTheme.typography.headlineLarge)
+        Text(title, style = MaterialTheme.typography.headlineLarge)
         Spacer(Modifier.weight(1f))
         Box {
             IconButton(onClick = { expanded = true }) {
@@ -291,6 +302,21 @@ private fun TopBar(onAdd: () -> Unit, onImport: () -> Unit, onBatterySettings: (
                     onClick = {
                         expanded = false
                         onAdd()
+                    },
+                )
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(AppIcons.Route, contentDescription = "路由规则", tint = Color.Black)
+                            Text("路由规则")
+                        }
+                    },
+                    onClick = {
+                        expanded = false
+                        onRouteRules()
                     },
                 )
                 DropdownMenuItem(
@@ -413,6 +439,60 @@ private object AppIcons {
             close()
         }
     }.build()
+
+    val Route: ImageVector = ImageVector.Builder(
+        name = "Route",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(3f, 3f)
+            horizontalLineTo(8f)
+            verticalLineTo(8f)
+            horizontalLineTo(3f)
+            close()
+            moveTo(16f, 16f)
+            horizontalLineTo(21f)
+            verticalLineTo(21f)
+            horizontalLineTo(16f)
+            close()
+            moveTo(7f, 5f)
+            horizontalLineTo(12f)
+            verticalLineTo(7f)
+            horizontalLineTo(7f)
+            close()
+            moveTo(10f, 7f)
+            horizontalLineTo(12f)
+            verticalLineTo(17f)
+            horizontalLineTo(17f)
+            verticalLineTo(19f)
+            horizontalLineTo(10f)
+            close()
+        }
+    }.build()
+
+    val Back: ImageVector = ImageVector.Builder(
+        name = "Back",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(20f, 11f)
+            verticalLineTo(13f)
+            horizontalLineTo(8f)
+            lineTo(13f, 18f)
+            lineTo(11.6f, 19.4f)
+            lineTo(4.2f, 12f)
+            lineTo(11.6f, 4.6f)
+            lineTo(13f, 6f)
+            lineTo(8f, 11f)
+            close()
+        }
+    }.build()
 }
 
 @Composable
@@ -512,18 +592,403 @@ private fun BottomStatus(status: String, error: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun EditProfileDialog(initial: AppConfig, onDismiss: () -> Unit, onSave: (AppConfig) -> Unit) {
-    var config by remember(initial.id) { mutableStateOf(initial) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (initial.serverHost.isBlank()) "添加配置" else "编辑配置") },
-        text = {
+private fun RouteConfigPage(onBack: () -> Unit) {
+    val context = LocalContext.current
+    var rules by remember { mutableStateOf(parseRouteRules(TcptunVpnService.readManualRouteConfig(context))) }
+    var selectedIndex by remember { mutableStateOf<Int?>(null) }
+    var showAddRule by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf("") }
+
+    fun saveRules(next: List<RouteRule>): Result<Unit> {
+        return TcptunVpnService.writeManualRouteConfig(context, buildRouteConfig(next))
+            .onSuccess {
+                rules = next
+                message = "已保存，已与自动规则合并生效"
+                error = ""
+            }
+            .onFailure { err ->
+                error = err.message ?: "路由配置保存失败"
+                message = ""
+            }
+    }
+
+    val selected = selectedIndex?.let { rules.getOrNull(it) }
+    if (selected != null) {
+        RouteRuleDetailPage(
+            rule = selected,
+            index = selectedIndex ?: 0,
+            rules = rules,
+            onBack = { selectedIndex = null },
+            onSave = { updated ->
+                val targetIndex = selectedIndex ?: return@RouteRuleDetailPage Result.failure(
+                    IllegalStateException("missing selected route rule"),
+                )
+                saveRules(rules.toMutableList().also { it[targetIndex] = updated })
+            },
+            onDelete = {
+                val targetIndex = selectedIndex ?: return@RouteRuleDetailPage Result.failure(
+                    IllegalStateException("missing selected route rule"),
+                )
+                saveRules(rules.toMutableList().also { it.removeAt(targetIndex) })
+                    .onSuccess { selectedIndex = null }
+            },
+        )
+        return
+    }
+
+    Scaffold(containerColor = Color.White) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp),
+        ) {
+            RouteListTopBar(
+                title = "路由规则",
+                onBack = onBack,
+                onAdd = { showAddRule = true },
+                onReset = {
+                    TcptunVpnService.resetManualRouteConfig(context).fold(
+                        onSuccess = {
+                            rules = parseRouteRules(TcptunVpnService.readManualRouteConfig(context))
+                            message = "已清空手动规则，自动规则仍会生效"
+                            error = ""
+                        },
+                        onFailure = { err ->
+                            error = err.message ?: "清空手动规则失败"
+                            message = ""
+                        },
+                    )
+                },
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "手动规则 ${rules.size} 条 · 启动时与自动规则合并写入 ${TcptunVpnService.routeConfigFile(context).name}",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color(0xFF4A4D52),
+                )
+                if (message.isNotBlank()) {
+                    Text(message, style = MaterialTheme.typography.bodyMedium, color = Color(0xFF1B5E20))
+                }
+                if (error.isNotBlank()) {
+                    Text(error, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB3261E))
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                if (rules.isEmpty()) {
+                    item {
+                        RouteEmptyState(onAdd = { showAddRule = true })
+                    }
+                }
+                itemsIndexed(rules) { index, rule ->
+                    RouteRuleRow(
+                        rule = rule,
+                        onClick = { selectedIndex = index },
+                    )
+                }
+            }
+        }
+    }
+
+    if (showAddRule) {
+        RouteRuleDialog(
+            onDismiss = { showAddRule = false },
+            onSave = { rule ->
+                saveRules(rules + rule).onSuccess {
+                    showAddRule = false
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun RouteListTopBar(
+    title: String,
+    onBack: () -> Unit,
+    onAdd: () -> Unit,
+    onReset: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(88.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onBack) {
+            Icon(AppIcons.Back, contentDescription = "返回", tint = Color.Black)
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(title, style = MaterialTheme.typography.headlineLarge)
+        Spacer(Modifier.weight(1f))
+        TextButton(onClick = onReset) {
+            Text("清空手动")
+        }
+        IconButton(onClick = onAdd) {
+            Icon(AppIcons.Add, contentDescription = "添加规则", tint = Color.Black)
+        }
+    }
+}
+
+@Composable
+private fun RouteRuleRow(rule: RouteRule, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 84.dp)
+            .clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .width(5.dp)
+                .height(56.dp)
+                .background(Color(0xFFD1792E)),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(rule.type.label, style = MaterialTheme.typography.titleLarge, color = Color(0xFF202124))
+            Text(rule.value, style = MaterialTheme.typography.bodyLarge, color = Color(0xFF4A4D52))
+            Text("force_upstream.${rule.type.jsonKey}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF80868B))
+        }
+        Text("›", style = MaterialTheme.typography.headlineMedium, color = Color.Black)
+    }
+    HorizontalDivider(color = Color(0xFFE0E0E0))
+}
+
+@Composable
+private fun RouteEmptyState(onAdd: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 80.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text("还没有路由规则", style = MaterialTheme.typography.titleLarge)
+        Button(onClick = onAdd) {
+            Text("添加规则")
+        }
+    }
+}
+
+@Composable
+private fun RouteRuleDetailPage(
+    rule: RouteRule,
+    index: Int,
+    rules: List<RouteRule>,
+    onBack: () -> Unit,
+    onSave: (RouteRule) -> Result<Unit>,
+    onDelete: () -> Result<Unit>,
+) {
+    var type by remember(index) { mutableStateOf(rule.type) }
+    var value by remember(index) { mutableStateOf(rule.value) }
+    var message by remember(index) { mutableStateOf("") }
+    var error by remember(index) { mutableStateOf("") }
+    val stats = routeRuleStats(rule, rules, index)
+
+    Scaffold(containerColor = Color.White) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp),
+        ) {
+            EditTopBar(
+                title = "规则详情",
+                onBack = onBack,
+                onSave = {
+                    val trimmed = value.trim()
+                    if (trimmed.isBlank()) {
+                        error = "规则不能为空"
+                        message = ""
+                        return@EditTopBar
+                    }
+                    onSave(RouteRule(type, trimmed)).fold(
+                        onSuccess = {
+                            message = "已保存"
+                            error = ""
+                        },
+                        onFailure = { err ->
+                            error = err.message ?: "保存失败"
+                            message = ""
+                        },
+                    )
+                },
+            )
             Column(
                 modifier = Modifier
                     .verticalScroll(rememberScrollState())
-                    .heightIn(max = 560.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                if (message.isNotBlank()) {
+                    Text(message, style = MaterialTheme.typography.bodyMedium, color = Color(0xFF1B5E20))
+                }
+                if (error.isNotBlank()) {
+                    Text(error, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB3261E))
+                }
+                RouteStatsBlock(stats)
+                ChoiceRow("规则类型", type.label, RouteRuleType.entries.map { it.label }) { selected ->
+                    type = RouteRuleType.entries.first { it.label == selected }
+                }
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = {
+                        value = it
+                        message = ""
+                        error = ""
+                    },
+                    label = { Text("规则") },
+                    minLines = 3,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                TextButton(
+                    onClick = {
+                        onDelete().fold(
+                            onSuccess = {
+                                message = ""
+                                error = ""
+                            },
+                            onFailure = { err ->
+                                error = err.message ?: "删除失败"
+                                message = ""
+                            },
+                        )
+                    },
+                ) {
+                    Text("删除这条规则", color = Color(0xFFB3261E))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RouteStatsBlock(stats: RouteRuleStats) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFFF7F8FA), RoundedCornerShape(8.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("统计数据", style = MaterialTheme.typography.titleLarge, color = Color(0xFF202124))
+        StatLine("位置", "#${stats.position}")
+        StatLine("类型", stats.typeLabel)
+        StatLine("手动规则总数", stats.totalRules.toString())
+        StatLine("合并后有效规则", stats.effectiveRules.toString())
+        StatLine("手动同类规则", stats.sameTypeRules.toString())
+        StatLine("手动重复规则", stats.duplicateRules.toString())
+        StatLine("与自动规则重复", if (stats.defaultRule) "是" else "否")
+        StatLine("近期日志匹配", stats.recentLogHits.toString())
+    }
+}
+
+@Composable
+private fun StatLine(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = Color(0xFF5F6368))
+        Spacer(Modifier.weight(1f))
+        Text(value, style = MaterialTheme.typography.bodyMedium, color = Color(0xFF202124))
+    }
+}
+
+@Composable
+private fun RouteRuleDialog(onDismiss: () -> Unit, onSave: (RouteRule) -> Result<Unit>) {
+    var type by remember { mutableStateOf(RouteRuleType.IPCIDRs) }
+    var value by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("添加路由规则") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (error.isNotBlank()) {
+                    Text(error, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB3261E))
+                }
+                ChoiceRow("规则类型", type.label, RouteRuleType.entries.map { it.label }) { selected ->
+                    type = RouteRuleType.entries.first { it.label == selected }
+                }
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = {
+                        value = it
+                        error = ""
+                    },
+                    label = { Text("规则") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val trimmed = value.trim()
+                    if (trimmed.isBlank()) {
+                        error = "规则不能为空"
+                        return@Button
+                    }
+                    onSave(RouteRule(type, trimmed)).onFailure { err ->
+                        error = err.message ?: "保存失败"
+                    }
+                },
+            ) {
+                Text("保存")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        },
+    )
+}
+
+@Composable
+private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (AppConfig) -> Unit) {
+    var config by remember(initial.id) { mutableStateOf(initial) }
+    var formError by remember(initial.id) { mutableStateOf("") }
+
+    Scaffold(containerColor = Color.White) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp),
+        ) {
+            EditTopBar(
+                title = if (initial.serverHost.isBlank()) "添加配置" else "编辑配置",
+                onBack = onBack,
+                onSave = {
+                    val error = config.validate()
+                    if (error != null) {
+                        formError = error
+                        TcptunState.error(error)
+                    } else {
+                        onSave(config)
+                    }
+                },
+            )
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (formError.isNotBlank()) {
+                    Text(formError, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB3261E))
+                }
                 OutlinedTextField(
                     value = config.name,
                     onValueChange = { config = config.copy(name = it) },
@@ -625,18 +1090,28 @@ private fun EditProfileDialog(initial: AppConfig, onDismiss: () -> Unit, onSave:
                 ToggleRow("Mux", config.mux) { config = config.copy(mux = it) }
                 ToggleRow("UDP", config.udp) { config = config.copy(udp = it) }
             }
-        },
-        confirmButton = {
-            Button(onClick = { onSave(config) }) {
-                Text("保存")
-            }
-        },
-        dismissButton = {
-            OutlinedButton(onClick = onDismiss) {
-                Text("取消")
-            }
-        },
-    )
+        }
+    }
+}
+
+@Composable
+private fun EditTopBar(title: String, onBack: () -> Unit, onSave: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(88.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onBack) {
+            Icon(AppIcons.Back, contentDescription = "返回", tint = Color.Black)
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(title, style = MaterialTheme.typography.headlineLarge)
+        Spacer(Modifier.weight(1f))
+        Button(onClick = onSave) {
+            Text("保存")
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -678,6 +1153,84 @@ private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
         Text(label, style = MaterialTheme.typography.bodyLarge)
         Switch(checked = checked, onCheckedChange = onChange)
     }
+}
+
+private enum class RouteRuleType(val jsonKey: String, val label: String) {
+    Domains("domains", "精确域名"),
+    DomainRegexes("domain_regexes", "域名正则"),
+    DomainSuffixes("domain_suffixes", "域名后缀"),
+    IPs("ips", "精确 IP"),
+    IPCIDRs("ip_cidrs", "IP CIDR"),
+    IPRanges("ip_ranges", "IP 范围"),
+}
+
+private data class RouteRule(
+    val type: RouteRuleType,
+    val value: String,
+)
+
+private data class RouteRuleStats(
+    val position: Int,
+    val typeLabel: String,
+    val totalRules: Int,
+    val effectiveRules: Int,
+    val sameTypeRules: Int,
+    val duplicateRules: Int,
+    val defaultRule: Boolean,
+    val recentLogHits: Int,
+)
+
+private fun parseRouteRules(routeConfig: String): List<RouteRule> {
+    return runCatching {
+        val root = JSONObject(routeConfig.ifBlank { "{}" })
+        val forceUpstream = root.optJSONObject("force_upstream") ?: JSONObject()
+        buildList {
+            RouteRuleType.entries.forEach { type ->
+                val array = forceUpstream.optJSONArray(type.jsonKey) ?: return@forEach
+                for (i in 0 until array.length()) {
+                    val value = array.optString(i).trim()
+                    if (value.isNotBlank()) {
+                        add(RouteRule(type, value))
+                    }
+                }
+            }
+        }
+    }.getOrElse { emptyList() }
+}
+
+private fun buildRouteConfig(rules: List<RouteRule>): String {
+    val forceUpstream = JSONObject()
+    RouteRuleType.entries.forEach { type ->
+        val array = JSONArray()
+        rules.filter { it.type == type }
+            .map { it.value.trim() }
+            .filter { it.isNotBlank() }
+            .forEach { array.put(it) }
+        forceUpstream.put(type.jsonKey, array)
+    }
+    return JSONObject()
+        .put("force_upstream", forceUpstream)
+        .toString(2)
+}
+
+private fun routeRuleStats(rule: RouteRule, rules: List<RouteRule>, index: Int): RouteRuleStats {
+    val defaultRules = parseRouteRules(TcptunVpnService.defaultRouteConfig())
+    val logToken = rule.value.lowercase()
+    val recentLogHits = if (logToken.length >= 3 && logToken != ".*") {
+        TcptunState.logs.count { it.lowercase().contains(logToken) }
+    } else {
+        0
+    }
+    return RouteRuleStats(
+        position = index + 1,
+        typeLabel = rule.type.label,
+        totalRules = rules.size,
+        effectiveRules = (defaultRules + rules).distinct().size,
+        sameTypeRules = rules.count { it.type == rule.type },
+        duplicateRules = rules.count { it == rule },
+        defaultRule = defaultRules.any { it == rule },
+        recentLogHits = recentLogHits,
+    )
 }
 
 @Composable
@@ -735,9 +1288,26 @@ private fun needsNotificationPermission(context: Context): Boolean {
 }
 
 private fun openBatteryOptimizationSettings(context: Context) {
-    val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+    val powerManager = context.getSystemService(PowerManager::class.java)
+    val packageName = context.packageName
+    val intent = if (
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+        powerManager?.isIgnoringBatteryOptimizations(packageName) != true
+    ) {
+        Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+            .setData(Uri.parse("package:$packageName"))
+    } else {
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            .setData(Uri.parse("package:$packageName"))
+    }
     runCatching { context.startActivity(intent) }
-        .onFailure { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
+        .onFailure {
+            runCatching {
+                context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            }.onFailure {
+                context.startActivity(Intent(Settings.ACTION_SETTINGS))
+            }
+        }
 }
 
 private fun startVpn(context: Context, config: AppConfig) {

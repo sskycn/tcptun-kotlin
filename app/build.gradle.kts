@@ -28,6 +28,7 @@ val hasReleaseSigningConfig =
 
 android {
     namespace = "com.tcptun.client"
+    ndkVersion = "29.0.14206865"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -42,6 +43,9 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
     }
 
     signingConfigs {
@@ -71,6 +75,11 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+    externalNativeBuild {
+        ndkBuild {
+            path = file("src/main/jni/Android.mk")
+        }
     }
 }
 

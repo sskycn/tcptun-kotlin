@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -110,8 +111,12 @@ func Start(configJSON string) error {
 	runtimeState.Unlock()
 
 	logLine("starting tcptun client")
+	logOutput := io.Writer(io.Discard)
+	if cfg.Verbose {
+		logOutput = logWriter{}
+	}
 	go func() {
-		err := tcptun.RunProxy(ctx, cfg, logWriter{})
+		err := tcptun.RunProxy(ctx, cfg, logOutput)
 		done <- err
 		runtimeState.Lock()
 		if runtimeState.runID == runID {

@@ -42,7 +42,7 @@ data class AppConfig(
         return null
     }
 
-    fun toBridgeJson(localListenAddr: String, routeConfigPath: String = ""): String {
+    fun toBridgeJson(localListenAddr: String, routeConfigPath: String = "", verbose: Boolean = false): String {
         return JSONObject()
             .put("mode", "client")
             .put("listen_addrs", JSONArray().put(localListenAddr))
@@ -67,7 +67,7 @@ data class AppConfig(
             .put("enable_udp", udp)
             .put("config_path", "")
             .put("route_config_path", routeConfigPath)
-            .put("verbose", true)
+            .put("verbose", verbose)
             .toString()
     }
 

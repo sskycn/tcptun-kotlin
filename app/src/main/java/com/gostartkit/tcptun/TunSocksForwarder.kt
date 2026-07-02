@@ -10,7 +10,6 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -21,12 +20,14 @@ class TunSocksForwarder(
     private val socksHost: String,
     private val socksPort: Int,
     private val enableUdp: Boolean,
+    private val protectSocket: (Socket) -> Boolean,
+    private val protectDatagramSocket: (DatagramSocket) -> Boolean,
     private val log: (String) -> Unit,
 ) : Closeable {
     private val input = FileInputStream(tun.fileDescriptor)
     private val output = FileOutputStream(tun.fileDescriptor)
     private val writeLock = Any()
-    private val workers: ExecutorService = Executors.newCachedThreadPool()
+    private val workers: ExecutorService = Executors.newFixedThreadPool(4)
     private val tcpFlows = ConcurrentHashMap<TcpKey, TcpFlow>()
     private val udpFlows = ConcurrentHashMap<UdpKey, UdpFlow>()
     @Volatile private var running = false
@@ -54,14 +55,14 @@ class TunSocksForwarder(
     }
 
     private fun handlePacket(packet: ByteArray, length: Int) {
-        val ip = parseIpv4Packet(packet, length) ?: return
+        val ip = parseIpPacket(packet, length) ?: return
         when (ip.protocol) {
             IPPROTO_TCP -> handleTcp(packet, ip)
             IPPROTO_UDP -> handleUdp(packet, ip)
         }
     }
 
-    private fun handleTcp(packet: ByteArray, ip: Ipv4Packet) {
+    private fun handleTcp(packet: ByteArray, ip: IpPacket) {
         val tcp = parseTcpPacket(packet, ip) ?: return
         val key = TcpKey(ip.source, tcp.sourcePort, ip.destination, tcp.destinationPort)
         if (tcp.rst) {
@@ -76,7 +77,6 @@ class TunSocksForwarder(
                 flow.clientNext = nextClientSequence(tcp)
                 sendTcp(flow, TCP_SYN or TCP_ACK)
             }
-            log("tcp ${ipToString(key.sourceIp)}:${key.sourcePort} -> ${ipToString(key.destinationIp)}:${key.destinationPort}")
             return
         }
         val flow = tcpFlows[key] ?: return
@@ -177,7 +177,7 @@ class TunSocksForwarder(
         writeTun(packet)
     }
 
-    private fun handleUdp(packet: ByteArray, ip: Ipv4Packet) {
+    private fun handleUdp(packet: ByteArray, ip: IpPacket) {
         val udp = parseUdpPacket(packet, ip) ?: return
         if (!enableUdp) return
         val key = UdpKey(ip.source, udp.sourcePort, ip.destination, udp.destinationPort)
@@ -193,11 +193,13 @@ class TunSocksForwarder(
 
     private fun createUdpFlow(key: UdpKey): UdpFlow {
         val control = Socket()
+        protectOrFail(control)
         control.connect(InetSocketAddress(socksHost, socksPort), 5000)
         control.soTimeout = 5000
         socksGreeting(control)
         val relay = socksUdpAssociate(control)
         val socket = DatagramSocket()
+        protectOrFail(socket)
         val target = if (relay.address.isAnyLocalAddress) {
             InetSocketAddress(InetAddress.getByName(socksHost), relay.port)
         } else {
@@ -205,7 +207,6 @@ class TunSocksForwarder(
         }
         val flow = UdpFlow(key, control, socket, target)
         Thread({ readUdpRemote(flow) }, "tcptun-udp-${key.sourcePort}").start()
-        log("udp ${ipToString(key.sourceIp)}:${key.sourcePort} -> ${ipToString(key.destinationIp)}:${key.destinationPort}")
         return flow
     }
 
@@ -259,20 +260,22 @@ class TunSocksForwarder(
         return ((left - right + 0x80000000L) and 0xffffffffL) - 0x80000000L
     }
 
-    private fun openSocksTcp(destinationIp: Int, destinationPort: Int): Socket {
+    private fun openSocksTcp(destinationIp: IpAddress, destinationPort: Int): Socket {
         val socket = Socket()
+        protectOrFail(socket)
         socket.connect(InetSocketAddress(socksHost, socksPort), 5000)
         socket.soTimeout = 0
         socksGreeting(socket)
         val out = socket.getOutputStream()
-        val req = ByteArray(10)
+        val addressBytes = destinationIp.bytes
+        val req = ByteArray(6 + addressBytes.size)
         req[0] = 0x05
         req[1] = 0x01
         req[2] = 0x00
-        req[3] = 0x01
-        ByteBuffer.wrap(req, 4, 4).putInt(destinationIp)
-        req[8] = ((destinationPort ushr 8) and 0xff).toByte()
-        req[9] = (destinationPort and 0xff).toByte()
+        req[3] = socksAddressType(destinationIp).toByte()
+        addressBytes.copyInto(req, 4)
+        req[4 + addressBytes.size] = ((destinationPort ushr 8) and 0xff).toByte()
+        req[5 + addressBytes.size] = (destinationPort and 0xff).toByte()
         out.write(req)
         out.flush()
         readSocksReply(socket)
@@ -323,13 +326,15 @@ class TunSocksForwarder(
         socket.send(DatagramPacket(dgram, dgram.size, relay))
     }
 
-    private fun buildSocksUdp(destinationIp: Int, destinationPort: Int, payload: ByteArray): ByteArray {
-        val packet = ByteArray(10 + payload.size)
-        packet[3] = 0x01
-        ByteBuffer.wrap(packet, 4, 4).putInt(destinationIp)
-        packet[8] = ((destinationPort ushr 8) and 0xff).toByte()
-        packet[9] = (destinationPort and 0xff).toByte()
-        payload.copyInto(packet, 10)
+    private fun buildSocksUdp(destinationIp: IpAddress, destinationPort: Int, payload: ByteArray): ByteArray {
+        val addressBytes = destinationIp.bytes
+        val headerLength = 4 + addressBytes.size + 2
+        val packet = ByteArray(headerLength + payload.size)
+        packet[3] = socksAddressType(destinationIp).toByte()
+        addressBytes.copyInto(packet, 4)
+        packet[4 + addressBytes.size] = ((destinationPort ushr 8) and 0xff).toByte()
+        packet[5 + addressBytes.size] = (destinationPort and 0xff).toByte()
+        payload.copyInto(packet, headerLength)
         return packet
     }
 
@@ -339,8 +344,14 @@ class TunSocksForwarder(
         val hostIp = when (buffer[offset++].toInt() and 0xff) {
             0x01 -> {
                 if (length < offset + 4 + 2) return null
-                val ip = ByteBuffer.wrap(buffer, offset, 4).int
+                val ip = IpAddress(buffer.copyOfRange(offset, offset + 4))
                 offset += 4
+                ip
+            }
+            0x04 -> {
+                if (length < offset + 16 + 2) return null
+                val ip = IpAddress(buffer.copyOfRange(offset, offset + 16))
+                offset += 16
                 ip
             }
             else -> return null
@@ -348,6 +359,26 @@ class TunSocksForwarder(
         val port = readU16(buffer, offset)
         offset += 2
         return SocksUdp(hostIp, port, buffer.copyOfRange(offset, length))
+    }
+
+    private fun socksAddressType(ip: IpAddress): Int {
+        return when (ip.version) {
+            4 -> 0x01
+            6 -> 0x04
+            else -> error("unsupported IP version")
+        }
+    }
+
+    private fun protectOrFail(socket: Socket) {
+        if (!protectSocket(socket)) {
+            throw IllegalStateException("protect TCP socket failed")
+        }
+    }
+
+    private fun protectOrFail(socket: DatagramSocket) {
+        if (!protectDatagramSocket(socket)) {
+            throw IllegalStateException("protect UDP socket failed")
+        }
     }
 
     private fun java.io.InputStream.readNBytesCompat(length: Int): ByteArray {
@@ -363,16 +394,16 @@ class TunSocksForwarder(
 }
 
 data class TcpKey(
-    val sourceIp: Int,
+    val sourceIp: IpAddress,
     val sourcePort: Int,
-    val destinationIp: Int,
+    val destinationIp: IpAddress,
     val destinationPort: Int,
 )
 
 private data class UdpKey(
-    val sourceIp: Int,
+    val sourceIp: IpAddress,
     val sourcePort: Int,
-    val destinationIp: Int,
+    val destinationIp: IpAddress,
     val destinationPort: Int,
 )
 
@@ -402,7 +433,7 @@ private class UdpFlow(
 }
 
 private data class SocksUdp(
-    val hostIp: Int,
+    val hostIp: IpAddress,
     val port: Int,
     val payload: ByteArray,
 )

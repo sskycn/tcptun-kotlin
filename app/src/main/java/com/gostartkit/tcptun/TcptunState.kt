@@ -4,6 +4,8 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 
 object TcptunState {
+    private const val MAX_LOGS = 80
+
     val status = mutableStateOf("Stopped")
     val lastError = mutableStateOf("")
     val logs = mutableStateListOf<String>()
@@ -27,8 +29,9 @@ object TcptunState {
     fun appendLog(line: String) {
         val clean = line.trim()
         if (clean.isEmpty()) return
+        if (logs.lastOrNull() == clean) return
         logs.add(clean)
-        while (logs.size > 200) {
+        while (logs.size > MAX_LOGS) {
             logs.removeAt(0)
         }
     }
