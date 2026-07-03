@@ -10,6 +10,7 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -111,6 +112,7 @@ class TunSocksForwarder(
                 val socket = ensureTcpConnected(flow)
                 socket.getOutputStream().write(packet, payloadOffset, payloadLength)
                 socket.getOutputStream().flush()
+                flow.touch()
                 flow.clientNext = (flow.clientNext + payloadLength) and 0xffffffffL
                 sendTcp(flow, TCP_ACK)
             } catch (err: Exception) {
@@ -125,6 +127,7 @@ class TunSocksForwarder(
         flow.socket?.let { return it }
         val socket = openSocksTcp(flow.key.destinationIp, flow.key.destinationPort)
         socket.tcpNoDelay = true
+        socket.soTimeout = TCP_IDLE_TIMEOUT_MS
         flow.socket = socket
         Thread({ readTcpRemote(flow, socket) }, "tcptun-tcp-${flow.key.sourcePort}").start()
         return socket
@@ -135,7 +138,15 @@ class TunSocksForwarder(
         try {
             val input = socket.getInputStream()
             while (running && !socket.isClosed) {
-                val n = input.read(buffer)
+                val n = try {
+                    input.read(buffer)
+                } catch (_: SocketTimeoutException) {
+                    if (flow.idleForMs() >= TCP_IDLE_TIMEOUT_MS) {
+                        log("tcp ${ipToString(flow.key.destinationIp)}:${flow.key.destinationPort} idle timeout")
+                        break
+                    }
+                    continue
+                }
                 if (n < 0) break
                 if (n == 0) continue
                 var offset = 0
@@ -144,6 +155,7 @@ class TunSocksForwarder(
                     val chunk = buffer.copyOfRange(offset, offset + chunkLength)
                     synchronized(flow) {
                         sendTcp(flow, TCP_ACK or TCP_PSH, chunk)
+                        flow.touch()
                         flow.serverNext = (flow.serverNext + chunk.size) and 0xffffffffL
                     }
                     offset += chunkLength
@@ -194,12 +206,13 @@ class TunSocksForwarder(
     private fun createUdpFlow(key: UdpKey): UdpFlow {
         val control = Socket()
         protectOrFail(control)
-        control.connect(InetSocketAddress(socksHost, socksPort), 5000)
-        control.soTimeout = 5000
+        control.connect(InetSocketAddress(socksHost, socksPort), SOCKS_CONNECT_TIMEOUT_MS)
+        control.soTimeout = SOCKS_HANDSHAKE_TIMEOUT_MS
         socksGreeting(control)
         val relay = socksUdpAssociate(control)
         val socket = DatagramSocket()
         protectOrFail(socket)
+        socket.soTimeout = UDP_IDLE_TIMEOUT_MS
         val target = if (relay.address.isAnyLocalAddress) {
             InetSocketAddress(InetAddress.getByName(socksHost), relay.port)
         } else {
@@ -216,6 +229,7 @@ class TunSocksForwarder(
             try {
                 val packet = DatagramPacket(buffer, buffer.size)
                 flow.socket.receive(packet)
+                flow.touch()
                 val decoded = parseSocksUdp(buffer, packet.length) ?: continue
                 val out = buildUdpPacket(
                     sourceIp = decoded.hostIp,
@@ -225,6 +239,11 @@ class TunSocksForwarder(
                     payload = decoded.payload,
                 )
                 writeTun(out)
+            } catch (_: SocketTimeoutException) {
+                if (flow.idleForMs() >= UDP_IDLE_TIMEOUT_MS) {
+                    log("udp ${ipToString(flow.key.destinationIp)}:${flow.key.destinationPort} idle timeout")
+                    break
+                }
             } catch (_: Exception) {
                 break
             }
@@ -263,8 +282,8 @@ class TunSocksForwarder(
     private fun openSocksTcp(destinationIp: IpAddress, destinationPort: Int): Socket {
         val socket = Socket()
         protectOrFail(socket)
-        socket.connect(InetSocketAddress(socksHost, socksPort), 5000)
-        socket.soTimeout = 0
+        socket.connect(InetSocketAddress(socksHost, socksPort), SOCKS_CONNECT_TIMEOUT_MS)
+        socket.soTimeout = SOCKS_HANDSHAKE_TIMEOUT_MS
         socksGreeting(socket)
         val out = socket.getOutputStream()
         val addressBytes = destinationIp.bytes
@@ -279,6 +298,7 @@ class TunSocksForwarder(
         out.write(req)
         out.flush()
         readSocksReply(socket)
+        socket.soTimeout = TCP_IDLE_TIMEOUT_MS
         return socket
     }
 
@@ -324,6 +344,7 @@ class TunSocksForwarder(
     private fun UdpFlow.send(payload: ByteArray) {
         val dgram = buildSocksUdp(key.destinationIp, key.destinationPort, payload)
         socket.send(DatagramPacket(dgram, dgram.size, relay))
+        touch()
     }
 
     private fun buildSocksUdp(destinationIp: IpAddress, destinationPort: Int, payload: ByteArray): ByteArray {
@@ -391,6 +412,13 @@ class TunSocksForwarder(
         }
         return out
     }
+
+    companion object {
+        private const val SOCKS_CONNECT_TIMEOUT_MS = 5_000
+        private const val SOCKS_HANDSHAKE_TIMEOUT_MS = 5_000
+        private const val TCP_IDLE_TIMEOUT_MS = 300_000
+        private const val UDP_IDLE_TIMEOUT_MS = 60_000
+    }
 }
 
 data class TcpKey(
@@ -414,6 +442,15 @@ private class TcpFlow(
     var clientNext: Long = 0
     var serverNext: Long = sequence
     var socket: Socket? = null
+    @Volatile private var lastActivityMs: Long = System.currentTimeMillis()
+
+    fun touch() {
+        lastActivityMs = System.currentTimeMillis()
+    }
+
+    fun idleForMs(): Long {
+        return System.currentTimeMillis() - lastActivityMs
+    }
 
     override fun close() {
         runCatching { socket?.close() }
@@ -426,6 +463,16 @@ private class UdpFlow(
     val socket: DatagramSocket,
     val relay: InetSocketAddress,
 ) : Closeable {
+    @Volatile private var lastActivityMs: Long = System.currentTimeMillis()
+
+    fun touch() {
+        lastActivityMs = System.currentTimeMillis()
+    }
+
+    fun idleForMs(): Long {
+        return System.currentTimeMillis() - lastActivityMs
+    }
+
     override fun close() {
         runCatching { socket.close() }
         runCatching { control.close() }

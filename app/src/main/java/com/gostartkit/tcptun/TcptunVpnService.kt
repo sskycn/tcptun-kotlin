@@ -8,6 +8,10 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
@@ -21,6 +25,9 @@ class TcptunVpnService : VpnService() {
     private val bridge: TcptunBridge = ReflectionTcptunBridge()
     private var forwarder: TunSocksForwarder? = null
     private var tun: android.os.ParcelFileDescriptor? = null
+    private val connectivity by lazy { getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager }
+    private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
+    private var defaultNetworkCallbackRegistered = false
     @Volatile private var stopping = false
 
     override fun onCreate() {
@@ -43,8 +50,8 @@ class TcptunVpnService : VpnService() {
 
     private fun startFromIntent(intent: Intent) {
         if (tun != null || forwarder != null) {
-            TcptunState.appendLog("VPN already running")
-            return
+            TcptunState.appendLog("restarting VPN with selected profile")
+            stopVpn(setStopped = false, clearSavedConfig = false, stopSelfService = false)
         }
         stopping = false
         val json = intent.getStringExtra(EXTRA_CONFIG) ?: run {
@@ -130,30 +137,71 @@ class TcptunVpnService : VpnService() {
         }
     }
 
-    private fun buildTun(config: AppConfig) = Builder()
-        .setSession("tcptun")
-        .setMtu(VPN_MTU)
-        .addAddress("10.77.0.2", 32)
-        .addAddress("fd00:7777::2", 128)
-        .addProxyRoutes()
-        .addRoute("2000::", 3)
-        .addDnsServer("1.1.1.1")
-        .addDnsServer("1.0.0.1")
-        .apply {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                addDisallowedApplication(packageName)
+    private fun buildTun(config: AppConfig): android.os.ParcelFileDescriptor {
+        registerDefaultNetworkCallback()
+        return Builder()
+            .setSession("tcptun")
+            .setMtu(VPN_MTU)
+            .addAddress("10.77.0.2", 32)
+            .addAddress("fd00:7777::2", 128)
+            .addProxyRoutes()
+            .addRoute("2000::", 3)
+            .addDnsServer("1.1.1.1")
+            .addDnsServer("1.0.0.1")
+            .apply {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    addDisallowedApplication(packageName)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    setMetered(false)
+                }
+                allowFamily(android.system.OsConstants.AF_INET)
+                allowFamily(android.system.OsConstants.AF_INET6)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                setMetered(false)
-            }
-            allowFamily(android.system.OsConstants.AF_INET)
-            allowFamily(android.system.OsConstants.AF_INET6)
-        }
-        .establish() ?: throw IllegalStateException("VpnService establish() returned null")
+            .establish() ?: throw IllegalStateException("VpnService establish() returned null")
+    }
 
-    private fun stopVpn(setStopped: Boolean = true, clearSavedConfig: Boolean = true) {
+    private fun registerDefaultNetworkCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || defaultNetworkCallbackRegistered) return
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+            .build()
+        val callback = defaultNetworkCallback ?: object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                setUnderlyingNetworks(arrayOf(network))
+            }
+
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                setUnderlyingNetworks(arrayOf(network))
+            }
+
+            override fun onLost(network: Network) {
+                setUnderlyingNetworks(null)
+            }
+        }.also { defaultNetworkCallback = it }
+        runCatching {
+            connectivity.requestNetwork(request, callback)
+            defaultNetworkCallbackRegistered = true
+            TcptunState.appendLog("default network callback registered")
+        }.onFailure { err ->
+            TcptunState.appendLog("default network callback unavailable: ${err.message}")
+        }
+    }
+
+    private fun unregisterDefaultNetworkCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !defaultNetworkCallbackRegistered) return
+        defaultNetworkCallback?.let { callback ->
+            runCatching { connectivity.unregisterNetworkCallback(callback) }
+                .onFailure { err -> TcptunState.appendLog("default network callback unregister failed: ${err.message}") }
+        }
+        defaultNetworkCallbackRegistered = false
+    }
+
+    private fun stopVpn(setStopped: Boolean = true, clearSavedConfig: Boolean = true, stopSelfService: Boolean = true) {
         if (stopping) return
         stopping = true
+        unregisterDefaultNetworkCallback()
         if (clearSavedConfig) {
             clearLastRunningConfig(this)
         }
@@ -172,7 +220,9 @@ class TcptunVpnService : VpnService() {
             @Suppress("DEPRECATION")
             stopForeground(true)
         }
-        stopSelf()
+        if (stopSelfService) {
+            stopSelf()
+        }
     }
 
     override fun onDestroy() {
@@ -378,7 +428,13 @@ class TcptunVpnService : VpnService() {
         fun readManualRouteConfig(context: Context): String {
             val prefs = context.applicationContext.getSharedPreferences(ROUTE_PREFS, Context.MODE_PRIVATE)
             val saved = prefs.getString(KEY_MANUAL_ROUTE_CONFIG, null)
-            if (saved != null) return saved
+            if (saved != null) {
+                val migrated = removeLegacyDefaultRouteConfig(saved)
+                if (migrated != saved) {
+                    prefs.edit().putString(KEY_MANUAL_ROUTE_CONFIG, migrated).apply()
+                }
+                return migrated
+            }
             val migrated = migrateManualRouteConfig(context)
             prefs.edit().putString(KEY_MANUAL_ROUTE_CONFIG, migrated).apply()
             return migrated
@@ -428,7 +484,7 @@ class TcptunVpnService : VpnService() {
             if (!file.exists()) return emptyRouteConfig()
             val effective = runCatching { file.readText() }.getOrDefault("")
             if (effective.isBlank()) return emptyRouteConfig()
-            return subtractRouteConfig(effective, defaultRouteConfig())
+            return removeLegacyDefaultRouteConfig(subtractRouteConfig(effective, defaultRouteConfig()))
         }
 
         private fun Builder.addProxyRoutes(): Builder {
@@ -439,6 +495,10 @@ class TcptunVpnService : VpnService() {
         }
 
         private fun buildAndroidRouteConfig(): String {
+            return emptyRouteConfig()
+        }
+
+        private fun legacyAndroidRouteConfig(): String {
             val ipCidrs = JSONArray()
             IPV4_PROXY_ROUTES.forEach { (address, prefixLength) ->
                 ipCidrs.put("$address/$prefixLength")
@@ -452,6 +512,10 @@ class TcptunVpnService : VpnService() {
                         .put("ip_cidrs", ipCidrs),
                 )
                 .toString(2)
+        }
+
+        private fun removeLegacyDefaultRouteConfig(routeConfig: String): String {
+            return subtractRouteConfig(routeConfig, legacyAndroidRouteConfig())
         }
 
         private fun emptyRouteConfig(): String {

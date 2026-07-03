@@ -22,13 +22,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -37,43 +37,64 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.AltRoute
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.BatterySaver
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.FileDownload
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.tcptun.client.ui.theme.TcpTunTheme
+import kotlinx.coroutines.Dispatchers
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.util.UUID
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -81,7 +102,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            TcpTunTheme(dynamicColor = false) {
+            TcpTunTheme(dynamicColor = true) {
                 TcptunScreen()
             }
         }
@@ -97,6 +118,10 @@ fun TcptunScreen() {
     var editingProfile by remember { mutableStateOf<AppConfig?>(null) }
     var showRouteEditor by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
+    var tcpingMessage by remember { mutableStateOf("") }
+    var tcpingInProgress by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val screenScope = rememberCoroutineScope()
     val vpnLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         pendingConfig?.let {
             startVpn(context, it)
@@ -140,14 +165,14 @@ fun TcptunScreen() {
         )
     }
 
-    fun startSelected() {
-        val config = state.selected ?: return
+    fun startProfile(config: AppConfig) {
         val error = config.validate()
         if (error != null) {
             TcptunState.error(error)
             showLogs = true
             return
         }
+        tcpingMessage = ""
         save(state.copy(selectedId = config.id))
         TcptunState.clearLogs()
         if (needsNotificationPermission(context)) {
@@ -164,6 +189,40 @@ fun TcptunScreen() {
         }
     }
 
+    fun toggleProfile(profile: AppConfig) {
+        val running = TcptunState.status.value == "Running" || TcptunState.status.value == "Starting"
+        if (running && profile.id == state.selected?.id) {
+            stopVpn(context)
+            return
+        }
+        startProfile(profile)
+    }
+
+    fun deleteProfile(profile: AppConfig) {
+        val profileIndex = state.profiles.indexOfFirst { it.id == profile.id }
+        if (profileIndex < 0) return
+        val wasSelected = state.selectedId == profile.id
+        val remaining = state.profiles.toMutableList().also { it.removeAt(profileIndex) }
+        val nextSelectedId = if (wasSelected) remaining.firstOrNull()?.id else state.selectedId
+        save(ProfilesState(remaining, nextSelectedId))
+        screenScope.launch {
+            snackbarHostState.currentSnackbarData?.dismiss()
+            val result = snackbarHostState.showSnackbar(
+                message = "已删除 ${profile.name}",
+                actionLabel = "撤销",
+                duration = SnackbarDuration.Short,
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                val current = ProfileStore.load(context)
+                if (current.profiles.none { it.id == profile.id }) {
+                    val restored = current.profiles.toMutableList()
+                    restored.add(profileIndex.coerceAtMost(restored.size), profile)
+                    save(ProfilesState(restored, if (wasSelected) profile.id else current.selectedId))
+                }
+            }
+        }
+    }
+
     val editing = editingProfile
     if (showRouteEditor) {
         RouteConfigPage(
@@ -171,34 +230,8 @@ fun TcptunScreen() {
         )
     } else if (editing == null) {
         Scaffold(
-            containerColor = Color.White,
-            floatingActionButton = {
-                RunFloatingButton(
-                    running = TcptunState.status.value == "Running" || TcptunState.status.value == "Starting",
-                    enabled = state.selected != null,
-                    onClick = {
-                        if (TcptunState.status.value == "Running" || TcptunState.status.value == "Starting") {
-                            stopVpn(context)
-                        } else {
-                            startSelected()
-                        }
-                    },
-                )
-            },
-            bottomBar = {
-                BottomStatus(
-                    status = TcptunState.status.value,
-                    error = TcptunState.lastError.value,
-                    onClick = { showLogs = true },
-                )
-            },
-        ) { padding ->
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .padding(horizontal = 16.dp),
-            ) {
+            containerColor = MaterialTheme.colorScheme.background,
+            topBar = {
                 TopBar(
                     title = "配置项",
                     onAdd = { editingProfile = AppConfig(id = UUID.randomUUID().toString(), name = "proxy") },
@@ -206,24 +239,50 @@ fun TcptunScreen() {
                     onRouteRules = { showRouteEditor = true },
                     onBatterySettings = { openBatteryOptimizationSettings(context) },
                 )
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(state.profiles, key = { it.id }) { profile ->
-                        ProfileRow(
-                            profile = profile,
-                            selected = profile.id == state.selected?.id,
-                            onSelect = { save(state.copy(selectedId = profile.id)) },
-                            onShare = { shareProfile(context, profile) },
-                            onEdit = { editingProfile = profile },
-                            onDelete = {
-                                val remaining = state.profiles.filterNot { it.id == profile.id }
-                                save(ProfilesState(remaining, remaining.firstOrNull()?.id))
-                            },
-                        )
-                    }
-                    if (state.profiles.isEmpty()) {
-                        item {
-                            EmptyState(onAdd = { editingProfile = AppConfig(id = UUID.randomUUID().toString(), name = "proxy") })
+            },
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            bottomBar = {
+                BottomStatus(
+                    status = TcptunState.status.value,
+                    error = TcptunState.lastError.value,
+                    tcpingMessage = tcpingMessage,
+                    tcpingInProgress = tcpingInProgress,
+                    hasProfile = state.selected != null,
+                    onClick = {
+                        val profile = state.selected ?: return@BottomStatus
+                        if (tcpingInProgress) return@BottomStatus
+                        tcpingInProgress = true
+                        tcpingMessage = ""
+                        screenScope.launch {
+                            tcpingMessage = tcping(profile)
+                            tcpingInProgress = false
                         }
+                    },
+                )
+            },
+        ) { padding ->
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(state.profiles, key = { it.id }) { profile ->
+                    ProfileRow(
+                        profile = profile,
+                        selected = profile.id == state.selected?.id,
+                        running = (TcptunState.status.value == "Running" || TcptunState.status.value == "Starting") &&
+                            profile.id == state.selected?.id,
+                        onClick = { toggleProfile(profile) },
+                        onShare = { shareProfile(context, profile) },
+                        onEdit = { editingProfile = profile },
+                        onDelete = { deleteProfile(profile) },
+                    )
+                }
+                if (state.profiles.isEmpty()) {
+                    item {
+                        EmptyState(onAdd = { editingProfile = AppConfig(id = UUID.randomUUID().toString(), name = "proxy") })
                     }
                 }
             }
@@ -251,6 +310,7 @@ fun TcptunScreen() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TopBar(
     title: String,
@@ -261,333 +321,286 @@ private fun TopBar(
 ) {
     var expanded by remember { mutableStateOf(false) }
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(88.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(title, style = MaterialTheme.typography.headlineLarge)
-        Spacer(Modifier.weight(1f))
-        Box {
-            IconButton(onClick = { expanded = true }) {
-                Icon(AppIcons.More, contentDescription = "更多", tint = Color.Black)
+    TopAppBar(
+        title = { Text(title, style = MaterialTheme.typography.titleLarge) },
+        actions = {
+            Box {
+                IconButton(onClick = { expanded = true }) {
+                    Icon(
+                        Icons.Rounded.MoreVert,
+                        contentDescription = "更多",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+                DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                    shape = RoundedCornerShape(12.dp),
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    tonalElevation = 3.dp,
+                    shadowElevation = 6.dp,
+                ) {
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Icon(
+                                Icons.Rounded.FileDownload,
+                                contentDescription = null,
+                            )
+                        },
+                        text = { Text("从剪切板导入") },
+                        onClick = {
+                            expanded = false
+                            onImport()
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = MaterialTheme.colorScheme.onSurface,
+                            leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                    )
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Icon(
+                                Icons.Rounded.Add,
+                                contentDescription = null,
+                            )
+                        },
+                        text = { Text("添加配置") },
+                        onClick = {
+                            expanded = false
+                            onAdd()
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = MaterialTheme.colorScheme.onSurface,
+                            leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                    )
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Icon(
+                                Icons.AutoMirrored.Rounded.AltRoute,
+                                contentDescription = null,
+                            )
+                        },
+                        text = { Text("强制代理规则") },
+                        onClick = {
+                            expanded = false
+                            onRouteRules()
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = MaterialTheme.colorScheme.onSurface,
+                            leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                    )
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Icon(
+                                Icons.Rounded.BatterySaver,
+                                contentDescription = null,
+                            )
+                        },
+                        text = { Text("省电设置") },
+                        onClick = {
+                            expanded = false
+                            onBatterySettings()
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = MaterialTheme.colorScheme.onSurface,
+                            leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                    )
+                }
             }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                DropdownMenuItem(
-                    text = {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(AppIcons.Import, contentDescription = "从剪切板导入配置", tint = Color.Black)
-                            Text("从剪切板导入")
-                        }
-                    },
-                    onClick = {
-                        expanded = false
-                        onImport()
-                    },
-                )
-                DropdownMenuItem(
-                    text = {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(AppIcons.Add, contentDescription = "添加配置", tint = Color.Black)
-                            Text("添加配置")
-                        }
-                    },
-                    onClick = {
-                        expanded = false
-                        onAdd()
-                    },
-                )
-                DropdownMenuItem(
-                    text = {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(AppIcons.Route, contentDescription = "路由规则", tint = Color.Black)
-                            Text("路由规则")
-                        }
-                    },
-                    onClick = {
-                        expanded = false
-                        onRouteRules()
-                    },
-                )
-                DropdownMenuItem(
-                    text = {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(AppIcons.Battery, contentDescription = "省电设置", tint = Color.Black)
-                            Text("省电设置")
-                        }
-                    },
-                    onClick = {
-                        expanded = false
-                        onBatterySettings()
-                    },
-                )
-            }
-        }
-    }
-}
-
-private object AppIcons {
-    val More: ImageVector = ImageVector.Builder(
-        name = "MoreVertical",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f,
-    ).apply {
-        path(fill = SolidColor(Color.Black)) {
-            moveTo(11f, 5f)
-            horizontalLineTo(13f)
-            verticalLineTo(7f)
-            horizontalLineTo(11f)
-            close()
-            moveTo(11f, 11f)
-            horizontalLineTo(13f)
-            verticalLineTo(13f)
-            horizontalLineTo(11f)
-            close()
-            moveTo(11f, 17f)
-            horizontalLineTo(13f)
-            verticalLineTo(19f)
-            horizontalLineTo(11f)
-            close()
-        }
-    }.build()
-
-    val Import: ImageVector = ImageVector.Builder(
-        name = "Import",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f,
-    ).apply {
-        path(fill = SolidColor(Color.Black)) {
-            moveTo(11f, 4f)
-            horizontalLineTo(13f)
-            verticalLineTo(12f)
-            horizontalLineTo(16f)
-            lineTo(12f, 16f)
-            lineTo(8f, 12f)
-            horizontalLineTo(11f)
-            close()
-            moveTo(5f, 18f)
-            horizontalLineTo(19f)
-            verticalLineTo(20f)
-            horizontalLineTo(5f)
-            close()
-        }
-    }.build()
-
-    val Add: ImageVector = ImageVector.Builder(
-        name = "Add",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f,
-    ).apply {
-        path(fill = SolidColor(Color.Black)) {
-            moveTo(11f, 5f)
-            horizontalLineTo(13f)
-            verticalLineTo(11f)
-            horizontalLineTo(19f)
-            verticalLineTo(13f)
-            horizontalLineTo(13f)
-            verticalLineTo(19f)
-            horizontalLineTo(11f)
-            verticalLineTo(13f)
-            horizontalLineTo(5f)
-            verticalLineTo(11f)
-            horizontalLineTo(11f)
-            close()
-        }
-    }.build()
-
-    val Battery: ImageVector = ImageVector.Builder(
-        name = "Battery",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f,
-    ).apply {
-        path(fill = SolidColor(Color.Black)) {
-            moveTo(4f, 8f)
-            horizontalLineTo(18f)
-            verticalLineTo(16f)
-            horizontalLineTo(4f)
-            close()
-            moveTo(6f, 10f)
-            verticalLineTo(14f)
-            horizontalLineTo(13f)
-            verticalLineTo(10f)
-            close()
-            moveTo(19f, 10f)
-            horizontalLineTo(21f)
-            verticalLineTo(14f)
-            horizontalLineTo(19f)
-            close()
-        }
-    }.build()
-
-    val Route: ImageVector = ImageVector.Builder(
-        name = "Route",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f,
-    ).apply {
-        path(fill = SolidColor(Color.Black)) {
-            moveTo(3f, 3f)
-            horizontalLineTo(8f)
-            verticalLineTo(8f)
-            horizontalLineTo(3f)
-            close()
-            moveTo(16f, 16f)
-            horizontalLineTo(21f)
-            verticalLineTo(21f)
-            horizontalLineTo(16f)
-            close()
-            moveTo(7f, 5f)
-            horizontalLineTo(12f)
-            verticalLineTo(7f)
-            horizontalLineTo(7f)
-            close()
-            moveTo(10f, 7f)
-            horizontalLineTo(12f)
-            verticalLineTo(17f)
-            horizontalLineTo(17f)
-            verticalLineTo(19f)
-            horizontalLineTo(10f)
-            close()
-        }
-    }.build()
-
-    val Back: ImageVector = ImageVector.Builder(
-        name = "Back",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f,
-    ).apply {
-        path(fill = SolidColor(Color.Black)) {
-            moveTo(20f, 11f)
-            verticalLineTo(13f)
-            horizontalLineTo(8f)
-            lineTo(13f, 18f)
-            lineTo(11.6f, 19.4f)
-            lineTo(4.2f, 12f)
-            lineTo(11.6f, 4.6f)
-            lineTo(13f, 6f)
-            lineTo(8f, 11f)
-            close()
-        }
-    }.build()
+        },
+    )
 }
 
 @Composable
 private fun ProfileRow(
     profile: AppConfig,
     selected: Boolean,
-    onSelect: () -> Unit,
+    running: Boolean,
+    onClick: () -> Unit,
     onShare: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Row(
+    var menuExpanded by remember { mutableStateOf(false) }
+    val colors = MaterialTheme.colorScheme
+    val rowColor = if (selected) colors.secondaryContainer else colors.surfaceContainerLow
+    val statusColor = if (running) colors.primary else colors.tertiary
+
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 108.dp)
-            .clickable(onClick = onSelect),
-        verticalAlignment = Alignment.CenterVertically,
+            .heightIn(min = 108.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = rowColor,
+        tonalElevation = if (selected) 2.dp else 0.dp,
     ) {
-        Box(
+        Row(
             modifier = Modifier
-                .width(5.dp)
-                .height(88.dp)
-                .background(if (selected) Color.Black else Color.Transparent),
-        )
-        Spacer(Modifier.width(12.dp))
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+                .fillMaxWidth()
+                .clickable(onClick = onClick),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(profile.name, style = MaterialTheme.typography.headlineSmall, color = Color(0xFF202124))
-            Text(profile.maskedAddress(), style = MaterialTheme.typography.titleLarge, color = Color(0xFF5F6368))
-            Text(profile.label(), style = MaterialTheme.typography.titleMedium, color = Color(0xFFD1792E))
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onShare) { Text("↗", style = MaterialTheme.typography.headlineMedium, color = Color.Black) }
-            TextButton(onClick = onEdit) { Text("✎", style = MaterialTheme.typography.headlineMedium, color = Color.Black) }
-            TextButton(onClick = onDelete) { Text("⌫", style = MaterialTheme.typography.headlineMedium, color = Color.Black) }
+            Box(
+                modifier = Modifier
+                    .width(5.dp)
+                    .height(72.dp)
+                    .background(if (selected) statusColor else Color.Transparent, RoundedCornerShape(8.dp)),
+            )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(vertical = 14.dp, horizontal = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    profile.name,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = colors.onSurface,
+                )
+                Text(
+                    profile.maskedAddress(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.onSurfaceVariant,
+                )
+                Text(
+                    text = if (running) "${profile.label()} · 运行中" else profile.label(),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = statusColor,
+                )
+            }
+            Box(
+                modifier = Modifier.padding(end = 8.dp),
+            ) {
+                IconButton(onClick = { menuExpanded = true }) {
+                    Icon(
+                        Icons.Rounded.MoreVert,
+                        contentDescription = "配置操作",
+                        tint = colors.onSurfaceVariant,
+                    )
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                    shape = RoundedCornerShape(12.dp),
+                    containerColor = colors.surfaceContainer,
+                    tonalElevation = 3.dp,
+                    shadowElevation = 6.dp,
+                ) {
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Icon(Icons.Rounded.Share, contentDescription = null)
+                        },
+                        text = { Text("分享") },
+                        onClick = {
+                            menuExpanded = false
+                            onShare()
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = colors.onSurface,
+                            leadingIconColor = colors.onSurfaceVariant,
+                        ),
+                    )
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Icon(Icons.Rounded.Edit, contentDescription = null)
+                        },
+                        text = { Text("编辑") },
+                        onClick = {
+                            menuExpanded = false
+                            onEdit()
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = colors.onSurface,
+                            leadingIconColor = colors.onSurfaceVariant,
+                        ),
+                    )
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Icon(Icons.Rounded.Delete, contentDescription = null)
+                        },
+                        text = { Text("删除") },
+                        onClick = {
+                            menuExpanded = false
+                            onDelete()
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = colors.error,
+                            leadingIconColor = colors.error,
+                        ),
+                    )
+                }
+            }
         }
     }
-    HorizontalDivider(color = Color(0xFFE0E0E0))
 }
-
 @Composable
 private fun EmptyState(onAdd: () -> Unit) {
-    Column(
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 80.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+            .padding(top = 48.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
-        Text("还没有配置项", style = MaterialTheme.typography.titleLarge)
-        Button(onClick = onAdd) {
-            Text("添加配置")
+        Column(
+            modifier = Modifier.padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(
+                "还没有配置项",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Button(onClick = onAdd) {
+                Text("添加配置")
+            }
         }
     }
 }
 
 @Composable
-private fun RunFloatingButton(running: Boolean, enabled: Boolean, onClick: () -> Unit) {
-    FloatingActionButton(
-        onClick = onClick,
-        containerColor = Color(0xFFFF7A0A),
-        contentColor = Color.White,
-        shape = RoundedCornerShape(22.dp),
-        modifier = Modifier.size(88.dp),
-    ) {
-        Text(
-            text = if (running) "■" else "▶",
-            style = MaterialTheme.typography.headlineLarge,
-            color = if (enabled) Color.White else Color(0xFFFFC092),
-        )
-    }
-}
-
-@Composable
-private fun BottomStatus(status: String, error: String, onClick: () -> Unit) {
+private fun BottomStatus(
+    status: String,
+    error: String,
+    tcpingMessage: String,
+    tcpingInProgress: Boolean,
+    hasProfile: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
     val text = when {
         error.isNotBlank() -> "错误：$error"
+        tcpingInProgress -> "正在 TCPing..."
+        tcpingMessage.isNotBlank() -> tcpingMessage
         status == "Running" -> "已连接，点击测试连接"
         status == "Starting" -> "正在连接..."
-        else -> "未连接，选择配置后点击启动"
+        hasProfile -> "未连接，点击列表项启动；点击这里测试连接"
+        else -> "未连接，添加配置后点击列表项启动"
     }
-    Row(
+    val contentColor = when {
+        error.isNotBlank() -> colors.error
+        tcpingMessage.startsWith("TCPing 成功") || status == "Running" -> colors.primary
+        status == "Starting" || tcpingInProgress -> colors.tertiary
+        else -> colors.onSurfaceVariant
+    }
+    BottomAppBar(
         modifier = Modifier
             .fillMaxWidth()
             .height(72.dp)
-            .background(Color.White)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .clickable(enabled = hasProfile && !tcpingInProgress, onClick = onClick),
+        containerColor = colors.surfaceContainer,
+        contentColor = contentColor,
     ) {
-        Text(text, style = MaterialTheme.typography.titleLarge, color = Color(0xFF4A4D52))
+        Text(
+            text,
+            style = MaterialTheme.typography.titleMedium,
+            color = contentColor,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
     }
 }
 
@@ -604,7 +617,7 @@ private fun RouteConfigPage(onBack: () -> Unit) {
         return TcptunVpnService.writeManualRouteConfig(context, buildRouteConfig(next))
             .onSuccess {
                 rules = next
-                message = "已保存，已与自动规则合并生效"
+                message = "已保存，强制代理规则已生效"
                 error = ""
             }
             .onFailure { err ->
@@ -637,46 +650,63 @@ private fun RouteConfigPage(onBack: () -> Unit) {
         return
     }
 
-    Scaffold(containerColor = Color.White) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp),
-        ) {
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
             RouteListTopBar(
-                title = "路由规则",
+                title = "强制代理规则",
                 onBack = onBack,
                 onAdd = { showAddRule = true },
                 onReset = {
                     TcptunVpnService.resetManualRouteConfig(context).fold(
                         onSuccess = {
                             rules = parseRouteRules(TcptunVpnService.readManualRouteConfig(context))
-                            message = "已清空手动规则，自动规则仍会生效"
+                            message = "已清空强制代理规则"
                             error = ""
                         },
                         onFailure = { err ->
-                            error = err.message ?: "清空手动规则失败"
+                            error = err.message ?: "清空强制代理规则失败"
                             message = ""
                         },
                     )
                 },
             )
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    "手动规则 ${rules.size} 条 · 启动时与自动规则合并写入 ${TcptunVpnService.routeConfigFile(context).name}",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color(0xFF4A4D52),
-                )
-                if (message.isNotBlank()) {
-                    Text(message, style = MaterialTheme.typography.bodyMedium, color = Color(0xFF1B5E20))
-                }
-                if (error.isNotBlank()) {
-                    Text(error, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB3261E))
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp),
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        "强制代理规则 ${rules.size} 条 · 启动时写入 ${TcptunVpnService.routeConfigFile(context).name}",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (message.isNotBlank()) {
+                        Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                    }
+                    if (error.isNotBlank()) {
+                        Text(error, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                    }
                 }
             }
             Spacer(Modifier.height(8.dp))
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(vertical = 8.dp),
+            ) {
                 if (rules.isEmpty()) {
                     item {
                         RouteEmptyState(onAdd = { showAddRule = true })
@@ -704,6 +734,7 @@ private fun RouteConfigPage(onBack: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RouteListTopBar(
     title: String,
@@ -711,70 +742,101 @@ private fun RouteListTopBar(
     onAdd: () -> Unit,
     onReset: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(88.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconButton(onClick = onBack) {
-            Icon(AppIcons.Back, contentDescription = "返回", tint = Color.Black)
-        }
-        Spacer(Modifier.width(12.dp))
-        Text(title, style = MaterialTheme.typography.headlineLarge)
-        Spacer(Modifier.weight(1f))
-        TextButton(onClick = onReset) {
-            Text("清空手动")
-        }
-        IconButton(onClick = onAdd) {
-            Icon(AppIcons.Add, contentDescription = "添加规则", tint = Color.Black)
-        }
-    }
+    TopAppBar(
+        title = { Text(title, style = MaterialTheme.typography.titleLarge) },
+        navigationIcon = {
+            IconButton(onClick = onBack) {
+                Icon(
+                    Icons.AutoMirrored.Rounded.ArrowBack,
+                    contentDescription = "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        },
+        actions = {
+            TextButton(onClick = onReset) {
+                Text("清空", color = MaterialTheme.colorScheme.error)
+            }
+            IconButton(onClick = onAdd) {
+                Icon(
+                    Icons.Rounded.Add,
+                    contentDescription = "添加规则",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        },
+    )
 }
 
 @Composable
 private fun RouteRuleRow(rule: RouteRule, onClick: () -> Unit) {
-    Row(
+    val colors = MaterialTheme.colorScheme
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 84.dp)
-            .clickable(onClick = onClick),
-        verticalAlignment = Alignment.CenterVertically,
+            .heightIn(min = 84.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = colors.surfaceContainerLow,
     ) {
-        Box(
+        Row(
             modifier = Modifier
-                .width(5.dp)
-                .height(56.dp)
-                .background(Color(0xFFD1792E)),
-        )
-        Spacer(Modifier.width(12.dp))
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+                .fillMaxWidth()
+                .clickable(onClick = onClick),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(rule.type.label, style = MaterialTheme.typography.titleLarge, color = Color(0xFF202124))
-            Text(rule.value, style = MaterialTheme.typography.bodyLarge, color = Color(0xFF4A4D52))
-            Text("force_upstream.${rule.type.jsonKey}", style = MaterialTheme.typography.bodySmall, color = Color(0xFF80868B))
+            Box(
+                modifier = Modifier
+                    .width(5.dp)
+                    .height(56.dp)
+                    .background(colors.tertiary, RoundedCornerShape(8.dp)),
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(rule.type.label, style = MaterialTheme.typography.titleMedium, color = colors.onSurface)
+                Text(rule.value, style = MaterialTheme.typography.bodyLarge, color = colors.onSurface)
+                Text(
+                    "force_upstream.${rule.type.jsonKey}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Rounded.ArrowForward,
+                contentDescription = null,
+                tint = colors.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
         }
-        Text("›", style = MaterialTheme.typography.headlineMedium, color = Color.Black)
     }
-    HorizontalDivider(color = Color(0xFFE0E0E0))
 }
 
 @Composable
 private fun RouteEmptyState(onAdd: () -> Unit) {
-    Column(
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 80.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+            .padding(top = 48.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
-        Text("还没有路由规则", style = MaterialTheme.typography.titleLarge)
-        Button(onClick = onAdd) {
-            Text("添加规则")
+        Column(
+            modifier = Modifier.padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(
+                "还没有强制代理规则",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Button(onClick = onAdd) {
+                Text("添加规则")
+            }
         }
     }
 }
@@ -794,15 +856,11 @@ private fun RouteRuleDetailPage(
     var error by remember(index) { mutableStateOf("") }
     val stats = routeRuleStats(rule, rules, index)
 
-    Scaffold(containerColor = Color.White) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp),
-        ) {
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
             EditTopBar(
-                title = "规则详情",
+                title = "强制代理详情",
                 onBack = onBack,
                 onSave = {
                     val trimmed = value.trim()
@@ -823,6 +881,14 @@ private fun RouteRuleDetailPage(
                     )
                 },
             )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp),
+        ) {
             Column(
                 modifier = Modifier
                     .verticalScroll(rememberScrollState())
@@ -830,10 +896,10 @@ private fun RouteRuleDetailPage(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 if (message.isNotBlank()) {
-                    Text(message, style = MaterialTheme.typography.bodyMedium, color = Color(0xFF1B5E20))
+                    Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
                 }
                 if (error.isNotBlank()) {
-                    Text(error, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB3261E))
+                    Text(error, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
                 }
                 RouteStatsBlock(stats)
                 ChoiceRow("规则类型", type.label, RouteRuleType.entries.map { it.label }) { selected ->
@@ -865,7 +931,7 @@ private fun RouteRuleDetailPage(
                         )
                     },
                 ) {
-                    Text("删除这条规则", color = Color(0xFFB3261E))
+                    Text("删除这条规则", color = MaterialTheme.colorScheme.error)
                 }
             }
         }
@@ -874,31 +940,35 @@ private fun RouteRuleDetailPage(
 
 @Composable
 private fun RouteStatsBlock(stats: RouteRuleStats) {
-    Column(
+    Surface(
         modifier = Modifier
-            .fillMaxWidth()
-            .background(Color(0xFFF7F8FA), RoundedCornerShape(8.dp))
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
     ) {
-        Text("统计数据", style = MaterialTheme.typography.titleLarge, color = Color(0xFF202124))
-        StatLine("位置", "#${stats.position}")
-        StatLine("类型", stats.typeLabel)
-        StatLine("手动规则总数", stats.totalRules.toString())
-        StatLine("合并后有效规则", stats.effectiveRules.toString())
-        StatLine("手动同类规则", stats.sameTypeRules.toString())
-        StatLine("手动重复规则", stats.duplicateRules.toString())
-        StatLine("与自动规则重复", if (stats.defaultRule) "是" else "否")
-        StatLine("近期日志匹配", stats.recentLogHits.toString())
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("统计数据", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+            StatLine("位置", "#${stats.position}")
+            StatLine("类型", stats.typeLabel)
+            StatLine("强制代理总数", stats.totalRules.toString())
+            StatLine("有效规则", stats.effectiveRules.toString())
+            StatLine("同类规则", stats.sameTypeRules.toString())
+            StatLine("重复规则", stats.duplicateRules.toString())
+            StatLine("与内置规则重复", if (stats.defaultRule) "是" else "否")
+            StatLine("近期日志匹配", stats.recentLogHits.toString())
+        }
     }
 }
 
 @Composable
 private fun StatLine(label: String, value: String) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = Color(0xFF5F6368))
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.weight(1f))
-        Text(value, style = MaterialTheme.typography.bodyMedium, color = Color(0xFF202124))
+        Text(value, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
     }
 }
 
@@ -910,11 +980,11 @@ private fun RouteRuleDialog(onDismiss: () -> Unit, onSave: (RouteRule) -> Result
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("添加路由规则") },
+        title = { Text("添加强制代理规则") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (error.isNotBlank()) {
-                    Text(error, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB3261E))
+                    Text(error, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
                 }
                 ChoiceRow("规则类型", type.label, RouteRuleType.entries.map { it.label }) { selected ->
                     type = RouteRuleType.entries.first { it.label == selected }
@@ -960,13 +1030,9 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
     var config by remember(initial.id) { mutableStateOf(initial) }
     var formError by remember(initial.id) { mutableStateOf("") }
 
-    Scaffold(containerColor = Color.White) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp),
-        ) {
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
             EditTopBar(
                 title = if (initial.serverHost.isBlank()) "添加配置" else "编辑配置",
                 onBack = onBack,
@@ -980,6 +1046,14 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                     }
                 },
             )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp),
+        ) {
             Column(
                 modifier = Modifier
                     .verticalScroll(rememberScrollState())
@@ -987,7 +1061,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 if (formError.isNotBlank()) {
-                    Text(formError, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB3261E))
+                    Text(formError, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
                 }
                 OutlinedTextField(
                     value = config.name,
@@ -1094,24 +1168,26 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EditTopBar(title: String, onBack: () -> Unit, onSave: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(88.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconButton(onClick = onBack) {
-            Icon(AppIcons.Back, contentDescription = "返回", tint = Color.Black)
-        }
-        Spacer(Modifier.width(12.dp))
-        Text(title, style = MaterialTheme.typography.headlineLarge)
-        Spacer(Modifier.weight(1f))
-        Button(onClick = onSave) {
-            Text("保存")
-        }
-    }
+    TopAppBar(
+        title = { Text(title, style = MaterialTheme.typography.titleLarge) },
+        navigationIcon = {
+            IconButton(onClick = onBack) {
+                Icon(
+                    Icons.AutoMirrored.Rounded.ArrowBack,
+                    contentDescription = "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        },
+        actions = {
+            Button(onClick = onSave) {
+                Text("保存")
+            }
+        },
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1126,10 +1202,17 @@ private fun ChoiceRow(title: String, value: String, options: List<String>, onCha
             label = { Text(title) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier
-                .menuAnchor()
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, true)
                 .fillMaxWidth(),
         )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            shape = RoundedCornerShape(12.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            tonalElevation = 3.dp,
+            shadowElevation = 6.dp,
+        ) {
             options.forEach { option ->
                 DropdownMenuItem(
                     text = { Text(option) },
@@ -1137,6 +1220,9 @@ private fun ChoiceRow(title: String, value: String, options: List<String>, onCha
                         onChange(option)
                         expanded = false
                     },
+                    colors = MenuDefaults.itemColors(
+                        textColor = MaterialTheme.colorScheme.onSurface,
+                    ),
                 )
             }
         }
@@ -1145,13 +1231,26 @@ private fun ChoiceRow(title: String, value: String, options: List<String>, onCha
 
 @Composable
 private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(
+    Surface(
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
-        Text(label, style = MaterialTheme.typography.bodyLarge)
-        Switch(checked = checked, onCheckedChange = onChange)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onChange(!checked) }
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Switch(checked = checked, onCheckedChange = onChange)
+        }
     }
 }
 
@@ -1240,18 +1339,27 @@ private fun LogsDialog(onDismiss: () -> Unit) {
         title = { Text("运行日志") },
         text = {
             val scrollState = rememberScrollState()
-            Box(
+            Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 520.dp)
-                    .verticalScroll(scrollState),
+                    .heightIn(max = 520.dp),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHighest,
             ) {
-                SelectionContainer {
-                    Text(
-                        TcptunState.logs.joinToString("\n").ifBlank { "No logs yet." },
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(scrollState)
+                        .padding(12.dp),
+                ) {
+                    SelectionContainer {
+                        Text(
+                            TcptunState.logs.joinToString("\n").ifBlank { "No logs yet." },
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                 }
             }
         },
@@ -1262,7 +1370,7 @@ private fun LogsDialog(onDismiss: () -> Unit) {
         },
         dismissButton = {
             TextButton(onClick = TcptunState::clearLogs) {
-                Text("清空")
+                Text("清空", color = MaterialTheme.colorScheme.error)
             }
         },
     )
@@ -1273,6 +1381,28 @@ private fun shareProfile(context: Context, profile: AppConfig) {
         .setType("text/plain")
         .putExtra(Intent.EXTRA_TEXT, profile.shareText())
     context.startActivity(Intent.createChooser(send, "分享配置"))
+}
+
+private suspend fun tcping(profile: AppConfig): String = withContext(Dispatchers.IO) {
+    val host = profile.serverHost.trim()
+    val port = profile.serverPort.trim().toIntOrNull()
+    if (host.isBlank() || port == null || port !in 1..65535) {
+        return@withContext "TCPing 失败：服务器地址无效"
+    }
+    val start = System.nanoTime()
+    runCatching {
+        Socket().use { socket ->
+            socket.connect(InetSocketAddress(host, port), TCPING_TIMEOUT_MS)
+        }
+    }.fold(
+        onSuccess = {
+            val elapsedMs = (System.nanoTime() - start) / 1_000_000
+            "TCPing 成功 · ${elapsedMs}ms"
+        },
+        onFailure = { err ->
+            "TCPing 失败 · ${err.message ?: err.javaClass.simpleName}"
+        },
+    )
 }
 
 private fun clipboardText(context: Context): String {
@@ -1322,3 +1452,5 @@ private fun startVpn(context: Context, config: AppConfig) {
 private fun stopVpn(context: Context) {
     context.startService(TcptunVpnService.stopIntent(context))
 }
+
+private const val TCPING_TIMEOUT_MS = 3_000

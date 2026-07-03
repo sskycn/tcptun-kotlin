@@ -2,7 +2,7 @@
 <resources>
 
     <style name="Theme.TcpTun.Start" parent="@style/Theme.TcpTun">
-        <item name="android:windowSplashScreenBackground">@color/tcptun_dark</item>
+        <item name="android:windowSplashScreenBackground">@color/tcptun_splash</item>
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
     </style>
 </resources>
