@@ -8,10 +8,9 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
@@ -62,7 +61,7 @@ class TcptunVpnService : VpnService() {
         Thread {
             try {
                 TcptunState.setStatus("Starting")
-                startForeground(NOTIFICATION_ID, buildNotification("Starting"))
+                startVpnForeground("Starting")
                 val config = AppConfig(
                     serverHost = intent.getStringExtra("serverHost").orEmpty(),
                     serverPort = intent.getStringExtra("serverPort") ?: "9443",
@@ -153,7 +152,7 @@ class TcptunVpnService : VpnService() {
                     addDisallowedApplication(packageName)
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    setMetered(false)
+                    setMetered(connectivity.isActiveNetworkMetered)
                 }
                 allowFamily(android.system.OsConstants.AF_INET)
                 allowFamily(android.system.OsConstants.AF_INET6)
@@ -162,17 +161,9 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun registerDefaultNetworkCallback() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || defaultNetworkCallbackRegistered) return
-        val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
-            .build()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || defaultNetworkCallbackRegistered) return
         val callback = defaultNetworkCallback ?: object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                setUnderlyingNetworks(arrayOf(network))
-            }
-
-            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
                 setUnderlyingNetworks(arrayOf(network))
             }
 
@@ -181,7 +172,7 @@ class TcptunVpnService : VpnService() {
             }
         }.also { defaultNetworkCallback = it }
         runCatching {
-            connectivity.requestNetwork(request, callback)
+            connectivity.registerDefaultNetworkCallback(callback)
             defaultNetworkCallbackRegistered = true
             TcptunState.appendLog("default network callback registered")
         }.onFailure { err ->
@@ -190,7 +181,7 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun unregisterDefaultNetworkCallback() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || !defaultNetworkCallbackRegistered) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || !defaultNetworkCallbackRegistered) return
         defaultNetworkCallback?.let { callback ->
             runCatching { connectivity.unregisterNetworkCallback(callback) }
                 .onFailure { err -> TcptunState.appendLog("default network callback unregister failed: ${err.message}") }
@@ -259,6 +250,19 @@ class TcptunVpnService : VpnService() {
             .setOngoing(state != "Stopped")
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopPendingIntent)
             .build()
+    }
+
+    private fun startVpnForeground(state: String) {
+        val notification = buildNotification(state)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
     }
 
     private fun updateNotification(state: String) {

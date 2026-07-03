@@ -9,7 +9,6 @@ import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
-import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -1418,14 +1417,9 @@ private fun needsNotificationPermission(context: Context): Boolean {
 }
 
 private fun openBatteryOptimizationSettings(context: Context) {
-    val powerManager = context.getSystemService(PowerManager::class.java)
     val packageName = context.packageName
-    val intent = if (
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-        powerManager?.isIgnoringBatteryOptimizations(packageName) != true
-    ) {
-        Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-            .setData(Uri.parse("package:$packageName"))
+    val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
     } else {
         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
             .setData(Uri.parse("package:$packageName"))
@@ -1433,7 +1427,10 @@ private fun openBatteryOptimizationSettings(context: Context) {
     runCatching { context.startActivity(intent) }
         .onFailure {
             runCatching {
-                context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                context.startActivity(
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        .setData(Uri.parse("package:$packageName")),
+                )
             }.onFailure {
                 context.startActivity(Intent(Settings.ACTION_SETTINGS))
             }

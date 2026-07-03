@@ -11,9 +11,14 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.SynchronousQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 
 class TunSocksForwarder(
@@ -28,7 +33,24 @@ class TunSocksForwarder(
     private val input = FileInputStream(tun.fileDescriptor)
     private val output = FileOutputStream(tun.fileDescriptor)
     private val writeLock = Any()
-    private val workers: ExecutorService = Executors.newFixedThreadPool(4)
+    private val workers: ExecutorService = ThreadPoolExecutor(
+        PACKET_WORKER_THREADS,
+        PACKET_WORKER_THREADS,
+        30L,
+        TimeUnit.SECONDS,
+        ArrayBlockingQueue(PACKET_QUEUE_CAPACITY),
+        namedThreadFactory("tcptun-packet"),
+        ThreadPoolExecutor.CallerRunsPolicy(),
+    )
+    private val ioWorkers: ExecutorService = ThreadPoolExecutor(
+        0,
+        NETWORK_READER_THREADS,
+        30L,
+        TimeUnit.SECONDS,
+        SynchronousQueue(),
+        namedThreadFactory("tcptun-io"),
+        ThreadPoolExecutor.AbortPolicy(),
+    )
     private val tcpFlows = ConcurrentHashMap<TcpKey, TcpFlow>()
     private val udpFlows = ConcurrentHashMap<UdpKey, UdpFlow>()
     @Volatile private var running = false
@@ -51,7 +73,11 @@ class TunSocksForwarder(
             }
             if (length <= 0) continue
             val packet = buffer.copyOf(length)
-            workers.execute { handlePacket(packet, length) }
+            try {
+                workers.execute { handlePacket(packet, length) }
+            } catch (_: RejectedExecutionException) {
+                if (running) log("packet worker queue full; dropping packet")
+            }
         }
     }
 
@@ -71,6 +97,14 @@ class TunSocksForwarder(
             return
         }
         if (tcp.syn) {
+            if (!tcpFlows.containsKey(key) && tcpFlows.size >= MAX_TCP_FLOWS) {
+                log("tcp flow limit reached; rejecting ${ipToString(key.destinationIp)}:${key.destinationPort}")
+                val reject = TcpFlow(key, sequence = 0x4d3c2b1aL).also {
+                    it.clientNext = nextClientSequence(tcp)
+                }
+                sendTcp(reject, TCP_RST or TCP_ACK)
+                return
+            }
             val flow = tcpFlows.computeIfAbsent(key) {
                 TcpFlow(key, sequence = 0x4d3c2b1aL)
             }
@@ -129,7 +163,13 @@ class TunSocksForwarder(
         socket.tcpNoDelay = true
         socket.soTimeout = TCP_IDLE_TIMEOUT_MS
         flow.socket = socket
-        Thread({ readTcpRemote(flow, socket) }, "tcptun-tcp-${flow.key.sourcePort}").start()
+        try {
+            ioWorkers.execute { readTcpRemote(flow, socket) }
+        } catch (_: RejectedExecutionException) {
+            flow.socket = null
+            runCatching { socket.close() }
+            throw IllegalStateException("tcp reader capacity reached")
+        }
         return socket
     }
 
@@ -195,6 +235,10 @@ class TunSocksForwarder(
         val key = UdpKey(ip.source, udp.sourcePort, ip.destination, udp.destinationPort)
         val payload = packet.copyOfRange(udp.payloadOffset, udp.payloadOffset + udp.payloadLength)
         try {
+            if (!udpFlows.containsKey(key) && udpFlows.size >= MAX_UDP_FLOWS) {
+                log("udp flow limit reached; dropping ${ipToString(key.destinationIp)}:${key.destinationPort}")
+                return
+            }
             val flow = udpFlows.computeIfAbsent(key) { createUdpFlow(key) }
             flow.send(payload)
         } catch (err: Exception) {
@@ -219,7 +263,12 @@ class TunSocksForwarder(
             relay
         }
         val flow = UdpFlow(key, control, socket, target)
-        Thread({ readUdpRemote(flow) }, "tcptun-udp-${key.sourcePort}").start()
+        try {
+            ioWorkers.execute { readUdpRemote(flow) }
+        } catch (_: RejectedExecutionException) {
+            flow.close()
+            throw IllegalStateException("udp reader capacity reached")
+        }
         return flow
     }
 
@@ -260,12 +309,14 @@ class TunSocksForwarder(
 
     override fun close() {
         running = false
+        runCatching { tun.close() }
         tcpFlows.values.forEach { it.close() }
         udpFlows.values.forEach { it.close() }
         tcpFlows.clear()
         udpFlows.clear()
         workers.shutdownNow()
-        runCatching { tun.close() }
+        ioWorkers.shutdownNow()
+        readerThread?.interrupt()
         log("vpn tun forwarding stopped")
     }
 
@@ -414,10 +465,22 @@ class TunSocksForwarder(
     }
 
     companion object {
+        private const val PACKET_WORKER_THREADS = 4
+        private const val PACKET_QUEUE_CAPACITY = 256
+        private const val NETWORK_READER_THREADS = 16
+        private const val MAX_TCP_FLOWS = 128
+        private const val MAX_UDP_FLOWS = 128
         private const val SOCKS_CONNECT_TIMEOUT_MS = 5_000
         private const val SOCKS_HANDSHAKE_TIMEOUT_MS = 5_000
         private const val TCP_IDLE_TIMEOUT_MS = 300_000
         private const val UDP_IDLE_TIMEOUT_MS = 60_000
+
+        private fun namedThreadFactory(prefix: String): java.util.concurrent.ThreadFactory {
+            val counter = AtomicInteger(1)
+            return java.util.concurrent.ThreadFactory { runnable ->
+                Thread(runnable, "$prefix-${counter.getAndIncrement()}")
+            }
+        }
     }
 }
 
