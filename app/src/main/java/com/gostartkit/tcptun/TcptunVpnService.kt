@@ -459,11 +459,7 @@ class TcptunVpnService : VpnService() {
             val prefs = context.applicationContext.getSharedPreferences(ROUTE_PREFS, Context.MODE_PRIVATE)
             val saved = prefs.getString(KEY_MANUAL_ROUTE_CONFIG, null)
             if (saved != null) {
-                val migrated = removeLegacyDefaultRouteConfig(saved)
-                if (migrated != saved) {
-                    prefs.edit().putString(KEY_MANUAL_ROUTE_CONFIG, migrated).apply()
-                }
-                return migrated
+                return importPersistedRouteConfig(context, removeLegacyDefaultRouteConfig(saved), saved)
             }
             val migrated = migrateManualRouteConfig(context)
             prefs.edit().putString(KEY_MANUAL_ROUTE_CONFIG, migrated).apply()
@@ -493,6 +489,7 @@ class TcptunVpnService : VpnService() {
         private fun ensureAndroidRouteConfig(context: Context): String {
             val file = routeConfigFile(context)
             runCatching {
+                importPersistedRouteConfig(context)
                 writeEffectiveRouteConfig(context)
             }.onFailure { err ->
                 TcptunState.appendLog("write android route config failed: ${err.message}")
@@ -507,6 +504,29 @@ class TcptunVpnService : VpnService() {
 
         private fun buildEffectiveRouteConfig(context: Context): String {
             return mergeRouteConfigs(defaultRouteConfig(), readManualRouteConfig(context))
+        }
+
+        private fun importPersistedRouteConfig(context: Context): String {
+            return importPersistedRouteConfig(context, readManualRouteConfig(context))
+        }
+
+        private fun importPersistedRouteConfig(context: Context, manualConfig: String, savedConfig: String = manualConfig): String {
+            val file = routeConfigFile(context)
+            val persisted = runCatching {
+                if (!file.exists()) {
+                    emptyRouteConfig()
+                } else {
+                    removeLegacyDefaultRouteConfig(subtractRouteConfig(file.readText(), defaultRouteConfig()))
+                }
+            }.getOrDefault(emptyRouteConfig())
+            val merged = mergeRouteConfigs(manualConfig, persisted)
+            if (merged != savedConfig) {
+                context.applicationContext.getSharedPreferences(ROUTE_PREFS, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString(KEY_MANUAL_ROUTE_CONFIG, merged)
+                    .apply()
+            }
+            return merged
         }
 
         private fun migrateManualRouteConfig(context: Context): String {
