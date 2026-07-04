@@ -25,6 +25,7 @@ object HevSocks5Tunnel {
         socksHost: String,
         socksPort: Int,
         mtu: Int,
+        dnsServer: String,
     ): File {
         val file = File(directory, "hev-socks5-tunnel.yml")
         file.writeText(
@@ -41,6 +42,13 @@ object HevSocks5Tunnel {
               address: $socksHost
               udp: 'udp'
               pipeline: false
+
+            mapdns:
+              address: $dnsServer
+              port: 53
+              network: 198.19.0.0
+              netmask: 255.255.0.0
+              cache-size: 10000
 
             misc:
               connect-timeout: 10000

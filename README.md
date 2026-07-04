@@ -5,7 +5,7 @@ This repository contains the Android VPN client for `sskycn/tcptun`.
 The Android app owns the VPN side:
 
 ```text
-Android apps -> VpnService TUN -> Kotlin TUN-to-SOCKS forwarder
+Android apps -> VpnService TUN -> hev-socks5-tunnel
              -> 0.0.0.0:1080 mixed proxy -> tcptun gomobile bridge
              -> remote tcptun server
 ```
@@ -146,16 +146,14 @@ vless://00000000-0000-4000-8000-000000000000@203.0.113.10:443?security=reality&e
 - URI import/export for native, VLESS, VMess, and Trojan profiles, including REALITY `pbk`, `sid`, `fp`, `spx`, `flow`, and `sni`.
 - Protocol and transport selection UI.
 - Optional token, SNI, path, TLS, TLS insecure, REALITY short ID, mux, upstream protocol, and UDP UI.
+- App filter modes for Android VPN routing: all apps proxied by default, or no apps proxied by default.
 - Status display: `Stopped`, `Starting`, `Running`, `Error`.
 - Recent log display.
-- IPv4 TCP forwarding from TUN to local SOCKS5 CONNECT.
-- IPv4 UDP forwarding from TUN to local SOCKS5 UDP ASSOCIATE.
+- Native `hev-socks5-tunnel` forwarding from TUN to local SOCKS5/mixed proxy.
 - Runtime reflection bridge to gomobile AAR.
 
 ## Not yet supported
 
-- IPv6 TUN forwarding.
-- TCP retransmission/window scaling/SACK handling in the userspace TCP shim.
 - Per-app routing UI.
 - In-app route rule editing.
 - Building the Go AAR from Gradle automatically.

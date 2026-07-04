@@ -20,9 +20,19 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
+enum class AppFilterMode {
+    ProxyAll,
+    BypassAll,
+}
+
+data class AppFilterConfig(
+    val mode: AppFilterMode = AppFilterMode.ProxyAll,
+    val excludedApps: Set<String> = emptySet(),
+    val includedApps: Set<String> = emptySet(),
+)
+
 class TcptunVpnService : VpnService() {
     private val bridge: TcptunBridge = ReflectionTcptunBridge()
-    private var forwarder: TunSocksForwarder? = null
     private var tun: android.os.ParcelFileDescriptor? = null
     private val connectivity by lazy { getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager }
     private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
@@ -48,7 +58,7 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun startFromIntent(intent: Intent) {
-        if (tun != null || forwarder != null) {
+        if (tun != null) {
             TcptunState.appendLog("restarting VPN with selected profile")
             stopVpn(setStopped = false, clearSavedConfig = false, stopSelfService = false)
         }
@@ -97,7 +107,7 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun restoreLastRunningConfig() {
-        if (tun != null || forwarder != null) return
+        if (tun != null) return
         val config = readLastRunningConfig(this) ?: run {
             stopSelf()
             return
@@ -112,28 +122,20 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun startTunnel(vpnTun: android.os.ParcelFileDescriptor) {
-        runCatching {
-            val hevConfig = HevSocks5Tunnel.writeConfig(
-                directory = applicationContext.filesDir,
-                socksHost = LOCAL_SOCKS_HOST,
-                socksPort = LOCAL_SOCKS_PORT,
-                mtu = VPN_MTU,
-            )
+        tun = vpnTun
+        val hevConfig = HevSocks5Tunnel.writeConfig(
+            directory = applicationContext.filesDir,
+            socksHost = LOCAL_SOCKS_HOST,
+            socksPort = LOCAL_SOCKS_PORT,
+            mtu = VPN_MTU,
+            dnsServer = VPN_DNS_SERVER,
+        )
+        try {
             HevSocks5Tunnel.start(hevConfig, vpnTun)
-            tun = vpnTun
-            TcptunState.appendLog("hev-socks5-tunnel started")
-        }.onFailure { err ->
-            TcptunState.appendLog("hev-socks5-tunnel unavailable; falling back to Kotlin forwarder: ${err.message}")
-            forwarder = TunSocksForwarder(
-                tun = vpnTun,
-                socksHost = LOCAL_SOCKS_HOST,
-                socksPort = LOCAL_SOCKS_PORT,
-                enableUdp = true,
-                protectSocket = ::protect,
-                protectDatagramSocket = ::protect,
-                log = TcptunState::appendLog,
-            ).also { it.start() }
+        } catch (err: Exception) {
+            throw IllegalStateException("hev-socks5-tunnel failed: ${err.message}", err)
         }
+        TcptunState.appendLog("hev-socks5-tunnel started")
     }
 
     private fun buildTun(config: AppConfig): android.os.ParcelFileDescriptor {
@@ -145,15 +147,12 @@ class TcptunVpnService : VpnService() {
             .addAddress("fd00:7777::2", 128)
             .addProxyRoutes()
             .addRoute("2000::", 3)
-            .addDnsServer("1.1.1.1")
-            .addDnsServer("1.0.0.1")
+            .addDnsServer(VPN_DNS_SERVER)
             .apply {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    addDisallowedApplication(packageName)
-                }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     setMetered(connectivity.isActiveNetworkMetered)
                 }
+                addAppFilter(this@TcptunVpnService)
                 allowFamily(android.system.OsConstants.AF_INET)
                 allowFamily(android.system.OsConstants.AF_INET6)
             }
@@ -196,8 +195,6 @@ class TcptunVpnService : VpnService() {
         if (clearSavedConfig) {
             clearLastRunningConfig(this)
         }
-        runCatching { forwarder?.close() }
-        forwarder = null
         runCatching { HevSocks5Tunnel.stop() }
         runCatching { tun?.close() }
         tun = null
@@ -310,6 +307,12 @@ class TcptunVpnService : VpnService() {
         private const val KEY_MANUAL_ROUTE_CONFIG = "manualRouteConfig"
         private const val RUNTIME_PREFS = "tcptun_runtime"
         private const val KEY_LAST_RUNNING_CONFIG = "lastRunningConfig"
+        private const val APP_FILTER_PREFS = "tcptun_app_filter"
+        private const val KEY_FILTER_MODE = "filterMode"
+        private const val KEY_EXCLUDED_APPS = "excludedApps"
+        private const val KEY_INCLUDED_APPS = "includedApps"
+        private const val VPN_DNS_SERVER = "1.1.1.1"
+        private const val VPN_DNS_ROUTE = "1.1.1.1/32"
         private val ROUTE_KEYS = listOf("domains", "domain_regexes", "domain_suffixes", "ips", "ip_cidrs", "ip_ranges")
         private val IPV4_PROXY_ROUTES = listOf(
             "1.0.0.0" to 8,
@@ -393,6 +396,28 @@ class TcptunVpnService : VpnService() {
 
         fun stopIntent(context: Context): Intent {
             return Intent(context, TcptunVpnService::class.java).setAction(ACTION_STOP)
+        }
+
+        fun readAppFilter(context: Context): AppFilterConfig {
+            val prefs = context.applicationContext.getSharedPreferences(APP_FILTER_PREFS, Context.MODE_PRIVATE)
+            val mode = when (prefs.getString(KEY_FILTER_MODE, AppFilterMode.ProxyAll.name)) {
+                AppFilterMode.BypassAll.name -> AppFilterMode.BypassAll
+                else -> AppFilterMode.ProxyAll
+            }
+            return AppFilterConfig(
+                mode = mode,
+                excludedApps = normalizedPackages(context, prefs.getStringSet(KEY_EXCLUDED_APPS, emptySet()).orEmpty()),
+                includedApps = normalizedPackages(context, prefs.getStringSet(KEY_INCLUDED_APPS, emptySet()).orEmpty()),
+            )
+        }
+
+        fun writeAppFilter(context: Context, filter: AppFilterConfig) {
+            context.applicationContext.getSharedPreferences(APP_FILTER_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_FILTER_MODE, filter.mode.name)
+                .putStringSet(KEY_EXCLUDED_APPS, normalizedPackages(context, filter.excludedApps))
+                .putStringSet(KEY_INCLUDED_APPS, normalizedPackages(context, filter.includedApps))
+                .apply()
         }
 
         private fun saveLastRunningConfig(context: Context, config: AppConfig) {
@@ -498,8 +523,56 @@ class TcptunVpnService : VpnService() {
             return this
         }
 
+        private fun Builder.addAppFilter(context: Context): Builder {
+            val filter = readAppFilter(context)
+            when (filter.mode) {
+                AppFilterMode.ProxyAll -> {
+                    (filter.excludedApps + context.packageName)
+                        .distinct()
+                        .forEach { packageName ->
+                            runCatching {
+                                addDisallowedApplication(packageName)
+                            }.onFailure { err ->
+                                TcptunState.appendLog("skip excluded app $packageName: ${err.message}")
+                            }
+                        }
+                }
+                AppFilterMode.BypassAll -> {
+                    if (filter.includedApps.isEmpty()) {
+                        throw IllegalStateException("全不走代理模式至少选择一个应用")
+                    }
+                    var allowedCount = 0
+                    filter.includedApps.forEach { packageName ->
+                        runCatching {
+                            addAllowedApplication(packageName)
+                            allowedCount++
+                        }.onFailure { err ->
+                            TcptunState.appendLog("skip included app $packageName: ${err.message}")
+                        }
+                    }
+                    if (allowedCount == 0) {
+                        throw IllegalStateException("全不走代理模式没有可用的已选应用")
+                    }
+                }
+            }
+            return this
+        }
+
+        private fun normalizedPackages(context: Context, packages: Set<String>): Set<String> {
+            return packages
+                .map { it.trim() }
+                .filter { it.isNotBlank() && it != context.packageName }
+                .toSortedSet()
+        }
+
         private fun buildAndroidRouteConfig(): String {
-            return emptyRouteConfig()
+            return JSONObject()
+                .put(
+                    "force_upstream",
+                    JSONObject()
+                        .put("ip_cidrs", JSONArray().put(VPN_DNS_ROUTE)),
+                )
+                .toString(2)
         }
 
         private fun legacyAndroidRouteConfig(): String {

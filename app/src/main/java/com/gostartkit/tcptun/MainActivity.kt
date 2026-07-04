@@ -41,11 +41,13 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.AltRoute
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.BatterySaver
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
@@ -91,6 +93,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -116,6 +119,7 @@ fun TcptunScreen() {
     var pendingNotificationConfig by remember { mutableStateOf<AppConfig?>(null) }
     var editingProfile by remember { mutableStateOf<AppConfig?>(null) }
     var showRouteEditor by remember { mutableStateOf(false) }
+    var showAppFilter by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
     var tcpingMessage by remember { mutableStateOf("") }
     var tcpingInProgress by remember { mutableStateOf(false) }
@@ -227,6 +231,10 @@ fun TcptunScreen() {
         RouteConfigPage(
             onBack = { showRouteEditor = false },
         )
+    } else if (showAppFilter) {
+        AppFilterPage(
+            onBack = { showAppFilter = false },
+        )
     } else if (editing == null) {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
@@ -236,6 +244,7 @@ fun TcptunScreen() {
                     onAdd = { editingProfile = AppConfig(id = UUID.randomUUID().toString(), name = "proxy") },
                     onImport = ::importFromClipboard,
                     onRouteRules = { showRouteEditor = true },
+                    onAppFilter = { showAppFilter = true },
                     onBatterySettings = { openBatteryOptimizationSettings(context) },
                 )
             },
@@ -316,6 +325,7 @@ private fun TopBar(
     onAdd: () -> Unit,
     onImport: () -> Unit,
     onRouteRules: () -> Unit,
+    onAppFilter: () -> Unit,
     onBatterySettings: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -384,6 +394,23 @@ private fun TopBar(
                         onClick = {
                             expanded = false
                             onRouteRules()
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = MaterialTheme.colorScheme.onSurface,
+                            leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                    )
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Icon(
+                                Icons.Rounded.Apps,
+                                contentDescription = null,
+                            )
+                        },
+                        text = { Text("应用过滤") },
+                        onClick = {
+                            expanded = false
+                            onAppFilter()
                         },
                         colors = MenuDefaults.itemColors(
                             textColor = MaterialTheme.colorScheme.onSurface,
@@ -599,6 +626,264 @@ private fun BottomStatus(
             style = MaterialTheme.typography.titleMedium,
             color = contentColor,
             modifier = Modifier.padding(horizontal = 16.dp),
+        )
+    }
+}
+
+@Composable
+private fun AppFilterPage(onBack: () -> Unit) {
+    val context = LocalContext.current
+    var query by remember { mutableStateOf("") }
+    var filter by remember { mutableStateOf(TcptunVpnService.readAppFilter(context)) }
+    val apps = remember(context, filter) {
+        loadFilterableApps(context, filter.excludedApps + filter.includedApps)
+    }
+    val normalizedQuery = query.trim().lowercase(Locale.ROOT)
+    val filteredApps = remember(apps, normalizedQuery) {
+        if (normalizedQuery.isBlank()) {
+            apps
+        } else {
+            apps.filter {
+                it.label.lowercase(Locale.ROOT).contains(normalizedQuery) ||
+                    it.packageName.lowercase(Locale.ROOT).contains(normalizedQuery)
+            }
+        }
+    }
+
+    fun saveFilter(next: AppFilterConfig) {
+        TcptunVpnService.writeAppFilter(context, next)
+        filter = TcptunVpnService.readAppFilter(context)
+    }
+
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            AppFilterTopBar(
+                onBack = onBack,
+                onReset = { saveFilter(AppFilterConfig()) },
+                canReset = filter.mode != AppFilterMode.ProxyAll ||
+                    filter.excludedApps.isNotEmpty() ||
+                    filter.includedApps.isNotEmpty(),
+            )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp),
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        appFilterSummary(filter),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        AppFilterModeButton(
+                            text = "全走代理",
+                            selected = filter.mode == AppFilterMode.ProxyAll,
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                saveFilter(
+                                    AppFilterConfig(
+                                        mode = AppFilterMode.ProxyAll,
+                                        excludedApps = emptySet(),
+                                        includedApps = filter.includedApps,
+                                    ),
+                                )
+                            },
+                        )
+                        AppFilterModeButton(
+                            text = "全不走代理",
+                            selected = filter.mode == AppFilterMode.BypassAll,
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                saveFilter(
+                                    AppFilterConfig(
+                                        mode = AppFilterMode.BypassAll,
+                                        excludedApps = filter.excludedApps,
+                                        includedApps = emptySet(),
+                                    ),
+                                )
+                            },
+                        )
+                    }
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        leadingIcon = {
+                            Icon(Icons.Rounded.Search, contentDescription = null)
+                        },
+                        label = { Text("搜索应用") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(vertical = 8.dp),
+            ) {
+                if (filteredApps.isEmpty()) {
+                    item {
+                        AppFilterEmptyState()
+                    }
+                }
+                items(filteredApps, key = { it.packageName }) { app ->
+                    val proxied = isAppProxied(filter, app.packageName)
+                    AppFilterRow(
+                        app = app,
+                        proxied = proxied,
+                        onChange = { checked ->
+                            val next = if (filter.mode == AppFilterMode.ProxyAll) {
+                                filter.copy(
+                                    excludedApps = if (checked) {
+                                        filter.excludedApps - app.packageName
+                                    } else {
+                                        filter.excludedApps + app.packageName
+                                    },
+                                )
+                            } else {
+                                filter.copy(
+                                    includedApps = if (checked) {
+                                        filter.includedApps + app.packageName
+                                    } else {
+                                        filter.includedApps - app.packageName
+                                    },
+                                )
+                            }
+                            saveFilter(next)
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AppFilterTopBar(
+    onBack: () -> Unit,
+    onReset: () -> Unit,
+    canReset: Boolean,
+) {
+    TopAppBar(
+        title = { Text("应用过滤", style = MaterialTheme.typography.titleLarge) },
+        navigationIcon = {
+            IconButton(onClick = onBack) {
+                Icon(
+                    Icons.AutoMirrored.Rounded.ArrowBack,
+                    contentDescription = "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        },
+        actions = {
+            TextButton(
+                enabled = canReset,
+                onClick = onReset,
+            ) {
+                Text(
+                    "重置",
+                    color = if (canReset) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+    )
+}
+
+@Composable
+private fun AppFilterModeButton(
+    text: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    if (selected) {
+        Button(onClick = onClick, modifier = modifier) {
+            Text(text)
+        }
+    } else {
+        TextButton(onClick = onClick, modifier = modifier) {
+            Text(text)
+        }
+    }
+}
+
+@Composable
+private fun AppFilterRow(app: AppEntry, proxied: Boolean, onChange: (Boolean) -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 78.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = if (proxied) colors.secondaryContainer else colors.surfaceContainerLow,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onChange(!proxied) }
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Rounded.Apps,
+                contentDescription = null,
+                tint = if (proxied) colors.onSecondaryContainer else colors.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text(
+                    app.label,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = colors.onSurface,
+                )
+                Text(
+                    app.packageName,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                )
+                Text(
+                    if (proxied) "走代理" else "不走代理",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (proxied) colors.primary else colors.tertiary,
+                )
+            }
+            Switch(checked = proxied, onCheckedChange = onChange)
+        }
+    }
+}
+
+@Composable
+private fun AppFilterEmptyState() {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 48.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        Text(
+            "没有匹配的应用",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(24.dp),
         )
     }
 }
@@ -1328,6 +1613,56 @@ private fun routeRuleStats(rule: RouteRule, rules: List<RouteRule>, index: Int):
         duplicateRules = rules.count { it == rule },
         defaultRule = defaultRules.any { it == rule },
         recentLogHits = recentLogHits,
+    )
+}
+
+private data class AppEntry(
+    val label: String,
+    val packageName: String,
+)
+
+private fun appFilterSummary(filter: AppFilterConfig): String {
+    return when (filter.mode) {
+        AppFilterMode.ProxyAll -> "全走代理 · 已取消 ${filter.excludedApps.size} 个 · 下次启动生效"
+        AppFilterMode.BypassAll -> "全不走代理 · 已选择 ${filter.includedApps.size} 个 · 下次启动生效"
+    }
+}
+
+private fun isAppProxied(filter: AppFilterConfig, packageName: String): Boolean {
+    return when (filter.mode) {
+        AppFilterMode.ProxyAll -> packageName !in filter.excludedApps
+        AppFilterMode.BypassAll -> packageName in filter.includedApps
+    }
+}
+
+private fun loadFilterableApps(context: Context, savedPackages: Set<String>): List<AppEntry> {
+    val packageManager = context.packageManager
+    val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+    val resolveInfos = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        packageManager.queryIntentActivities(
+            launcherIntent,
+            PackageManager.ResolveInfoFlags.of(0),
+        )
+    } else {
+        @Suppress("DEPRECATION")
+        packageManager.queryIntentActivities(launcherIntent, 0)
+    }
+    val appsByPackage = linkedMapOf<String, AppEntry>()
+    resolveInfos.forEach { info ->
+        val packageName = info.activityInfo?.packageName?.trim().orEmpty()
+        if (packageName.isBlank() || packageName == context.packageName) return@forEach
+        val label = info.loadLabel(packageManager)?.toString()?.trim().orEmpty()
+            .ifBlank { packageName }
+        appsByPackage.putIfAbsent(packageName, AppEntry(label, packageName))
+    }
+    savedPackages
+        .filter { it.isNotBlank() && it != context.packageName }
+        .forEach { packageName ->
+            appsByPackage.putIfAbsent(packageName, AppEntry(packageName, packageName))
+        }
+    return appsByPackage.values.sortedWith(
+        compareBy<AppEntry> { it.label.lowercase(Locale.ROOT) }
+            .thenBy { it.packageName },
     )
 }
 
