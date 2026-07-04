@@ -191,6 +191,9 @@ class TcptunVpnService : VpnService() {
     private fun stopVpn(setStopped: Boolean = true, clearSavedConfig: Boolean = true, stopSelfService: Boolean = true) {
         if (stopping) return
         stopping = true
+        if (setStopped) {
+            TcptunState.setStatus("Stopping")
+        }
         unregisterDefaultNetworkCallback()
         if (clearSavedConfig) {
             clearLastRunningConfig(this)
@@ -312,6 +315,23 @@ class TcptunVpnService : VpnService() {
         private const val KEY_FILTER_MODE = "filterMode"
         private const val KEY_EXCLUDED_APPS = "excludedApps"
         private const val KEY_INCLUDED_APPS = "includedApps"
+        private val DEFAULT_PROXY_COMPANIONS = setOf(
+            "com.google.android.gms",
+            "com.google.android.gsf",
+        )
+        private val GOOGLE_PROXY_COMPANIONS = DEFAULT_PROXY_COMPANIONS + "com.android.vending"
+        private val META_PROXY_COMPANIONS = setOf(
+            "com.facebook.services",
+            "com.facebook.system",
+            "com.facebook.appmanager",
+        )
+        private val APP_PROXY_COMPANIONS_BY_PACKAGE = mapOf(
+            "com.google.android.apps.googlevoice" to GOOGLE_PROXY_COMPANIONS,
+        )
+        private val APP_PROXY_COMPANIONS_BY_PREFIX = mapOf(
+            "com.google." to GOOGLE_PROXY_COMPANIONS,
+            "com.facebook." to META_PROXY_COMPANIONS,
+        )
         private const val VPN_DNS_SERVER = "1.1.1.1"
         private const val VPN_DNS_ROUTE = "1.1.1.1/32"
         private val ROUTE_KEYS = listOf("domains", "domain_regexes", "domain_suffixes", "ips", "ip_cidrs", "ip_ranges")
@@ -563,20 +583,47 @@ class TcptunVpnService : VpnService() {
                         throw IllegalStateException("全不走代理模式至少选择一个应用")
                     }
                     var allowedCount = 0
-                    filter.includedApps.forEach { packageName ->
+                    var selectedAllowedCount = 0
+                    val effectiveIncludedApps = effectiveIncludedPackages(filter.includedApps)
+                    val companionApps = effectiveIncludedApps - filter.includedApps
+                    if (companionApps.isNotEmpty()) {
+                        TcptunState.appendLog("auto include companion apps: ${companionApps.joinToString()}")
+                    }
+                    effectiveIncludedApps.forEach { packageName ->
                         runCatching {
                             addAllowedApplication(packageName)
                             allowedCount++
+                            if (packageName in filter.includedApps) {
+                                selectedAllowedCount++
+                            }
                         }.onFailure { err ->
                             TcptunState.appendLog("skip included app $packageName: ${err.message}")
                         }
                     }
-                    if (allowedCount == 0) {
+                    if (allowedCount == 0 || selectedAllowedCount == 0) {
                         throw IllegalStateException("全不走代理模式没有可用的已选应用")
                     }
                 }
             }
             return this
+        }
+
+        private fun effectiveIncludedPackages(packages: Set<String>): Set<String> {
+            val normalized = packages
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .toMutableSet()
+            if (normalized.isNotEmpty()) {
+                normalized.addAll(DEFAULT_PROXY_COMPANIONS)
+            }
+            normalized.toList().forEach { packageName ->
+                APP_PROXY_COMPANIONS_BY_PACKAGE[packageName]?.let(normalized::addAll)
+                APP_PROXY_COMPANIONS_BY_PREFIX
+                    .filterKeys(packageName::startsWith)
+                    .values
+                    .forEach(normalized::addAll)
+            }
+            return normalized.toSortedSet()
         }
 
         private fun normalizedPackages(context: Context, packages: Set<String>): Set<String> {

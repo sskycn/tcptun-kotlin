@@ -14,6 +14,13 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <package android:name="com.google.android.apps.googlevoice" />
+        <package android:name="com.google.android.gms" />
+        <package android:name="com.google.android.gsf" />
+        <package android:name="com.android.vending" />
+        <package android:name="com.facebook.services" />
+        <package android:name="com.facebook.system" />
+        <package android:name="com.facebook.appmanager" />
     </queries>
 
     <application

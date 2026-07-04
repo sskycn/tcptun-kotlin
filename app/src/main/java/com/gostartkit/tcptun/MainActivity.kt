@@ -58,6 +58,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -193,8 +194,10 @@ fun TcptunScreen() {
     }
 
     fun toggleProfile(profile: AppConfig) {
-        val running = TcptunState.status.value == "Running" || TcptunState.status.value == "Starting"
-        if (running && profile.id == state.selected?.id) {
+        val status = TcptunState.status.value
+        val active = isVpnActiveStatus(status)
+        if (isVpnTransitionStatus(status)) return
+        if (active && profile.id == state.selected?.id) {
             stopVpn(context)
             return
         }
@@ -239,8 +242,11 @@ fun TcptunScreen() {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             topBar = {
-                TopBar(
-                    title = "配置项",
+                TopBar(title = "配置项")
+            },
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            floatingActionButton = {
+                MainActionsFab(
                     onAdd = { editingProfile = AppConfig(id = UUID.randomUUID().toString(), name = "proxy") },
                     onImport = ::importFromClipboard,
                     onRouteRules = { showRouteEditor = true },
@@ -248,7 +254,6 @@ fun TcptunScreen() {
                     onBatterySettings = { openBatteryOptimizationSettings(context) },
                 )
             },
-            snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
                 BottomStatus(
                     status = TcptunState.status.value,
@@ -257,6 +262,7 @@ fun TcptunScreen() {
                     tcpingInProgress = tcpingInProgress,
                     hasProfile = state.selected != null,
                     onClick = {
+                        if (isVpnTransitionStatus(TcptunState.status.value)) return@BottomStatus
                         val profile = state.selected ?: return@BottomStatus
                         if (tcpingInProgress) return@BottomStatus
                         tcpingInProgress = true
@@ -280,8 +286,10 @@ fun TcptunScreen() {
                     ProfileRow(
                         profile = profile,
                         selected = profile.id == state.selected?.id,
-                        running = (TcptunState.status.value == "Running" || TcptunState.status.value == "Starting") &&
-                            profile.id == state.selected?.id,
+                        status = TcptunState.status.value.takeIf {
+                            profile.id == state.selected?.id && isVpnActiveStatus(it)
+                        },
+                        enabled = !isVpnTransitionStatus(TcptunState.status.value),
                         onClick = { toggleProfile(profile) },
                         onShare = { shareProfile(context, profile) },
                         onEdit = { editingProfile = profile },
@@ -320,8 +328,14 @@ fun TcptunScreen() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TopBar(
-    title: String,
+private fun TopBar(title: String) {
+    TopAppBar(
+        title = { Text(title, style = MaterialTheme.typography.titleLarge) },
+    )
+}
+
+@Composable
+private fun MainActionsFab(
     onAdd: () -> Unit,
     onImport: () -> Unit,
     onRouteRules: () -> Unit,
@@ -329,122 +343,103 @@ private fun TopBar(
     onBatterySettings: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val colors = MaterialTheme.colorScheme
 
-    TopAppBar(
-        title = { Text(title, style = MaterialTheme.typography.titleLarge) },
-        actions = {
-            Box {
-                IconButton(onClick = { expanded = true }) {
-                    Icon(
-                        Icons.Rounded.MoreVert,
-                        contentDescription = "更多",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-                DropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false },
-                    shape = RoundedCornerShape(12.dp),
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                    tonalElevation = 3.dp,
-                    shadowElevation = 6.dp,
-                ) {
-                    DropdownMenuItem(
-                        leadingIcon = {
-                            Icon(
-                                Icons.Rounded.FileDownload,
-                                contentDescription = null,
-                            )
-                        },
-                        text = { Text("从剪切板导入") },
-                        onClick = {
-                            expanded = false
-                            onImport()
-                        },
-                        colors = MenuDefaults.itemColors(
-                            textColor = MaterialTheme.colorScheme.onSurface,
-                            leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        ),
-                    )
-                    DropdownMenuItem(
-                        leadingIcon = {
-                            Icon(
-                                Icons.Rounded.Add,
-                                contentDescription = null,
-                            )
-                        },
-                        text = { Text("添加配置") },
-                        onClick = {
-                            expanded = false
-                            onAdd()
-                        },
-                        colors = MenuDefaults.itemColors(
-                            textColor = MaterialTheme.colorScheme.onSurface,
-                            leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        ),
-                    )
-                    DropdownMenuItem(
-                        leadingIcon = {
-                            Icon(
-                                Icons.AutoMirrored.Rounded.AltRoute,
-                                contentDescription = null,
-                            )
-                        },
-                        text = { Text("强制代理规则") },
-                        onClick = {
-                            expanded = false
-                            onRouteRules()
-                        },
-                        colors = MenuDefaults.itemColors(
-                            textColor = MaterialTheme.colorScheme.onSurface,
-                            leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        ),
-                    )
-                    DropdownMenuItem(
-                        leadingIcon = {
-                            Icon(
-                                Icons.Rounded.Apps,
-                                contentDescription = null,
-                            )
-                        },
-                        text = { Text("应用过滤") },
-                        onClick = {
-                            expanded = false
-                            onAppFilter()
-                        },
-                        colors = MenuDefaults.itemColors(
-                            textColor = MaterialTheme.colorScheme.onSurface,
-                            leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        ),
-                    )
-                    DropdownMenuItem(
-                        leadingIcon = {
-                            Icon(
-                                Icons.Rounded.BatterySaver,
-                                contentDescription = null,
-                            )
-                        },
-                        text = { Text("省电设置") },
-                        onClick = {
-                            expanded = false
-                            onBatterySettings()
-                        },
-                        colors = MenuDefaults.itemColors(
-                            textColor = MaterialTheme.colorScheme.onSurface,
-                            leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        ),
-                    )
-                }
-            }
-        },
-    )
+    Box {
+        FloatingActionButton(onClick = { expanded = true }) {
+            Icon(
+                Icons.Rounded.Add,
+                contentDescription = "操作",
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            shape = RoundedCornerShape(12.dp),
+            containerColor = colors.surfaceContainer,
+            tonalElevation = 3.dp,
+            shadowElevation = 6.dp,
+        ) {
+            DropdownMenuItem(
+                leadingIcon = {
+                    Icon(Icons.Rounded.FileDownload, contentDescription = null)
+                },
+                text = { Text("从剪切板导入") },
+                onClick = {
+                    expanded = false
+                    onImport()
+                },
+                colors = MenuDefaults.itemColors(
+                    textColor = colors.onSurface,
+                    leadingIconColor = colors.onSurfaceVariant,
+                ),
+            )
+            DropdownMenuItem(
+                leadingIcon = {
+                    Icon(Icons.Rounded.Add, contentDescription = null)
+                },
+                text = { Text("添加配置") },
+                onClick = {
+                    expanded = false
+                    onAdd()
+                },
+                colors = MenuDefaults.itemColors(
+                    textColor = colors.onSurface,
+                    leadingIconColor = colors.onSurfaceVariant,
+                ),
+            )
+            DropdownMenuItem(
+                leadingIcon = {
+                    Icon(Icons.AutoMirrored.Rounded.AltRoute, contentDescription = null)
+                },
+                text = { Text("强制代理规则") },
+                onClick = {
+                    expanded = false
+                    onRouteRules()
+                },
+                colors = MenuDefaults.itemColors(
+                    textColor = colors.onSurface,
+                    leadingIconColor = colors.onSurfaceVariant,
+                ),
+            )
+            DropdownMenuItem(
+                leadingIcon = {
+                    Icon(Icons.Rounded.Apps, contentDescription = null)
+                },
+                text = { Text("应用过滤") },
+                onClick = {
+                    expanded = false
+                    onAppFilter()
+                },
+                colors = MenuDefaults.itemColors(
+                    textColor = colors.onSurface,
+                    leadingIconColor = colors.onSurfaceVariant,
+                ),
+            )
+            DropdownMenuItem(
+                leadingIcon = {
+                    Icon(Icons.Rounded.BatterySaver, contentDescription = null)
+                },
+                text = { Text("省电设置") },
+                onClick = {
+                    expanded = false
+                    onBatterySettings()
+                },
+                colors = MenuDefaults.itemColors(
+                    textColor = colors.onSurface,
+                    leadingIconColor = colors.onSurfaceVariant,
+                ),
+            )
+        }
+    }
 }
 
 @Composable
 private fun ProfileRow(
     profile: AppConfig,
     selected: Boolean,
-    running: Boolean,
+    status: String?,
+    enabled: Boolean,
     onClick: () -> Unit,
     onShare: () -> Unit,
     onEdit: () -> Unit,
@@ -453,7 +448,7 @@ private fun ProfileRow(
     var menuExpanded by remember { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
     val rowColor = if (selected) colors.secondaryContainer else colors.surfaceContainerLow
-    val statusColor = if (running) colors.primary else colors.tertiary
+    val statusColor = if (status == "Running") colors.primary else colors.tertiary
 
     Surface(
         modifier = Modifier
@@ -466,7 +461,7 @@ private fun ProfileRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onClick),
+                .clickable(enabled = enabled, onClick = onClick),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
@@ -492,7 +487,7 @@ private fun ProfileRow(
                     color = colors.onSurfaceVariant,
                 )
                 Text(
-                    text = if (running) "${profile.label()} · 运行中" else profile.label(),
+                    text = status?.let { "${profile.label()} · ${vpnStatusLabel(it)}" } ?: profile.label(),
                     style = MaterialTheme.typography.titleMedium,
                     color = statusColor,
                 )
@@ -604,20 +599,21 @@ private fun BottomStatus(
         tcpingMessage.isNotBlank() -> tcpingMessage
         status == "Running" -> "已连接，点击测试连接"
         status == "Starting" -> "正在连接..."
+        status == "Stopping" -> "正在停止..."
         hasProfile -> "未连接，点击列表项启动；点击这里测试连接"
         else -> "未连接，添加配置后点击列表项启动"
     }
     val contentColor = when {
         error.isNotBlank() -> colors.error
         tcpingMessage.startsWith("TCPing 成功") || status == "Running" -> colors.primary
-        status == "Starting" || tcpingInProgress -> colors.tertiary
+        status == "Starting" || status == "Stopping" || tcpingInProgress -> colors.tertiary
         else -> colors.onSurfaceVariant
     }
     BottomAppBar(
         modifier = Modifier
             .fillMaxWidth()
             .height(72.dp)
-            .clickable(enabled = hasProfile && !tcpingInProgress, onClick = onClick),
+            .clickable(enabled = hasProfile && !tcpingInProgress && !isVpnTransitionStatus(status), onClick = onClick),
         containerColor = colors.surfaceContainer,
         contentColor = contentColor,
     ) {
@@ -682,41 +678,6 @@ private fun AppFilterPage(onBack: () -> Unit) {
                     modifier = Modifier.padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Text(
-                        appFilterSummary(filter),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        AppFilterModeButton(
-                            text = "全走代理",
-                            selected = filter.mode == AppFilterMode.ProxyAll,
-                            modifier = Modifier.weight(1f),
-                            onClick = {
-                                saveFilter(
-                                    AppFilterConfig(
-                                        mode = AppFilterMode.ProxyAll,
-                                        excludedApps = emptySet(),
-                                        includedApps = filter.includedApps,
-                                    ),
-                                )
-                            },
-                        )
-                        AppFilterModeButton(
-                            text = "全不走代理",
-                            selected = filter.mode == AppFilterMode.BypassAll,
-                            modifier = Modifier.weight(1f),
-                            onClick = {
-                                saveFilter(
-                                    AppFilterConfig(
-                                        mode = AppFilterMode.BypassAll,
-                                        excludedApps = filter.excludedApps,
-                                        includedApps = emptySet(),
-                                    ),
-                                )
-                            },
-                        )
-                    }
                     OutlinedTextField(
                         value = query,
                         onValueChange = { query = it },
@@ -735,6 +696,22 @@ private fun AppFilterPage(onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 contentPadding = PaddingValues(vertical = 8.dp),
             ) {
+                item {
+                    AppFilterListHeader(
+                        totalApps = apps.size,
+                        selectedApps = selectedAppCount(filter, apps),
+                        allSelected = allAppsSelected(filter, apps),
+                        onChange = { checked ->
+                            saveFilter(
+                                if (checked) {
+                                    AppFilterConfig()
+                                } else {
+                                    AppFilterConfig(mode = AppFilterMode.BypassAll)
+                                },
+                            )
+                        },
+                    )
+                }
                 if (filteredApps.isEmpty()) {
                     item {
                         AppFilterEmptyState()
@@ -805,19 +782,55 @@ private fun AppFilterTopBar(
 }
 
 @Composable
-private fun AppFilterModeButton(
-    text: String,
-    selected: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
+private fun AppFilterListHeader(
+    totalApps: Int,
+    selectedApps: Int,
+    allSelected: Boolean,
+    onChange: (Boolean) -> Unit,
 ) {
-    if (selected) {
-        Button(onClick = onClick, modifier = modifier) {
-            Text(text)
-        }
-    } else {
-        TextButton(onClick = onClick, modifier = modifier) {
-            Text(text)
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 64.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = if (allSelected) colors.secondaryContainer else colors.surfaceContainerLow,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onChange(!allSelected) }
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text(
+                    "全部应用",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = colors.onSurface,
+                )
+                Text(
+                    "已选择 $selectedApps / $totalApps 个",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                )
+                Text(
+                    when {
+                        selectedApps == totalApps && totalApps > 0 -> "已全选"
+                        selectedApps == 0 -> "已全取消"
+                        else -> "已选择部分"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (allSelected) colors.primary else colors.tertiary,
+                )
+            }
+            Switch(
+                checked = allSelected,
+                onCheckedChange = onChange,
+            )
         }
     }
 }
@@ -1621,11 +1634,12 @@ private data class AppEntry(
     val packageName: String,
 )
 
-private fun appFilterSummary(filter: AppFilterConfig): String {
-    return when (filter.mode) {
-        AppFilterMode.ProxyAll -> "全走代理 · 已取消 ${filter.excludedApps.size} 个 · 下次启动生效"
-        AppFilterMode.BypassAll -> "全不走代理 · 已选择 ${filter.includedApps.size} 个 · 下次启动生效"
-    }
+private fun selectedAppCount(filter: AppFilterConfig, apps: List<AppEntry>): Int {
+    return apps.count { isAppProxied(filter, it.packageName) }
+}
+
+private fun allAppsSelected(filter: AppFilterConfig, apps: List<AppEntry>): Boolean {
+    return apps.isNotEmpty() && apps.all { isAppProxied(filter, it.packageName) }
 }
 
 private fun isAppProxied(filter: AppFilterConfig, packageName: String): Boolean {
@@ -1773,16 +1787,45 @@ private fun openBatteryOptimizationSettings(context: Context) {
 }
 
 private fun startVpn(context: Context, config: AppConfig) {
-    val intent = TcptunVpnService.startIntent(context, config)
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        ContextCompat.startForegroundService(context, intent)
-    } else {
-        context.startService(intent)
+    TcptunState.setStatus("Starting")
+    TcptunState.appendLog("start requested")
+    runCatching {
+        val intent = TcptunVpnService.startIntent(context, config)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ContextCompat.startForegroundService(context, intent)
+        } else {
+            context.startService(intent)
+        }
+    }.onFailure { err ->
+        TcptunState.error(err.message ?: "启动失败")
     }
 }
 
 private fun stopVpn(context: Context) {
-    context.startService(TcptunVpnService.stopIntent(context))
+    TcptunState.setStatus("Stopping")
+    TcptunState.appendLog("stop requested")
+    runCatching {
+        context.startService(TcptunVpnService.stopIntent(context))
+    }.onFailure { err ->
+        TcptunState.error(err.message ?: "停止失败")
+    }
+}
+
+private fun isVpnActiveStatus(status: String): Boolean {
+    return status == "Starting" || status == "Running" || status == "Stopping"
+}
+
+private fun isVpnTransitionStatus(status: String): Boolean {
+    return status == "Starting" || status == "Stopping"
+}
+
+private fun vpnStatusLabel(status: String): String {
+    return when (status) {
+        "Starting" -> "启动中"
+        "Running" -> "运行中"
+        "Stopping" -> "停止中"
+        else -> status
+    }
 }
 
 private const val TCPING_TIMEOUT_MS = 3_000
