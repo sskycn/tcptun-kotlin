@@ -67,6 +67,10 @@ data class AppConfig(
             .put("enable_udp", udp)
             .put("config_path", "")
             .put("route_config_path", routeConfigPath)
+            .put("heartbeat_interval", "30s")
+            .put("connection_idle_timeout", "2m")
+            .put("udp_session_timeout", "45s")
+            .put("retry_max_interval", "5s")
             .put("verbose", verbose)
             .toString()
     }

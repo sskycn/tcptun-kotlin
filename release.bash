@@ -25,9 +25,25 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
 }
 
+adb_devices() {
+  "$ADB" devices | awk 'NR > 1 && $2 == "device" { print $1 }'
+}
+
+device_count() {
+  printf '%s\n' "$1" | awk 'NF { n++ } END { print n + 0 }'
+}
+
 require_adb_device() {
-  devices=$("$ADB" devices | awk 'NR > 1 && $2 == "device" { print $1 }')
-  count=$(printf '%s\n' "$devices" | awk 'NF { n++ } END { print n + 0 }')
+  devices=$(adb_devices)
+  count=$(device_count "$devices")
+
+  if [ "$count" -eq 0 ]; then
+    log "No adb device found; restarting adb server"
+    "$ADB" kill-server
+    "$ADB" start-server
+    devices=$(adb_devices)
+    count=$(device_count "$devices")
+  fi
 
   if [ "$count" -eq 0 ]; then
     die "no adb device found. Connect a device and run: adb devices"

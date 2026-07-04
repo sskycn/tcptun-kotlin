@@ -18,30 +18,36 @@ type LogCallback interface {
 }
 
 type mobileConfig struct {
-	Mode                string     `json:"mode"`
-	ListenAddrs         stringList `json:"listen_addrs"`
-	LocalListenAddr     string     `json:"local_listen_addr"`
-	ServerAddr          string     `json:"server_addr"`
-	Token               string     `json:"token"`
-	TunnelProtocol      string     `json:"tunnel_protocol"`
-	TunnelTransport     string     `json:"tunnel_transport"`
-	TunnelPath          string     `json:"tunnel_path"`
-	TunnelTLS           bool       `json:"tunnel_tls"`
-	TunnelTLSServerName string     `json:"tunnel_tls_server_name"`
-	TunnelTLSInsecure   bool       `json:"tunnel_tls_insecure"`
-	TunnelSecurity      string     `json:"tunnel_security"`
-	TunnelFlow          string     `json:"tunnel_flow"`
-	RealityServerName   string     `json:"reality_server_name"`
-	RealityFingerprint  string     `json:"reality_fingerprint"`
-	RealityPublicKey    string     `json:"reality_public_key"`
-	RealityShortID      string     `json:"reality_short_id"`
-	RealitySpiderX      string     `json:"reality_spider_x"`
-	TunnelMux           bool       `json:"tunnel_mux"`
-	UpstreamProtocol    string     `json:"upstream_protocol"`
-	EnableUDP           bool       `json:"enable_udp"`
-	ConfigPath          string     `json:"config_path"`
-	RouteConfigPath     string     `json:"route_config_path"`
-	Verbose             bool       `json:"verbose"`
+	Mode                  string     `json:"mode"`
+	ListenAddrs           stringList `json:"listen_addrs"`
+	LocalListenAddr       string     `json:"local_listen_addr"`
+	ServerAddr            string     `json:"server_addr"`
+	Token                 string     `json:"token"`
+	TunnelProtocol        string     `json:"tunnel_protocol"`
+	TunnelTransport       string     `json:"tunnel_transport"`
+	TunnelPath            string     `json:"tunnel_path"`
+	TunnelTLS             bool       `json:"tunnel_tls"`
+	TunnelTLSServerName   string     `json:"tunnel_tls_server_name"`
+	TunnelTLSInsecure     bool       `json:"tunnel_tls_insecure"`
+	TunnelSecurity        string     `json:"tunnel_security"`
+	TunnelFlow            string     `json:"tunnel_flow"`
+	RealityServerName     string     `json:"reality_server_name"`
+	RealityFingerprint    string     `json:"reality_fingerprint"`
+	RealityPublicKey      string     `json:"reality_public_key"`
+	RealityShortID        string     `json:"reality_short_id"`
+	RealitySpiderX        string     `json:"reality_spider_x"`
+	TunnelMux             bool       `json:"tunnel_mux"`
+	UpstreamProtocol      string     `json:"upstream_protocol"`
+	EnableUDP             bool       `json:"enable_udp"`
+	ConfigPath            string     `json:"config_path"`
+	RouteConfigPath       string     `json:"route_config_path"`
+	DirectProbeTimeout    string     `json:"direct_probe_timeout"`
+	HeartbeatInterval     string     `json:"heartbeat_interval"`
+	ConnectionIdleTimeout string     `json:"connection_idle_timeout"`
+	UDPSessionTimeout     string     `json:"udp_session_timeout"`
+	RetryInitialInterval  string     `json:"retry_initial_interval"`
+	RetryMaxInterval      string     `json:"retry_max_interval"`
+	Verbose               bool       `json:"verbose"`
 }
 
 type stringList []string
@@ -221,6 +227,25 @@ func parseConfig(configJSON string) (tcptun.Config, error) {
 	cfg.ConfigPath = strings.TrimSpace(in.ConfigPath)
 	cfg.RouteConfigPath = strings.TrimSpace(in.RouteConfigPath)
 	cfg.Verbose = in.Verbose
+	var err error
+	if cfg.DirectProbeTimeout, err = parseOptionalDuration(in.DirectProbeTimeout, "direct_probe_timeout"); err != nil {
+		return tcptun.Config{}, err
+	}
+	if cfg.HeartbeatInterval, err = parseOptionalDuration(in.HeartbeatInterval, "heartbeat_interval"); err != nil {
+		return tcptun.Config{}, err
+	}
+	if cfg.ConnectionIdleTimeout, err = parseOptionalDuration(in.ConnectionIdleTimeout, "connection_idle_timeout"); err != nil {
+		return tcptun.Config{}, err
+	}
+	if cfg.UDPSessionTimeout, err = parseOptionalDuration(in.UDPSessionTimeout, "udp_session_timeout"); err != nil {
+		return tcptun.Config{}, err
+	}
+	if cfg.RetryInitialInterval, err = parseOptionalDuration(in.RetryInitialInterval, "retry_initial_interval"); err != nil {
+		return tcptun.Config{}, err
+	}
+	if cfg.RetryMaxInterval, err = parseOptionalDuration(in.RetryMaxInterval, "retry_max_interval"); err != nil {
+		return tcptun.Config{}, err
+	}
 	if len(cfg.ListenAddrs) == 0 {
 		return tcptun.Config{}, errors.New("local listen address is required")
 	}
@@ -228,6 +253,18 @@ func parseConfig(configJSON string) (tcptun.Config, error) {
 		return tcptun.Config{}, errors.New("server address is required")
 	}
 	return cfg, nil
+}
+
+func parseOptionalDuration(value string, name string) (time.Duration, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s %q: %w", name, value, err)
+	}
+	return duration, nil
 }
 
 func normalizeListenAddrs(addrs []string, fallback string) []string {

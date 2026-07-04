@@ -19,6 +19,8 @@ import androidx.core.content.ContextCompat
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.net.InetSocketAddress
+import java.net.Socket
 
 enum class AppFilterMode {
     ProxyAll,
@@ -33,10 +35,14 @@ data class AppFilterConfig(
 
 class TcptunVpnService : VpnService() {
     private val bridge: TcptunBridge = ReflectionTcptunBridge()
+    private val bridgeLock = Any()
     private var tun: android.os.ParcelFileDescriptor? = null
+    @Volatile private var bridgeConfigJson: String? = null
+    @Volatile private var monitorThread: Thread? = null
     private val connectivity by lazy { getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager }
     private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private var defaultNetworkCallbackRegistered = false
+    @Volatile private var currentDefaultNetwork: Network? = null
     @Volatile private var stopping = false
 
     override fun onCreate() {
@@ -94,9 +100,10 @@ class TcptunVpnService : VpnService() {
                 )
                 saveLastRunningConfig(this, config)
                 bridge.setLogCallback(TcptunState::appendLog)
-                bridge.start(json)
+                startBridge(json)
                 val vpnTun = buildTun(config)
                 startTunnel(vpnTun)
+                startBridgeMonitor()
                 TcptunState.setStatus("Running")
                 updateNotification("Running")
             } catch (err: Exception) {
@@ -163,10 +170,20 @@ class TcptunVpnService : VpnService() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || defaultNetworkCallbackRegistered) return
         val callback = defaultNetworkCallback ?: object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
+                val previous = currentDefaultNetwork
+                currentDefaultNetwork = network
                 setUnderlyingNetworks(arrayOf(network))
+                if (previous != null && previous != network && tun != null && !stopping) {
+                    Thread {
+                        restartBridge("default network changed")
+                    }.start()
+                }
             }
 
             override fun onLost(network: Network) {
+                if (currentDefaultNetwork == network) {
+                    currentDefaultNetwork = null
+                }
                 setUnderlyingNetworks(null)
             }
         }.also { defaultNetworkCallback = it }
@@ -186,6 +203,7 @@ class TcptunVpnService : VpnService() {
                 .onFailure { err -> TcptunState.appendLog("default network callback unregister failed: ${err.message}") }
         }
         defaultNetworkCallbackRegistered = false
+        currentDefaultNetwork = null
     }
 
     private fun stopVpn(setStopped: Boolean = true, clearSavedConfig: Boolean = true, stopSelfService: Boolean = true) {
@@ -194,6 +212,7 @@ class TcptunVpnService : VpnService() {
         if (setStopped) {
             TcptunState.setStatus("Stopping")
         }
+        stopBridgeMonitor()
         unregisterDefaultNetworkCallback()
         if (clearSavedConfig) {
             clearLastRunningConfig(this)
@@ -201,7 +220,7 @@ class TcptunVpnService : VpnService() {
         runCatching { HevSocks5Tunnel.stop() }
         runCatching { tun?.close() }
         tun = null
-        runCatching { bridge.stop() }
+        stopBridge()
         if (setStopped) {
             TcptunState.setStatus("Stopped")
         }
@@ -219,6 +238,91 @@ class TcptunVpnService : VpnService() {
     override fun onDestroy() {
         stopVpn(setStopped = TcptunState.status.value != "Error", clearSavedConfig = false)
         super.onDestroy()
+    }
+
+    private fun startBridge(configJson: String) {
+        synchronized(bridgeLock) {
+            bridge.start(configJson)
+            bridgeConfigJson = configJson
+        }
+    }
+
+    private fun stopBridge() {
+        synchronized(bridgeLock) {
+            bridgeConfigJson = null
+            runCatching { bridge.stop() }
+        }
+    }
+
+    private fun restartBridge(reason: String) {
+        val configJson = bridgeConfigJson ?: return
+        synchronized(bridgeLock) {
+            if (stopping || tun == null) return
+            TcptunState.appendLog("restarting tcptun bridge: $reason")
+            runCatching { bridge.stop() }
+                .onFailure { err -> TcptunState.appendLog("tcptun bridge stop failed: ${err.message}") }
+            Thread.sleep(BRIDGE_RESTART_DELAY_MS)
+            bridge.start(configJson)
+            TcptunState.appendLog("tcptun bridge restarted")
+        }
+    }
+
+    private fun startBridgeMonitor() {
+        stopBridgeMonitor()
+        monitorThread = Thread {
+            var failures = 0
+            while (!stopping && !Thread.currentThread().isInterrupted) {
+                try {
+                    Thread.sleep(BRIDGE_HEALTH_INTERVAL_MS)
+                    if (tun == null || stopping) continue
+                    val failure = bridgeHealthFailure()
+                    if (failure == null) {
+                        failures = 0
+                    } else {
+                        failures += 1
+                        TcptunState.appendLog("tcptun bridge health check failed: $failure")
+                        if (failures >= BRIDGE_HEALTH_FAILURE_LIMIT) {
+                            failures = 0
+                            restartBridge(failure)
+                        }
+                    }
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                } catch (err: Exception) {
+                    TcptunState.appendLog("tcptun bridge monitor error: ${err.message}")
+                }
+            }
+        }.apply {
+            name = "TcptunBridgeMonitor"
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun stopBridgeMonitor() {
+        monitorThread?.interrupt()
+        monitorThread = null
+    }
+
+    private fun bridgeHealthFailure(): String? {
+        val status = runCatching { bridge.status() }.getOrElse { err ->
+            return "status unavailable: ${err.message}"
+        }
+        if (status != "Running") {
+            return "bridge status is $status"
+        }
+        if (!canConnectLocalProxy()) {
+            return "local proxy $LOCAL_SOCKS_ADDR is not accepting connections"
+        }
+        return null
+    }
+
+    private fun canConnectLocalProxy(): Boolean {
+        return runCatching {
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress(LOCAL_SOCKS_HOST, LOCAL_SOCKS_PORT), LOCAL_PROXY_CONNECT_TIMEOUT_MS)
+            }
+        }.isSuccess
     }
 
     private fun buildNotification(state: String): Notification {
@@ -306,6 +410,10 @@ class TcptunVpnService : VpnService() {
         private const val VPN_DISPLAY_NAME = "TcpTun VPN"
         private const val CHANNEL_ID = "tcptun_vpn_silent"
         private const val NOTIFICATION_ID = 1001
+        private const val BRIDGE_HEALTH_INTERVAL_MS = 15_000L
+        private const val BRIDGE_HEALTH_FAILURE_LIMIT = 2
+        private const val BRIDGE_RESTART_DELAY_MS = 300L
+        private const val LOCAL_PROXY_CONNECT_TIMEOUT_MS = 1_000
         private const val ROUTE_CONFIG_FILE = "android-route.json"
         private const val ROUTE_PREFS = "tcptun_route"
         private const val KEY_MANUAL_ROUTE_CONFIG = "manualRouteConfig"
