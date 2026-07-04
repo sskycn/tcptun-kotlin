@@ -14,7 +14,7 @@ Android itself connects to the mixed proxy through `127.0.0.1:1080`. The Go brid
 `0.0.0.0:1080`, so other devices on the same reachable network can use the phone IP plus port
 `1080` as a mixed HTTP/SOCKS proxy while the VPN client is running.
 
-The Go protocol implementation is not copied into the Android app. This repository includes a small gomobile wrapper in `mobile/androidbridge`, which references the neighboring `tcptun-go` checkout through a Go `replace` directive and builds `app/libs/androidbridge.aar`.
+The Go protocol implementation and gomobile wrapper live in the neighboring `tcptun-go` checkout. This Android project only consumes the generated `app/libs/androidbridge.aar`; `./scripts/build-androidbridge.sh` delegates to `../tcptun-go/scripts/build-androidbridge.sh`.
 
 ## Expected Go mobile bridge
 
@@ -27,7 +27,12 @@ type LogCallback interface {
 	OnLog(line string)
 }
 
+type SocketProtector interface {
+	Protect(fd int64) bool
+}
+
 func SetLogCallback(cb LogCallback)
+func SetSocketProtector(p SocketProtector)
 func Start(configJson string) error
 func Stop() error
 func Status() string
@@ -64,10 +69,16 @@ func Status() string
 }
 ```
 
-Build the AAR from this Kotlin project:
+Build the AAR through this Kotlin project wrapper:
 
 ```bash
 ./scripts/build-androidbridge.sh
+```
+
+If `tcptun-go` is not a sibling checkout, point the wrapper at it:
+
+```bash
+TCPTUN_GO_DIR=/path/to/tcptun-go ./scripts/build-androidbridge.sh
 ```
 
 If `gomobile` is missing:
@@ -77,7 +88,7 @@ go install golang.org/x/mobile/cmd/gomobile@latest
 gomobile init
 ```
 
-This Kotlin project references `tcptun-go`, but does not modify it.
+The generated AAR is copied to `app/libs/androidbridge.aar`.
 
 ## Build the Android app
 
@@ -151,9 +162,9 @@ vless://00000000-0000-4000-8000-000000000000@203.0.113.10:443?security=reality&e
 - Recent log display.
 - Native `hev-socks5-tunnel` forwarding from TUN to local SOCKS5/mixed proxy.
 - Runtime reflection bridge to gomobile AAR.
+- In-app diagnostics for VPN, underlying network, bridge state, local proxy reachability, MTU, UDP, and socket protect.
+- Runtime MTU and UDP test-mode settings.
 
 ## Not yet supported
 
-- Per-app routing UI.
-- In-app route rule editing.
 - Building the Go AAR from Gradle automatically.

@@ -47,8 +47,10 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.NetworkCheck
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Button
@@ -121,6 +123,7 @@ fun TcptunScreen() {
     var editingProfile by remember { mutableStateOf<AppConfig?>(null) }
     var showRouteEditor by remember { mutableStateOf(false) }
     var showAppFilter by remember { mutableStateOf(false) }
+    var showDiagnostics by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
     var tcpingMessage by remember { mutableStateOf("") }
     var tcpingInProgress by remember { mutableStateOf(false) }
@@ -238,6 +241,11 @@ fun TcptunScreen() {
         AppFilterPage(
             onBack = { showAppFilter = false },
         )
+    } else if (showDiagnostics) {
+        DiagnosticsPage(
+            onBack = { showDiagnostics = false },
+            onShowLogs = { showLogs = true },
+        )
     } else if (editing == null) {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
@@ -251,6 +259,7 @@ fun TcptunScreen() {
                     onImport = ::importFromClipboard,
                     onRouteRules = { showRouteEditor = true },
                     onAppFilter = { showAppFilter = true },
+                    onDiagnostics = { showDiagnostics = true },
                     onBatterySettings = { openBatteryOptimizationSettings(context) },
                 )
             },
@@ -340,6 +349,7 @@ private fun MainActionsFab(
     onImport: () -> Unit,
     onRouteRules: () -> Unit,
     onAppFilter: () -> Unit,
+    onDiagnostics: () -> Unit,
     onBatterySettings: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -410,6 +420,20 @@ private fun MainActionsFab(
                 onClick = {
                     expanded = false
                     onAppFilter()
+                },
+                colors = MenuDefaults.itemColors(
+                    textColor = colors.onSurface,
+                    leadingIconColor = colors.onSurfaceVariant,
+                ),
+            )
+            DropdownMenuItem(
+                leadingIcon = {
+                    Icon(Icons.Rounded.NetworkCheck, contentDescription = null)
+                },
+                text = { Text("诊断与设置") },
+                onClick = {
+                    expanded = false
+                    onDiagnostics()
                 },
                 colors = MenuDefaults.itemColors(
                     textColor = colors.onSurface,
@@ -627,6 +651,164 @@ private fun BottomStatus(
 }
 
 @Composable
+private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
+    val context = LocalContext.current
+    var settings by remember { mutableStateOf(TcptunVpnService.readRuntimeSettings(context)) }
+    val diagnostics = TcptunState.diagnostics.value
+    val mtuOptions = listOf("1280", "1360", "1400", "1500")
+
+    fun saveSettings(next: RuntimeSettings) {
+        TcptunVpnService.writeRuntimeSettings(context, next)
+        settings = TcptunVpnService.readRuntimeSettings(context)
+        TcptunState.appendLog("runtime settings saved: mtu=${settings.mtu} udp=${settings.udpEnabled}")
+    }
+
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            DiagnosticsTopBar(
+                onBack = onBack,
+                onShowLogs = onShowLogs,
+            )
+        },
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            item {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            "运行诊断",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        DiagnosticsLine("VPN", diagnostics.vpnStatus)
+                        DiagnosticsLine("Underlying network", diagnostics.underlyingNetwork)
+                        DiagnosticsLine("Bridge", diagnostics.bridgeStatus)
+                        DiagnosticsLine("127.0.0.1:1080", if (diagnostics.localProxyReachable) "Reachable" else "Not reachable")
+                        DiagnosticsLine("Socket protect", if (diagnostics.socketProtectEnabled) "Enabled" else "Disabled")
+                        DiagnosticsLine("最近重启原因", diagnostics.lastRestartReason)
+                    }
+                }
+            }
+            item {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Rounded.Tune,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                "透明代理参数",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                        ChoiceRow("MTU", settings.mtu.toString(), mtuOptions) { value ->
+                            saveSettings(settings.copy(mtu = value.toIntOrNull() ?: TcptunVpnService.DEFAULT_VPN_MTU))
+                        }
+                        ToggleRow("启用 UDP 转发", settings.udpEnabled) { checked ->
+                            saveSettings(settings.copy(udpEnabled = checked))
+                        }
+                        Text(
+                            "设置会在下次启动 VPN 时生效。关闭 UDP 可用于判断断流是否和 QUIC/UDP 路径有关。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            item {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            "当前生效",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        DiagnosticsLine("MTU", diagnostics.mtu.toString())
+                        DiagnosticsLine("UDP", if (diagnostics.udpEnabled) "Enabled" else "Disabled")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DiagnosticsTopBar(onBack: () -> Unit, onShowLogs: () -> Unit) {
+    TopAppBar(
+        title = { Text("诊断与设置", style = MaterialTheme.typography.titleLarge) },
+        navigationIcon = {
+            IconButton(onClick = onBack) {
+                Icon(
+                    Icons.AutoMirrored.Rounded.ArrowBack,
+                    contentDescription = "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        },
+        actions = {
+            TextButton(onClick = onShowLogs) {
+                Text("日志")
+            }
+        },
+    )
+}
+
+@Composable
+private fun DiagnosticsLine(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(0.46f),
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(0.54f),
+        )
+    }
+}
+
+@Composable
 private fun AppFilterPage(onBack: () -> Unit) {
     val context = LocalContext.current
     var query by remember { mutableStateOf("") }
@@ -678,6 +860,49 @@ private fun AppFilterPage(onBack: () -> Unit) {
                     modifier = Modifier.padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                saveFilter(
+                                    if (filter.mode == AppFilterMode.ProxyAll) {
+                                        AppFilterConfig(mode = AppFilterMode.BypassAll, includedApps = filter.includedApps)
+                                    } else {
+                                        AppFilterConfig(mode = AppFilterMode.ProxyAll, excludedApps = filter.excludedApps)
+                                    },
+                                )
+                            },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            Text(
+                                appFilterModeTitle(filter),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                appFilterModeDescription(filter),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = filter.mode == AppFilterMode.BypassAll,
+                            onCheckedChange = { checked ->
+                                saveFilter(
+                                    if (checked) {
+                                        AppFilterConfig(mode = AppFilterMode.BypassAll, includedApps = filter.includedApps)
+                                    } else {
+                                        AppFilterConfig(mode = AppFilterMode.ProxyAll, excludedApps = filter.excludedApps)
+                                    },
+                                )
+                            },
+                        )
+                    }
                     OutlinedTextField(
                         value = query,
                         onValueChange = { query = it },
@@ -1646,6 +1871,20 @@ private fun isAppProxied(filter: AppFilterConfig, packageName: String): Boolean 
     return when (filter.mode) {
         AppFilterMode.ProxyAll -> packageName !in filter.excludedApps
         AppFilterMode.BypassAll -> packageName in filter.includedApps
+    }
+}
+
+private fun appFilterModeTitle(filter: AppFilterConfig): String {
+    return when (filter.mode) {
+        AppFilterMode.ProxyAll -> "默认全部应用走代理"
+        AppFilterMode.BypassAll -> "仅选中应用走代理"
+    }
+}
+
+private fun appFilterModeDescription(filter: AppFilterConfig): String {
+    return when (filter.mode) {
+        AppFilterMode.ProxyAll -> "关闭某个应用后，它会绕过 VPN。"
+        AppFilterMode.BypassAll -> "未选中的应用直连；启动前至少保留一个选中应用。"
     }
 }
 

@@ -7,6 +7,8 @@ interface TcptunBridge {
     fun stop()
     fun status(): String
     fun setLogCallback(onLog: (String) -> Unit)
+    fun setSocketProtector(onProtect: (Int) -> Boolean)
+    fun clearSocketProtector()
 }
 
 class ReflectionTcptunBridge : TcptunBridge {
@@ -57,11 +59,50 @@ class ReflectionTcptunBridge : TcptunBridge {
         )
     }
 
+    override fun setSocketProtector(onProtect: (Int) -> Boolean) {
+        val protectorClass = try {
+            Class.forName("androidbridge.SocketProtector")
+        } catch (err: ClassNotFoundException) {
+            TcptunState.appendLog("androidbridge SocketProtector is not available: ${err.message}")
+            return
+        }
+        val protector = Proxy.newProxyInstance(
+            protectorClass.classLoader,
+            arrayOf(protectorClass),
+        ) { _, method, args ->
+            if (method.name.equals("protect", ignoreCase = true) && !args.isNullOrEmpty()) {
+                val fd = (args[0] as? Number)?.toInt() ?: return@newProxyInstance false
+                return@newProxyInstance onProtect(fd)
+            }
+            false
+        }
+        invokeStatic(
+            "setSocketProtector",
+            "SetSocketProtector",
+            parameterTypes = arrayOf(protectorClass),
+            protector,
+        )
+    }
+
+    override fun clearSocketProtector() {
+        val protectorClass = try {
+            Class.forName("androidbridge.SocketProtector")
+        } catch (_: ClassNotFoundException) {
+            return
+        }
+        invokeStatic(
+            "setSocketProtector",
+            "SetSocketProtector",
+            parameterTypes = arrayOf(protectorClass),
+            null,
+        )
+    }
+
     private fun invokeStatic(
         lowerName: String,
         upperName: String,
         parameterTypes: Array<Class<*>> = emptyArray(),
-        vararg args: Any,
+        vararg args: Any?,
     ): Any? {
         val method = try {
             bridgeClass.getMethod(lowerName, *parameterTypes)

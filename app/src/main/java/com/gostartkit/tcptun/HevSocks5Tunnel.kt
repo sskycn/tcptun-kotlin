@@ -26,8 +26,10 @@ object HevSocks5Tunnel {
         socksPort: Int,
         mtu: Int,
         dnsServer: String,
+        udpEnabled: Boolean,
     ): File {
         val file = File(directory, "hev-socks5-tunnel.yml")
+        val udpMode = if (udpEnabled) "udp" else "tcp"
         file.writeText(
             """
             tunnel:
@@ -40,7 +42,7 @@ object HevSocks5Tunnel {
             socks5:
               port: $socksPort
               address: $socksHost
-              udp: 'udp'
+              udp: '$udpMode'
               pipeline: false
 
             mapdns:

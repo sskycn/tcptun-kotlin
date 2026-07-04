@@ -35,6 +35,11 @@ data class AppFilterConfig(
     val includedApps: Set<String> = emptySet(),
 )
 
+data class RuntimeSettings(
+    val mtu: Int = TcptunVpnService.DEFAULT_VPN_MTU,
+    val udpEnabled: Boolean = true,
+)
+
 class TcptunVpnService : VpnService() {
     private val bridge: TcptunBridge = ReflectionTcptunBridge()
     private val bridgeLock = Any()
@@ -97,16 +102,29 @@ class TcptunVpnService : VpnService() {
                     realityFingerprint = intent.getStringExtra("realityFingerprint").orEmpty(),
                     realitySpiderX = intent.getStringExtra("realitySpiderX").orEmpty(),
                     mux = intent.getBooleanExtra("mux", true),
-                    udp = true,
+                    udp = intent.getBooleanExtra("udp", true),
                     upstreamProtocol = intent.getStringExtra("upstreamProtocol") ?: "socks5",
                 )
+                val runtimeSettings = readRuntimeSettings(this)
+                val effectiveUdpEnabled = config.udp && runtimeSettings.udpEnabled
                 saveLastRunningConfig(this, config)
                 bridge.setLogCallback(TcptunState::appendLog)
+                bridge.setSocketProtector { fd -> protect(fd) }
+                TcptunState.updateDiagnostics {
+                    it.copy(
+                        bridgeStatus = "Starting",
+                        localProxyReachable = false,
+                        mtu = runtimeSettings.mtu,
+                        udpEnabled = effectiveUdpEnabled,
+                        socketProtectEnabled = true,
+                    )
+                }
                 startBridge(json)
-                val vpnTun = buildTun(config)
-                startTunnel(vpnTun)
+                val vpnTun = buildTun(config, runtimeSettings.mtu)
+                startTunnel(vpnTun, runtimeSettings.mtu, effectiveUdpEnabled)
                 startBridgeMonitor()
                 TcptunState.setStatus("Running")
+                updateBridgeDiagnostics()
                 updateNotification("Running")
             } catch (err: Exception) {
                 TcptunState.error(err.message ?: err.javaClass.simpleName)
@@ -130,28 +148,29 @@ class TcptunVpnService : VpnService() {
         startFromIntent(startIntent(this, config))
     }
 
-    private fun startTunnel(vpnTun: android.os.ParcelFileDescriptor) {
+    private fun startTunnel(vpnTun: android.os.ParcelFileDescriptor, mtu: Int, udpEnabled: Boolean) {
         tun = vpnTun
         val hevConfig = HevSocks5Tunnel.writeConfig(
             directory = applicationContext.filesDir,
             socksHost = LOCAL_SOCKS_HOST,
             socksPort = LOCAL_SOCKS_PORT,
-            mtu = VPN_MTU,
+            mtu = mtu,
             dnsServer = VPN_DNS_SERVER,
+            udpEnabled = udpEnabled,
         )
         try {
             HevSocks5Tunnel.start(hevConfig, vpnTun)
         } catch (err: Exception) {
             throw IllegalStateException("hev-socks5-tunnel failed: ${err.message}", err)
         }
-        TcptunState.appendLog("hev-socks5-tunnel started")
+        TcptunState.appendLog("hev-socks5-tunnel started mtu=$mtu udp=${if (udpEnabled) "udp" else "tcp"}")
     }
 
-    private fun buildTun(config: AppConfig): android.os.ParcelFileDescriptor {
+    private fun buildTun(config: AppConfig, mtu: Int): android.os.ParcelFileDescriptor {
         registerUnderlyingNetworkCallback()
         return Builder()
             .setSession(VPN_DISPLAY_NAME)
-            .setMtu(VPN_MTU)
+            .setMtu(mtu)
             .addAddress("10.77.0.2", 32)
             .addAddress("fd00:7777::2", 128)
             .addProxyRoutes()
@@ -174,6 +193,7 @@ class TcptunVpnService : VpnService() {
             override fun onAvailable(network: Network) {
                 val previous = currentDefaultNetwork
                 currentDefaultNetwork = network
+                updateUnderlyingDiagnostics(network)
                 setUnderlyingNetworks(arrayOf(network))
                 if (previous != null && previous != network && tun != null && !stopping) {
                     Thread {
@@ -185,6 +205,7 @@ class TcptunVpnService : VpnService() {
             override fun onLost(network: Network) {
                 if (currentDefaultNetwork == network) {
                     currentDefaultNetwork = null
+                    updateUnderlyingDiagnostics(null)
                 }
                 setUnderlyingNetworks(null)
             }
@@ -210,6 +231,7 @@ class TcptunVpnService : VpnService() {
         }
         underlyingNetworkCallbackRegistered = false
         currentDefaultNetwork = null
+        updateUnderlyingDiagnostics(null)
     }
 
     private fun stopVpn(setStopped: Boolean = true, clearSavedConfig: Boolean = true, stopSelfService: Boolean = true) {
@@ -227,6 +249,13 @@ class TcptunVpnService : VpnService() {
         runCatching { tun?.close() }
         tun = null
         stopBridge()
+        TcptunState.updateDiagnostics {
+            it.copy(
+                bridgeStatus = "Stopped",
+                localProxyReachable = false,
+                socketProtectEnabled = false,
+            )
+        }
         if (setStopped) {
             TcptunState.setStatus("Stopped")
         }
@@ -250,6 +279,7 @@ class TcptunVpnService : VpnService() {
         synchronized(bridgeLock) {
             bridge.start(configJson)
             bridgeConfigJson = configJson
+            TcptunState.updateDiagnostics { it.copy(bridgeStatus = runCatching { bridge.status() }.getOrDefault("Unknown")) }
         }
     }
 
@@ -257,6 +287,7 @@ class TcptunVpnService : VpnService() {
         synchronized(bridgeLock) {
             bridgeConfigJson = null
             runCatching { bridge.stop() }
+            runCatching { bridge.clearSocketProtector() }
         }
     }
 
@@ -265,11 +296,13 @@ class TcptunVpnService : VpnService() {
         synchronized(bridgeLock) {
             if (stopping || tun == null) return
             TcptunState.appendLog("restarting tcptun bridge: $reason")
+            TcptunState.updateDiagnostics { it.copy(lastRestartReason = reason, bridgeStatus = "Restarting") }
             runCatching { bridge.stop() }
                 .onFailure { err -> TcptunState.appendLog("tcptun bridge stop failed: ${err.message}") }
             Thread.sleep(BRIDGE_RESTART_DELAY_MS)
             bridge.start(configJson)
             TcptunState.appendLog("tcptun bridge restarted")
+            updateBridgeDiagnostics()
         }
     }
 
@@ -284,6 +317,7 @@ class TcptunVpnService : VpnService() {
                     val failure = bridgeHealthFailure()
                     if (failure == null) {
                         failures = 0
+                        updateBridgeDiagnostics()
                     } else {
                         failures += 1
                         TcptunState.appendLog("tcptun bridge health check failed: $failure")
@@ -312,15 +346,32 @@ class TcptunVpnService : VpnService() {
 
     private fun bridgeHealthFailure(): String? {
         val status = runCatching { bridge.status() }.getOrElse { err ->
+            TcptunState.updateDiagnostics { it.copy(bridgeStatus = "Unknown", localProxyReachable = false) }
             return "status unavailable: ${err.message}"
         }
+        val localProxyReachable = canConnectLocalProxy()
+        TcptunState.updateDiagnostics { it.copy(bridgeStatus = status, localProxyReachable = localProxyReachable) }
         if (status != "Running") {
             return "bridge status is $status"
         }
-        if (!canConnectLocalProxy()) {
+        if (!localProxyReachable) {
             return "local proxy $LOCAL_SOCKS_ADDR is not accepting connections"
         }
         return null
+    }
+
+    private fun updateUnderlyingDiagnostics(network: Network?) {
+        TcptunState.updateDiagnostics {
+            it.copy(underlyingNetwork = network?.toString() ?: "None")
+        }
+    }
+
+    private fun updateBridgeDiagnostics() {
+        val status = runCatching { bridge.status() }.getOrDefault("Unknown")
+        val localProxyReachable = canConnectLocalProxy()
+        TcptunState.updateDiagnostics {
+            it.copy(bridgeStatus = status, localProxyReachable = localProxyReachable)
+        }
     }
 
     private fun canConnectLocalProxy(): Boolean {
@@ -412,7 +463,7 @@ class TcptunVpnService : VpnService() {
         const val LOCAL_SOCKS_PORT = 1080
         const val LOCAL_SOCKS_ADDR = "$LOCAL_SOCKS_HOST:$LOCAL_SOCKS_PORT"
         const val LOCAL_SOCKS_LISTEN_ADDR = "0.0.0.0:$LOCAL_SOCKS_PORT"
-        const val VPN_MTU = 1500
+        const val DEFAULT_VPN_MTU = 1400
         private const val VPN_DISPLAY_NAME = "TcpTun VPN"
         private const val CHANNEL_ID = "tcptun_vpn_silent"
         private const val NOTIFICATION_ID = 1001
@@ -425,6 +476,8 @@ class TcptunVpnService : VpnService() {
         private const val KEY_MANUAL_ROUTE_CONFIG = "manualRouteConfig"
         private const val RUNTIME_PREFS = "tcptun_runtime"
         private const val KEY_LAST_RUNNING_CONFIG = "lastRunningConfig"
+        private const val KEY_RUNTIME_MTU = "runtimeMtu"
+        private const val KEY_RUNTIME_UDP_ENABLED = "runtimeUdpEnabled"
         private const val APP_FILTER_PREFS = "tcptun_app_filter"
         private const val KEY_FILTER_MODE = "filterMode"
         private const val KEY_EXCLUDED_APPS = "excludedApps"
@@ -505,7 +558,8 @@ class TcptunVpnService : VpnService() {
 
         fun startIntent(context: Context, config: AppConfig): Intent {
             val routeConfigPath = ensureAndroidRouteConfig(context)
-            val effectiveConfig = config.copy(udp = true)
+            val runtimeSettings = readRuntimeSettings(context)
+            val effectiveConfig = config.copy(udp = config.udp && runtimeSettings.udpEnabled)
             return Intent(context, TcptunVpnService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_CONFIG, effectiveConfig.toBridgeJson(LOCAL_SOCKS_LISTEN_ADDR, routeConfigPath))
@@ -525,7 +579,7 @@ class TcptunVpnService : VpnService() {
                 .putExtra("realityFingerprint", effectiveConfig.realityFingerprint)
                 .putExtra("realitySpiderX", effectiveConfig.realitySpiderX)
                 .putExtra("mux", effectiveConfig.mux)
-                .putExtra("udp", true)
+                .putExtra("udp", effectiveConfig.udp)
                 .putExtra("upstreamProtocol", effectiveConfig.upstreamProtocol)
         }
 
@@ -555,10 +609,30 @@ class TcptunVpnService : VpnService() {
                 .apply()
         }
 
+        fun readRuntimeSettings(context: Context): RuntimeSettings {
+            val prefs = context.applicationContext.getSharedPreferences(RUNTIME_PREFS, Context.MODE_PRIVATE)
+            val mtu = prefs.getInt(KEY_RUNTIME_MTU, DEFAULT_VPN_MTU).coerceIn(1280, 1500)
+            return RuntimeSettings(
+                mtu = mtu,
+                udpEnabled = prefs.getBoolean(KEY_RUNTIME_UDP_ENABLED, true),
+            )
+        }
+
+        fun writeRuntimeSettings(context: Context, settings: RuntimeSettings) {
+            context.applicationContext.getSharedPreferences(RUNTIME_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putInt(KEY_RUNTIME_MTU, settings.mtu.coerceIn(1280, 1500))
+                .putBoolean(KEY_RUNTIME_UDP_ENABLED, settings.udpEnabled)
+                .apply()
+            TcptunState.updateDiagnostics {
+                it.copy(mtu = settings.mtu.coerceIn(1280, 1500), udpEnabled = settings.udpEnabled)
+            }
+        }
+
         private fun saveLastRunningConfig(context: Context, config: AppConfig) {
             context.applicationContext.getSharedPreferences(RUNTIME_PREFS, Context.MODE_PRIVATE)
                 .edit()
-                .putString(KEY_LAST_RUNNING_CONFIG, config.copy(udp = true).toJson().toString())
+                .putString(KEY_LAST_RUNNING_CONFIG, config.toJson().toString())
                 .apply()
         }
 
