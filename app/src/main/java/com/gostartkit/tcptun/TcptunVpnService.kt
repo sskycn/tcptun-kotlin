@@ -353,7 +353,7 @@ class TcptunVpnService : VpnService() {
                 try {
                     val intervalMs = bridgeHealthIntervalMs()
                     TcptunState.updateDiagnostics { it.copy(healthCheckIntervalSeconds = intervalMs / 1_000) }
-                    Thread.sleep(intervalMs)
+                    sleepBridgeHealthInterval(intervalMs)
                     if (tun == null || stopping) continue
                     val failure = bridgeHealthFailure()
                     if (failure == null) {
@@ -397,6 +397,19 @@ class TcptunVpnService : VpnService() {
             BRIDGE_HEALTH_POWER_SAVING_INTERVAL_MS
         } else {
             BRIDGE_HEALTH_STABLE_INTERVAL_MS
+        }
+    }
+
+    private fun sleepBridgeHealthInterval(intervalMs: Long) {
+        val wasDense = System.currentTimeMillis() < denseHealthCheckUntilMs
+        val deadlineMs = System.currentTimeMillis() + intervalMs
+        while (!stopping && !Thread.currentThread().isInterrupted) {
+            val remainingMs = deadlineMs - System.currentTimeMillis()
+            if (remainingMs <= 0) return
+            Thread.sleep(remainingMs.coerceAtMost(BRIDGE_HEALTH_SLEEP_GRANULARITY_MS))
+            if (!wasDense && System.currentTimeMillis() < denseHealthCheckUntilMs) {
+                return
+            }
         }
     }
 
@@ -527,6 +540,7 @@ class TcptunVpnService : VpnService() {
         private const val BRIDGE_HEALTH_STABLE_INTERVAL_MS = 60_000L
         private const val BRIDGE_HEALTH_POWER_SAVING_INTERVAL_MS = 120_000L
         private const val BRIDGE_DENSE_HEALTH_WINDOW_MS = 120_000L
+        private const val BRIDGE_HEALTH_SLEEP_GRANULARITY_MS = 5_000L
         private const val BRIDGE_STABLE_SUCCESS_LIMIT = 2
         private const val BRIDGE_HEALTH_FAILURE_LIMIT = 2
         private const val BRIDGE_RESTART_DELAY_MS = 300L
