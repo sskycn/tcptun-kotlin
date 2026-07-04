@@ -141,7 +141,7 @@ class TcptunVpnService : VpnService() {
     private fun buildTun(config: AppConfig): android.os.ParcelFileDescriptor {
         registerDefaultNetworkCallback()
         return Builder()
-            .setSession("tcptun")
+            .setSession(VPN_DISPLAY_NAME)
             .setMtu(VPN_MTU)
             .addAddress("10.77.0.2", 32)
             .addAddress("fd00:7777::2", 128)
@@ -235,7 +235,7 @@ class TcptunVpnService : VpnService() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
-            .setContentTitle("tcptun VPN")
+            .setContentTitle(VPN_DISPLAY_NAME)
             .setContentText(state)
             .setContentIntent(pendingIntent)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
@@ -277,7 +277,7 @@ class TcptunVpnService : VpnService() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "tcptun VPN",
+            VPN_DISPLAY_NAME,
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
             description = "Silent VPN service status"
@@ -300,6 +300,7 @@ class TcptunVpnService : VpnService() {
         const val LOCAL_SOCKS_ADDR = "$LOCAL_SOCKS_HOST:$LOCAL_SOCKS_PORT"
         const val LOCAL_SOCKS_LISTEN_ADDR = "0.0.0.0:$LOCAL_SOCKS_PORT"
         const val VPN_MTU = 1500
+        private const val VPN_DISPLAY_NAME = "TcpTun VPN"
         private const val CHANNEL_ID = "tcptun_vpn_silent"
         private const val NOTIFICATION_ID = 1001
         private const val ROUTE_CONFIG_FILE = "android-route.json"
