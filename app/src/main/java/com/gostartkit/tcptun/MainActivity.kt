@@ -127,6 +127,7 @@ fun TcptunScreen() {
     var showLogs by remember { mutableStateOf(false) }
     var tcpingMessage by remember { mutableStateOf("") }
     var tcpingInProgress by remember { mutableStateOf(false) }
+    var tcpingTargetIndex by remember { mutableStateOf(0) }
     val snackbarHostState = remember { SnackbarHostState() }
     val screenScope = rememberCoroutineScope()
     val vpnLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -272,12 +273,14 @@ fun TcptunScreen() {
                     hasProfile = state.selected != null,
                     onClick = {
                         if (isVpnTransitionStatus(TcptunState.status.value)) return@BottomStatus
-                        val profile = state.selected ?: return@BottomStatus
+                        if (state.selected == null) return@BottomStatus
                         if (tcpingInProgress) return@BottomStatus
+                        val tcpingTarget = TCPING_TARGETS[tcpingTargetIndex]
+                        tcpingTargetIndex = (tcpingTargetIndex + 1) % TCPING_TARGETS.size
                         tcpingInProgress = true
                         tcpingMessage = ""
                         screenScope.launch {
-                            tcpingMessage = tcping(profile)
+                            tcpingMessage = tcping(tcpingTarget)
                             tcpingInProgress = false
                         }
                     },
@@ -1970,26 +1973,97 @@ private fun shareProfile(context: Context, profile: AppConfig) {
     context.startActivity(Intent.createChooser(send, "分享配置"))
 }
 
-private suspend fun tcping(profile: AppConfig): String = withContext(Dispatchers.IO) {
-    val host = profile.serverHost.trim()
-    val port = profile.serverPort.trim().toIntOrNull()
-    if (host.isBlank() || port == null || port !in 1..65535) {
-        return@withContext "TCPing 失败：服务器地址无效"
+private data class TcpingTarget(
+    val label: String,
+    val host: String,
+    val port: Int = 443,
+)
+
+private data class TcpingResult(
+    val target: TcpingTarget,
+    val elapsedMs: Long?,
+    val error: String?,
+)
+
+private suspend fun tcping(target: TcpingTarget): String = withContext(Dispatchers.IO) {
+    val result = tcpingTarget(target)
+    val elapsedMs = result.elapsedMs
+    if (elapsedMs != null) {
+        "TCPing 成功 · ${target.label} ${elapsedMs}ms"
+    } else {
+        "TCPing 失败 · ${target.label} ${result.error ?: "失败"}"
     }
+}
+
+private fun tcpingTarget(target: TcpingTarget): TcpingResult {
     val start = System.nanoTime()
-    runCatching {
+    return runCatching {
         Socket().use { socket ->
-            socket.connect(InetSocketAddress(host, port), TCPING_TIMEOUT_MS)
+            socket.connect(
+                InetSocketAddress(TcptunVpnService.LOCAL_SOCKS_HOST, TcptunVpnService.LOCAL_SOCKS_PORT),
+                TCPING_TIMEOUT_MS,
+            )
+            socket.soTimeout = TCPING_TIMEOUT_MS
+            socks5Connect(socket, target.host, target.port)
         }
     }.fold(
         onSuccess = {
-            val elapsedMs = (System.nanoTime() - start) / 1_000_000
-            "TCPing 成功 · ${elapsedMs}ms"
+            TcpingResult(target, (System.nanoTime() - start) / 1_000_000, null)
         },
         onFailure = { err ->
-            "TCPing 失败 · ${err.message ?: err.javaClass.simpleName}"
+            TcpingResult(target, null, err.message ?: err.javaClass.simpleName)
         },
     )
+}
+
+private fun socks5Connect(socket: Socket, host: String, port: Int) {
+    val input = socket.getInputStream()
+    val output = socket.getOutputStream()
+    output.write(byteArrayOf(0x05, 0x01, 0x00))
+    output.flush()
+    val methodReply = input.readExact(2)
+    require(methodReply[0] == 0x05.toByte() && methodReply[1] == 0x00.toByte()) {
+        "SOCKS5 method rejected"
+    }
+
+    val hostBytes = host.encodeToByteArray()
+    require(hostBytes.size <= 255) { "host is too long" }
+    val request = ByteArray(7 + hostBytes.size)
+    request[0] = 0x05
+    request[1] = 0x01
+    request[2] = 0x00
+    request[3] = 0x03
+    request[4] = hostBytes.size.toByte()
+    hostBytes.copyInto(request, destinationOffset = 5)
+    request[request.lastIndex - 1] = ((port ushr 8) and 0xff).toByte()
+    request[request.lastIndex] = (port and 0xff).toByte()
+    output.write(request)
+    output.flush()
+
+    val replyHead = input.readExact(4)
+    require(replyHead[0] == 0x05.toByte()) { "invalid SOCKS5 reply" }
+    require(replyHead[1] == 0x00.toByte()) { "SOCKS5 connect failed: ${replyHead[1].toInt() and 0xff}" }
+    val addressLength = when (replyHead[3].toInt() and 0xff) {
+        0x01 -> 4
+        0x03 -> input.read()
+        0x04 -> 16
+        else -> error("invalid SOCKS5 address type")
+    }
+    require(addressLength >= 0) { "SOCKS5 reply ended early" }
+    input.readExact(addressLength + 2)
+}
+
+private fun java.io.InputStream.readExact(length: Int): ByteArray {
+    val data = ByteArray(length)
+    var offset = 0
+    while (offset < length) {
+        val read = read(data, offset, length - offset)
+        if (read < 0) {
+            error("connection closed")
+        }
+        offset += read
+    }
+    return data
 }
 
 private fun clipboardText(context: Context): String {
@@ -2068,3 +2142,7 @@ private fun vpnStatusLabel(status: String): String {
 }
 
 private const val TCPING_TIMEOUT_MS = 3_000
+private val TCPING_TARGETS = listOf(
+    TcpingTarget("Google", "google.com"),
+    TcpingTarget("GitHub", "github.com"),
+)
