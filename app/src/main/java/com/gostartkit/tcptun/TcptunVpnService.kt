@@ -38,6 +38,7 @@ data class AppFilterConfig(
 data class RuntimeSettings(
     val mtu: Int = TcptunVpnService.DEFAULT_VPN_MTU,
     val udpEnabled: Boolean = true,
+    val powerSavingMode: Boolean = false,
 )
 
 class TcptunVpnService : VpnService() {
@@ -52,6 +53,7 @@ class TcptunVpnService : VpnService() {
     @Volatile private var currentDefaultNetwork: Network? = null
     @Volatile private var stopping = false
     @Volatile private var lastBridgeRestartAtMs = 0L
+    @Volatile private var stableHealthSuccesses = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -107,7 +109,7 @@ class TcptunVpnService : VpnService() {
                     upstreamProtocol = intent.getStringExtra("upstreamProtocol") ?: "socks5",
                 )
                 val runtimeSettings = readRuntimeSettings(this)
-                val effectiveUdpEnabled = config.udp && runtimeSettings.udpEnabled
+                val effectiveUdpEnabled = config.udp && runtimeSettings.udpEnabled && !runtimeSettings.powerSavingMode
                 saveLastRunningConfig(this, config)
                 bridge.setLogCallback(TcptunState::appendLog)
                 bridge.setStatusCallback { eventJson ->
@@ -121,6 +123,7 @@ class TcptunVpnService : VpnService() {
                         localProxyReachable = false,
                         mtu = runtimeSettings.mtu,
                         udpEnabled = effectiveUdpEnabled,
+                        powerSavingMode = runtimeSettings.powerSavingMode,
                         socketProtectEnabled = true,
                     )
                 }
@@ -331,25 +334,36 @@ class TcptunVpnService : VpnService() {
 
     private fun handleBridgeStatusEvent(eventJson: String) {
         val eventState = runCatching { JSONObject(eventJson).optString("state").lowercase() }.getOrDefault("")
+        if (eventState == "degraded") {
+            requestDenseHealthCheck("tcptun reported degraded")
+            return
+        }
         if (eventState != "error" && eventState != "stopped") return
         if (stopping || tun == null) return
+        requestDenseHealthCheck("tcptun reported $eventState")
         requestBridgeRestart("tcptun reported $eventState")
     }
 
     private fun startBridgeMonitor() {
         stopBridgeMonitor()
+        stableHealthSuccesses = 0
         monitorThread = Thread {
             var failures = 0
             while (!stopping && !Thread.currentThread().isInterrupted) {
                 try {
-                    Thread.sleep(BRIDGE_HEALTH_INTERVAL_MS)
+                    val intervalMs = bridgeHealthIntervalMs()
+                    TcptunState.updateDiagnostics { it.copy(healthCheckIntervalSeconds = intervalMs / 1_000) }
+                    Thread.sleep(intervalMs)
                     if (tun == null || stopping) continue
                     val failure = bridgeHealthFailure()
                     if (failure == null) {
                         failures = 0
+                        stableHealthSuccesses += 1
                         updateBridgeDiagnostics()
                     } else {
                         failures += 1
+                        stableHealthSuccesses = 0
+                        requestDenseHealthCheck("health check failed")
                         TcptunState.appendLog("tcptun bridge health check failed: $failure")
                         if (failures >= BRIDGE_HEALTH_FAILURE_LIMIT) {
                             failures = 0
@@ -372,6 +386,18 @@ class TcptunVpnService : VpnService() {
     private fun stopBridgeMonitor() {
         monitorThread?.interrupt()
         monitorThread = null
+    }
+
+    private fun bridgeHealthIntervalMs(): Long {
+        val now = System.currentTimeMillis()
+        if (now < denseHealthCheckUntilMs) return BRIDGE_HEALTH_FAST_INTERVAL_MS
+        if (stableHealthSuccesses < BRIDGE_STABLE_SUCCESS_LIMIT) return BRIDGE_HEALTH_FAST_INTERVAL_MS
+        val settings = readRuntimeSettings(this)
+        return if (settings.powerSavingMode) {
+            BRIDGE_HEALTH_POWER_SAVING_INTERVAL_MS
+        } else {
+            BRIDGE_HEALTH_STABLE_INTERVAL_MS
+        }
     }
 
     private fun bridgeHealthFailure(): String? {
@@ -497,7 +523,11 @@ class TcptunVpnService : VpnService() {
         private const val VPN_DISPLAY_NAME = "TcpTun VPN"
         private const val CHANNEL_ID = "tcptun_vpn_silent"
         private const val NOTIFICATION_ID = 1001
-        private const val BRIDGE_HEALTH_INTERVAL_MS = 15_000L
+        private const val BRIDGE_HEALTH_FAST_INTERVAL_MS = 15_000L
+        private const val BRIDGE_HEALTH_STABLE_INTERVAL_MS = 60_000L
+        private const val BRIDGE_HEALTH_POWER_SAVING_INTERVAL_MS = 120_000L
+        private const val BRIDGE_DENSE_HEALTH_WINDOW_MS = 120_000L
+        private const val BRIDGE_STABLE_SUCCESS_LIMIT = 2
         private const val BRIDGE_HEALTH_FAILURE_LIMIT = 2
         private const val BRIDGE_RESTART_DELAY_MS = 300L
         private const val BRIDGE_RESTART_MIN_INTERVAL_MS = 30_000L
@@ -509,6 +539,8 @@ class TcptunVpnService : VpnService() {
         private const val KEY_LAST_RUNNING_CONFIG = "lastRunningConfig"
         private const val KEY_RUNTIME_MTU = "runtimeMtu"
         private const val KEY_RUNTIME_UDP_ENABLED = "runtimeUdpEnabled"
+        private const val KEY_RUNTIME_POWER_SAVING = "runtimePowerSaving"
+        @Volatile private var denseHealthCheckUntilMs = 0L
         private const val APP_FILTER_PREFS = "tcptun_app_filter"
         private const val KEY_FILTER_MODE = "filterMode"
         private const val KEY_EXCLUDED_APPS = "excludedApps"
@@ -590,10 +622,17 @@ class TcptunVpnService : VpnService() {
         fun startIntent(context: Context, config: AppConfig): Intent {
             val routeConfigPath = ensureAndroidRouteConfig(context)
             val runtimeSettings = readRuntimeSettings(context)
-            val effectiveConfig = config.copy(udp = config.udp && runtimeSettings.udpEnabled)
+            val effectiveConfig = config.copy(udp = config.udp && runtimeSettings.udpEnabled && !runtimeSettings.powerSavingMode)
             return Intent(context, TcptunVpnService::class.java)
                 .setAction(ACTION_START)
-                .putExtra(EXTRA_CONFIG, effectiveConfig.toBridgeJson(LOCAL_SOCKS_LISTEN_ADDR, routeConfigPath))
+                .putExtra(
+                    EXTRA_CONFIG,
+                    effectiveConfig.toBridgeJson(
+                        LOCAL_SOCKS_LISTEN_ADDR,
+                        routeConfigPath,
+                        powerSavingMode = runtimeSettings.powerSavingMode,
+                    ),
+                )
                 .putExtra("serverHost", effectiveConfig.serverHost)
                 .putExtra("serverPort", effectiveConfig.serverPort)
                 .putExtra("protocol", effectiveConfig.protocol)
@@ -616,6 +655,14 @@ class TcptunVpnService : VpnService() {
 
         fun stopIntent(context: Context): Intent {
             return Intent(context, TcptunVpnService::class.java).setAction(ACTION_STOP)
+        }
+
+        fun requestDenseHealthCheck(reason: String) {
+            val nextUntilMs = System.currentTimeMillis() + BRIDGE_DENSE_HEALTH_WINDOW_MS
+            if (nextUntilMs > denseHealthCheckUntilMs) {
+                denseHealthCheckUntilMs = nextUntilMs
+            }
+            TcptunState.appendLog("dense bridge health check requested: $reason")
         }
 
         fun readAppFilter(context: Context): AppFilterConfig {
@@ -643,20 +690,29 @@ class TcptunVpnService : VpnService() {
         fun readRuntimeSettings(context: Context): RuntimeSettings {
             val prefs = context.applicationContext.getSharedPreferences(RUNTIME_PREFS, Context.MODE_PRIVATE)
             val mtu = prefs.getInt(KEY_RUNTIME_MTU, DEFAULT_VPN_MTU).coerceIn(1280, 1500)
+            val powerSavingMode = prefs.getBoolean(KEY_RUNTIME_POWER_SAVING, false)
             return RuntimeSettings(
                 mtu = mtu,
-                udpEnabled = prefs.getBoolean(KEY_RUNTIME_UDP_ENABLED, true),
+                udpEnabled = prefs.getBoolean(KEY_RUNTIME_UDP_ENABLED, true) && !powerSavingMode,
+                powerSavingMode = powerSavingMode,
             )
         }
 
         fun writeRuntimeSettings(context: Context, settings: RuntimeSettings) {
+            val normalizedPowerSavingMode = settings.powerSavingMode
+            val normalizedUdpEnabled = settings.udpEnabled && !normalizedPowerSavingMode
             context.applicationContext.getSharedPreferences(RUNTIME_PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putInt(KEY_RUNTIME_MTU, settings.mtu.coerceIn(1280, 1500))
-                .putBoolean(KEY_RUNTIME_UDP_ENABLED, settings.udpEnabled)
+                .putBoolean(KEY_RUNTIME_UDP_ENABLED, normalizedUdpEnabled)
+                .putBoolean(KEY_RUNTIME_POWER_SAVING, normalizedPowerSavingMode)
                 .apply()
             TcptunState.updateDiagnostics {
-                it.copy(mtu = settings.mtu.coerceIn(1280, 1500), udpEnabled = settings.udpEnabled)
+                it.copy(
+                    mtu = settings.mtu.coerceIn(1280, 1500),
+                    udpEnabled = normalizedUdpEnabled,
+                    powerSavingMode = normalizedPowerSavingMode,
+                )
             }
         }
 
@@ -795,11 +851,11 @@ class TcptunVpnService : VpnService() {
                             }.onFailure { err ->
                                 TcptunState.appendLog("skip excluded app $packageName: ${err.message}")
                             }
-                        }
+                    }
                 }
                 AppFilterMode.BypassAll -> {
                     if (filter.includedApps.isEmpty()) {
-                        throw IllegalStateException("全不走代理模式至少选择一个应用")
+                        throw IllegalStateException(context.getString(R.string.app_filter_requires_one_app))
                     }
                     var allowedCount = 0
                     var selectedAllowedCount = 0
@@ -820,7 +876,7 @@ class TcptunVpnService : VpnService() {
                         }
                     }
                     if (allowedCount == 0 || selectedAllowedCount == 0) {
-                        throw IllegalStateException("全不走代理模式没有可用的已选应用")
+                        throw IllegalStateException(context.getString(R.string.app_filter_no_available_selected_app))
                     }
                 }
             }

@@ -86,6 +86,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -117,6 +118,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun TcptunScreen() {
     val context = LocalContext.current
+    val emptyClipboard = stringResource(R.string.empty_clipboard)
+    val profileDeletedPrefix = stringResource(R.string.profile_deleted_prefix)
+    val undoLabel = stringResource(R.string.undo)
     var state by remember { mutableStateOf(ProfileStore.load(context)) }
     var pendingConfig by remember { mutableStateOf<AppConfig?>(null) }
     var pendingNotificationConfig by remember { mutableStateOf<AppConfig?>(null) }
@@ -160,7 +164,7 @@ fun TcptunScreen() {
     fun importFromClipboard() {
         val link = clipboardText(context).trim()
         if (link.isBlank()) {
-            TcptunState.error("剪切板为空")
+            TcptunState.error(emptyClipboard)
             return
         }
         ProfileUriCodec.decode(link).fold(
@@ -218,8 +222,8 @@ fun TcptunScreen() {
         screenScope.launch {
             snackbarHostState.currentSnackbarData?.dismiss()
             val result = snackbarHostState.showSnackbar(
-                message = "已删除 ${profile.name}",
-                actionLabel = "撤销",
+                message = "$profileDeletedPrefix ${profile.name}",
+                actionLabel = undoLabel,
                 duration = SnackbarDuration.Short,
             )
             if (result == SnackbarResult.ActionPerformed) {
@@ -251,7 +255,7 @@ fun TcptunScreen() {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             topBar = {
-                TopBar(title = "配置项")
+                TopBar(title = stringResource(R.string.profiles_title))
             },
             snackbarHost = { SnackbarHost(snackbarHostState) },
             floatingActionButton = {
@@ -280,7 +284,11 @@ fun TcptunScreen() {
                         tcpingInProgress = true
                         tcpingMessage = ""
                         screenScope.launch {
-                            tcpingMessage = tcping(tcpingTarget)
+                            val result = tcping(context, tcpingTarget)
+                            tcpingMessage = result.message
+                            if (!result.success) {
+                                TcptunVpnService.requestDenseHealthCheck("tcping failed: ${tcpingTarget.label}")
+                            }
                             tcpingInProgress = false
                         }
                     },
@@ -362,7 +370,7 @@ private fun MainActionsFab(
         FloatingActionButton(onClick = { expanded = true }) {
             Icon(
                 Icons.Rounded.Add,
-                contentDescription = "操作",
+                contentDescription = stringResource(R.string.actions),
             )
         }
         DropdownMenu(
@@ -377,7 +385,7 @@ private fun MainActionsFab(
                 leadingIcon = {
                     Icon(Icons.Rounded.FileDownload, contentDescription = null)
                 },
-                text = { Text("从剪切板导入") },
+                text = { Text(stringResource(R.string.import_from_clipboard)) },
                 onClick = {
                     expanded = false
                     onImport()
@@ -391,7 +399,7 @@ private fun MainActionsFab(
                 leadingIcon = {
                     Icon(Icons.Rounded.Add, contentDescription = null)
                 },
-                text = { Text("添加配置") },
+                text = { Text(stringResource(R.string.add_profile)) },
                 onClick = {
                     expanded = false
                     onAdd()
@@ -405,7 +413,7 @@ private fun MainActionsFab(
                 leadingIcon = {
                     Icon(Icons.AutoMirrored.Rounded.AltRoute, contentDescription = null)
                 },
-                text = { Text("强制代理规则") },
+                text = { Text(stringResource(R.string.route_rules)) },
                 onClick = {
                     expanded = false
                     onRouteRules()
@@ -419,7 +427,7 @@ private fun MainActionsFab(
                 leadingIcon = {
                     Icon(Icons.Rounded.Apps, contentDescription = null)
                 },
-                text = { Text("应用过滤") },
+                text = { Text(stringResource(R.string.app_filter)) },
                 onClick = {
                     expanded = false
                     onAppFilter()
@@ -433,7 +441,7 @@ private fun MainActionsFab(
                 leadingIcon = {
                     Icon(Icons.Rounded.NetworkCheck, contentDescription = null)
                 },
-                text = { Text("诊断与设置") },
+                text = { Text(stringResource(R.string.diagnostics_settings)) },
                 onClick = {
                     expanded = false
                     onDiagnostics()
@@ -447,7 +455,7 @@ private fun MainActionsFab(
                 leadingIcon = {
                     Icon(Icons.Rounded.BatterySaver, contentDescription = null)
                 },
-                text = { Text("省电设置") },
+                text = { Text(stringResource(R.string.battery_settings)) },
                 onClick = {
                     expanded = false
                     onBatterySettings()
@@ -525,7 +533,7 @@ private fun ProfileRow(
                 IconButton(onClick = { menuExpanded = true }) {
                     Icon(
                         Icons.Rounded.MoreVert,
-                        contentDescription = "配置操作",
+                        contentDescription = stringResource(R.string.profile_actions),
                         tint = colors.onSurfaceVariant,
                     )
                 }
@@ -541,7 +549,7 @@ private fun ProfileRow(
                         leadingIcon = {
                             Icon(Icons.Rounded.Share, contentDescription = null)
                         },
-                        text = { Text("分享") },
+                        text = { Text(stringResource(R.string.share)) },
                         onClick = {
                             menuExpanded = false
                             onShare()
@@ -555,7 +563,7 @@ private fun ProfileRow(
                         leadingIcon = {
                             Icon(Icons.Rounded.Edit, contentDescription = null)
                         },
-                        text = { Text("编辑") },
+                        text = { Text(stringResource(R.string.edit)) },
                         onClick = {
                             menuExpanded = false
                             onEdit()
@@ -569,7 +577,7 @@ private fun ProfileRow(
                         leadingIcon = {
                             Icon(Icons.Rounded.Delete, contentDescription = null)
                         },
-                        text = { Text("删除") },
+                        text = { Text(stringResource(R.string.delete)) },
                         onClick = {
                             menuExpanded = false
                             onDelete()
@@ -599,12 +607,12 @@ private fun EmptyState(onAdd: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text(
-                "还没有配置项",
+                stringResource(R.string.empty_profiles),
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Button(onClick = onAdd) {
-                Text("添加配置")
+                Text(stringResource(R.string.add_profile))
             }
         }
     }
@@ -621,18 +629,18 @@ private fun BottomStatus(
 ) {
     val colors = MaterialTheme.colorScheme
     val text = when {
-        error.isNotBlank() -> "错误：$error"
-        tcpingInProgress -> "正在 TCPing..."
+        error.isNotBlank() -> stringResource(R.string.error_prefix, error)
+        tcpingInProgress -> stringResource(R.string.tcping_running)
         tcpingMessage.isNotBlank() -> tcpingMessage
-        status == "Running" -> "已连接，点击测试连接"
-        status == "Starting" -> "正在连接..."
-        status == "Stopping" -> "正在停止..."
-        hasProfile -> "未连接，点击列表项启动；点击这里测试连接"
-        else -> "未连接，添加配置后点击列表项启动"
+        status == "Running" -> stringResource(R.string.connected_tap_test)
+        status == "Starting" -> stringResource(R.string.connecting)
+        status == "Stopping" -> stringResource(R.string.stopping)
+        hasProfile -> stringResource(R.string.not_connected_tap_profile_or_test)
+        else -> stringResource(R.string.not_connected_add_profile)
     }
     val contentColor = when {
         error.isNotBlank() -> colors.error
-        tcpingMessage.startsWith("TCPing 成功") || status == "Running" -> colors.primary
+        tcpingMessage.startsWith(stringResource(R.string.tcping_success_prefix)) || status == "Running" -> colors.primary
         status == "Starting" || status == "Stopping" || tcpingInProgress -> colors.tertiary
         else -> colors.onSurfaceVariant
     }
@@ -659,6 +667,7 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
     var settings by remember { mutableStateOf(TcptunVpnService.readRuntimeSettings(context)) }
     val diagnostics = TcptunState.diagnostics.value
     val mtuOptions = listOf("1280", "1360", "1400", "1500")
+    val noneLabel = stringResource(R.string.none)
 
     fun saveSettings(next: RuntimeSettings) {
         TcptunVpnService.writeRuntimeSettings(context, next)
@@ -693,23 +702,25 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text(
-                            "运行诊断",
+                            stringResource(R.string.runtime_diagnostics),
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
-                        DiagnosticsLine("VPN", diagnostics.vpnStatus)
-                        DiagnosticsLine("Underlying network", diagnostics.underlyingNetwork)
-                        DiagnosticsLine("Bridge", diagnostics.bridgeStatus)
-                        DiagnosticsLine("Go state", diagnostics.bridgeEventState)
-                        DiagnosticsLine("Go phase", diagnostics.bridgeEventPhase)
-                        DiagnosticsLine("Go listen", diagnostics.bridgeListen.ifBlank { "None" })
-                        DiagnosticsLine("Go remote", diagnostics.bridgeRemote.ifBlank { "None" })
-                        DiagnosticsLine("Go active", diagnostics.bridgeActiveConnections.toString())
-                        DiagnosticsLine("Go error", diagnostics.bridgeLastError.ifBlank { "None" })
-                        DiagnosticsLine("Go event time", bridgeTimestampLabel(diagnostics.bridgeTimestampMs))
-                        DiagnosticsLine("127.0.0.1:1080", if (diagnostics.localProxyReachable) "Reachable" else "Not reachable")
-                        DiagnosticsLine("Socket protect", if (diagnostics.socketProtectEnabled) "Enabled" else "Disabled")
-                        DiagnosticsLine("最近重启原因", diagnostics.lastRestartReason)
+                        DiagnosticsLine(stringResource(R.string.diag_vpn), diagnostics.vpnStatus)
+                        DiagnosticsLine(stringResource(R.string.diag_underlying_network), diagnostics.underlyingNetwork)
+                        DiagnosticsLine(stringResource(R.string.diag_bridge), diagnostics.bridgeStatus)
+                        DiagnosticsLine(stringResource(R.string.diag_go_state), diagnostics.bridgeEventState)
+                        DiagnosticsLine(stringResource(R.string.diag_go_phase), diagnostics.bridgeEventPhase)
+                        DiagnosticsLine(stringResource(R.string.diag_go_listen), diagnostics.bridgeListen.ifBlank { noneLabel })
+                        DiagnosticsLine(stringResource(R.string.diag_go_remote), diagnostics.bridgeRemote.ifBlank { noneLabel })
+                        DiagnosticsLine(stringResource(R.string.diag_go_active), diagnostics.bridgeActiveConnections.toString())
+                        DiagnosticsLine(stringResource(R.string.diag_go_error), diagnostics.bridgeLastError.ifBlank { noneLabel })
+                        DiagnosticsLine(stringResource(R.string.diag_go_event_time), bridgeTimestampLabel(diagnostics.bridgeTimestampMs, noneLabel))
+                        DiagnosticsLine(stringResource(R.string.diag_local_proxy), if (diagnostics.localProxyReachable) stringResource(R.string.reachable) else stringResource(R.string.not_reachable))
+                        DiagnosticsLine(stringResource(R.string.diag_socket_protect), if (diagnostics.socketProtectEnabled) stringResource(R.string.enabled) else stringResource(R.string.disabled))
+                        DiagnosticsLine(stringResource(R.string.diag_health_interval), stringResource(R.string.seconds_value, diagnostics.healthCheckIntervalSeconds))
+                        DiagnosticsLine(stringResource(R.string.diag_power_saving), if (diagnostics.powerSavingMode) stringResource(R.string.enabled) else stringResource(R.string.disabled))
+                        DiagnosticsLine(stringResource(R.string.recent_restart_reason), diagnostics.lastRestartReason)
                     }
                 }
             }
@@ -731,7 +742,7 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
                             )
                             Spacer(Modifier.width(10.dp))
                             Text(
-                                "透明代理参数",
+                                stringResource(R.string.transparent_proxy_settings),
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.onSurface,
                             )
@@ -739,11 +750,19 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
                         ChoiceRow("MTU", settings.mtu.toString(), mtuOptions) { value ->
                             saveSettings(settings.copy(mtu = value.toIntOrNull() ?: TcptunVpnService.DEFAULT_VPN_MTU))
                         }
-                        ToggleRow("启用 UDP 转发", settings.udpEnabled) { checked ->
+                        ToggleRow(stringResource(R.string.enable_udp_relay), settings.udpEnabled) { checked ->
                             saveSettings(settings.copy(udpEnabled = checked))
                         }
+                        ToggleRow(stringResource(R.string.power_saving_mode), settings.powerSavingMode) { checked ->
+                            saveSettings(settings.copy(powerSavingMode = checked, udpEnabled = settings.udpEnabled && !checked))
+                        }
                         Text(
-                            "设置会在下次启动 VPN 时生效。关闭 UDP 可用于判断断流是否和 QUIC/UDP 路径有关。",
+                            stringResource(R.string.power_saving_note),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            stringResource(R.string.runtime_settings_note),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -761,12 +780,13 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         Text(
-                            "当前生效",
+                            stringResource(R.string.current_effective),
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         DiagnosticsLine("MTU", diagnostics.mtu.toString())
-                        DiagnosticsLine("UDP", if (diagnostics.udpEnabled) "Enabled" else "Disabled")
+                        DiagnosticsLine(stringResource(R.string.field_udp), if (diagnostics.udpEnabled) stringResource(R.string.enabled) else stringResource(R.string.disabled))
+                        DiagnosticsLine(stringResource(R.string.diag_power_saving), if (diagnostics.powerSavingMode) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                     }
                 }
             }
@@ -778,19 +798,19 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
 @Composable
 private fun DiagnosticsTopBar(onBack: () -> Unit, onShowLogs: () -> Unit) {
     TopAppBar(
-        title = { Text("诊断与设置", style = MaterialTheme.typography.titleLarge) },
+        title = { Text(stringResource(R.string.diagnostics_settings), style = MaterialTheme.typography.titleLarge) },
         navigationIcon = {
             IconButton(onClick = onBack) {
                 Icon(
                     Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = "返回",
+                    contentDescription = stringResource(R.string.back),
                     tint = MaterialTheme.colorScheme.onSurface,
                 )
             }
         },
         actions = {
             TextButton(onClick = onShowLogs) {
-                Text("日志")
+                Text(stringResource(R.string.logs))
             }
         },
     )
@@ -919,7 +939,7 @@ private fun AppFilterPage(onBack: () -> Unit) {
                         leadingIcon = {
                             Icon(Icons.Rounded.Search, contentDescription = null)
                         },
-                        label = { Text("搜索应用") },
+                        label = { Text(stringResource(R.string.search_apps)) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -992,12 +1012,12 @@ private fun AppFilterTopBar(
     canReset: Boolean,
 ) {
     TopAppBar(
-        title = { Text("应用过滤", style = MaterialTheme.typography.titleLarge) },
+        title = { Text(stringResource(R.string.app_filter), style = MaterialTheme.typography.titleLarge) },
         navigationIcon = {
             IconButton(onClick = onBack) {
                 Icon(
                     Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = "返回",
+                    contentDescription = stringResource(R.string.back),
                     tint = MaterialTheme.colorScheme.onSurface,
                 )
             }
@@ -1008,7 +1028,7 @@ private fun AppFilterTopBar(
                 onClick = onReset,
             ) {
                 Text(
-                    "重置",
+                    stringResource(R.string.reset),
                     color = if (canReset) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -1043,20 +1063,20 @@ private fun AppFilterListHeader(
                 verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 Text(
-                    "全部应用",
+                    stringResource(R.string.all_apps),
                     style = MaterialTheme.typography.titleMedium,
                     color = colors.onSurface,
                 )
                 Text(
-                    "已选择 $selectedApps / $totalApps 个",
+                    stringResource(R.string.selected_apps_count, selectedApps, totalApps),
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.onSurfaceVariant,
                 )
                 Text(
                     when {
-                        selectedApps == totalApps && totalApps > 0 -> "已全选"
-                        selectedApps == 0 -> "已全取消"
-                        else -> "已选择部分"
+                        selectedApps == totalApps && totalApps > 0 -> stringResource(R.string.all_selected)
+                        selectedApps == 0 -> stringResource(R.string.none_selected)
+                        else -> stringResource(R.string.partially_selected)
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = if (allSelected) colors.primary else colors.tertiary,
@@ -1108,7 +1128,7 @@ private fun AppFilterRow(app: AppEntry, proxied: Boolean, onChange: (Boolean) ->
                     color = colors.onSurfaceVariant,
                 )
                 Text(
-                    if (proxied) "走代理" else "不走代理",
+                    if (proxied) stringResource(R.string.use_proxy) else stringResource(R.string.bypass_proxy),
                     style = MaterialTheme.typography.bodySmall,
                     color = if (proxied) colors.primary else colors.tertiary,
                 )
@@ -1128,7 +1148,7 @@ private fun AppFilterEmptyState() {
         color = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
         Text(
-            "没有匹配的应用",
+            stringResource(R.string.empty_app_filter),
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(24.dp),
@@ -1144,16 +1164,21 @@ private fun RouteConfigPage(onBack: () -> Unit) {
     var showAddRule by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
+    val routeTypeLabels = RouteRuleType.entries.map { stringResource(it.labelRes) }
+    val routeRulesSaved = stringResource(R.string.route_rules_saved)
+    val routeRulesSaveFailed = stringResource(R.string.route_rules_save_failed)
+    val routeRulesCleared = stringResource(R.string.route_rules_cleared)
+    val routeRulesClearFailed = stringResource(R.string.route_rules_clear_failed)
 
     fun saveRules(next: List<RouteRule>): Result<Unit> {
         return TcptunVpnService.writeManualRouteConfig(context, buildRouteConfig(next))
             .onSuccess {
                 rules = next
-                message = "已保存，强制代理规则已生效"
+                message = routeRulesSaved
                 error = ""
             }
             .onFailure { err ->
-                error = err.message ?: "路由配置保存失败"
+                error = err.message ?: routeRulesSaveFailed
                 message = ""
             }
     }
@@ -1163,7 +1188,6 @@ private fun RouteConfigPage(onBack: () -> Unit) {
         RouteRuleDetailPage(
             rule = selected,
             index = selectedIndex ?: 0,
-            rules = rules,
             onBack = { selectedIndex = null },
             onSave = { updated ->
                 val targetIndex = selectedIndex ?: return@RouteRuleDetailPage Result.failure(
@@ -1186,18 +1210,18 @@ private fun RouteConfigPage(onBack: () -> Unit) {
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             RouteListTopBar(
-                title = "强制代理规则",
+                title = stringResource(R.string.route_rules),
                 onBack = onBack,
                 onAdd = { showAddRule = true },
                 onReset = {
                     TcptunVpnService.resetManualRouteConfig(context).fold(
                         onSuccess = {
                             rules = parseRouteRules(TcptunVpnService.readManualRouteConfig(context))
-                            message = "已清空强制代理规则"
+                            message = routeRulesCleared
                             error = ""
                         },
                         onFailure = { err ->
-                            error = err.message ?: "清空强制代理规则失败"
+                            error = err.message ?: routeRulesClearFailed
                             message = ""
                         },
                     )
@@ -1221,7 +1245,7 @@ private fun RouteConfigPage(onBack: () -> Unit) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
-                        "强制代理规则 ${rules.size} 条 · 启动时写入 ${TcptunVpnService.routeConfigFile(context).name}",
+                        stringResource(R.string.route_rules_summary, rules.size, TcptunVpnService.routeConfigFile(context).name),
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -1247,6 +1271,7 @@ private fun RouteConfigPage(onBack: () -> Unit) {
                 itemsIndexed(rules) { index, rule ->
                     RouteRuleRow(
                         rule = rule,
+                        typeLabel = routeTypeLabels[rule.type.ordinal],
                         onClick = { selectedIndex = index },
                     )
                 }
@@ -1280,19 +1305,19 @@ private fun RouteListTopBar(
             IconButton(onClick = onBack) {
                 Icon(
                     Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = "返回",
+                    contentDescription = stringResource(R.string.back),
                     tint = MaterialTheme.colorScheme.onSurface,
                 )
             }
         },
         actions = {
             TextButton(onClick = onReset) {
-                Text("清空", color = MaterialTheme.colorScheme.error)
+                Text(stringResource(R.string.clear), color = MaterialTheme.colorScheme.error)
             }
             IconButton(onClick = onAdd) {
                 Icon(
                     Icons.Rounded.Add,
-                    contentDescription = "添加规则",
+                    contentDescription = stringResource(R.string.add_rule),
                     tint = MaterialTheme.colorScheme.onSurface,
                 )
             }
@@ -1301,7 +1326,7 @@ private fun RouteListTopBar(
 }
 
 @Composable
-private fun RouteRuleRow(rule: RouteRule, onClick: () -> Unit) {
+private fun RouteRuleRow(rule: RouteRule, typeLabel: String, onClick: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     Surface(
         modifier = Modifier
@@ -1329,7 +1354,7 @@ private fun RouteRuleRow(rule: RouteRule, onClick: () -> Unit) {
                     .padding(vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Text(rule.type.label, style = MaterialTheme.typography.titleMedium, color = colors.onSurface)
+                Text(typeLabel, style = MaterialTheme.typography.titleMedium, color = colors.onSurface)
                 Text(rule.value, style = MaterialTheme.typography.bodyLarge, color = colors.onSurface)
                 Text(
                     "force_upstream.${rule.type.jsonKey}",
@@ -1362,12 +1387,12 @@ private fun RouteEmptyState(onAdd: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text(
-                "还没有强制代理规则",
+                stringResource(R.string.empty_route_rules),
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Button(onClick = onAdd) {
-                Text("添加规则")
+                Text(stringResource(R.string.add_rule))
             }
         }
     }
@@ -1377,7 +1402,6 @@ private fun RouteEmptyState(onAdd: () -> Unit) {
 private fun RouteRuleDetailPage(
     rule: RouteRule,
     index: Int,
-    rules: List<RouteRule>,
     onBack: () -> Unit,
     onSave: (RouteRule) -> Result<Unit>,
     onDelete: () -> Result<Unit>,
@@ -1386,28 +1410,33 @@ private fun RouteRuleDetailPage(
     var value by remember(index) { mutableStateOf(rule.value) }
     var message by remember(index) { mutableStateOf("") }
     var error by remember(index) { mutableStateOf("") }
-    val stats = routeRuleStats(rule, rules, index)
+    val routeTypes = RouteRuleType.entries
+    val routeTypeLabels = routeTypes.map { stringResource(it.labelRes) }
+    val routeRuleRequired = stringResource(R.string.route_rule_required)
+    val savedLabel = stringResource(R.string.saved)
+    val saveFailed = stringResource(R.string.save_failed)
+    val deleteFailed = stringResource(R.string.delete_failed)
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             EditTopBar(
-                title = "强制代理详情",
+                title = stringResource(R.string.route_rule_detail),
                 onBack = onBack,
                 onSave = {
                     val trimmed = value.trim()
                     if (trimmed.isBlank()) {
-                        error = "规则不能为空"
+                        error = routeRuleRequired
                         message = ""
                         return@EditTopBar
                     }
                     onSave(RouteRule(type, trimmed)).fold(
                         onSuccess = {
-                            message = "已保存"
+                            message = savedLabel
                             error = ""
                         },
                         onFailure = { err ->
-                            error = err.message ?: "保存失败"
+                            error = err.message ?: saveFailed
                             message = ""
                         },
                     )
@@ -1433,9 +1462,8 @@ private fun RouteRuleDetailPage(
                 if (error.isNotBlank()) {
                     Text(error, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
                 }
-                RouteStatsBlock(stats)
-                ChoiceRow("规则类型", type.label, RouteRuleType.entries.map { it.label }) { selected ->
-                    type = RouteRuleType.entries.first { it.label == selected }
+                ChoiceRow(stringResource(R.string.rule_type), routeTypeLabels[type.ordinal], routeTypeLabels) { selected ->
+                    type = routeTypes[routeTypeLabels.indexOf(selected).coerceAtLeast(0)]
                 }
                 OutlinedTextField(
                     value = value,
@@ -1444,7 +1472,7 @@ private fun RouteRuleDetailPage(
                         message = ""
                         error = ""
                     },
-                    label = { Text("规则") },
+                    label = { Text(stringResource(R.string.rule)) },
                     minLines = 3,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
                     modifier = Modifier.fillMaxWidth(),
@@ -1457,50 +1485,16 @@ private fun RouteRuleDetailPage(
                                 error = ""
                             },
                             onFailure = { err ->
-                                error = err.message ?: "删除失败"
+                                error = err.message ?: deleteFailed
                                 message = ""
                             },
                         )
                     },
                 ) {
-                    Text("删除这条规则", color = MaterialTheme.colorScheme.error)
+                    Text(stringResource(R.string.delete_this_rule), color = MaterialTheme.colorScheme.error)
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun RouteStatsBlock(stats: RouteRuleStats) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-    ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text("统计数据", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-            StatLine("位置", "#${stats.position}")
-            StatLine("类型", stats.typeLabel)
-            StatLine("强制代理总数", stats.totalRules.toString())
-            StatLine("有效规则", stats.effectiveRules.toString())
-            StatLine("同类规则", stats.sameTypeRules.toString())
-            StatLine("重复规则", stats.duplicateRules.toString())
-            StatLine("与内置规则重复", if (stats.defaultRule) "是" else "否")
-            StatLine("近期日志匹配", stats.recentLogHits.toString())
-        }
-    }
-}
-
-@Composable
-private fun StatLine(label: String, value: String) {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.weight(1f))
-        Text(value, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
     }
 }
 
@@ -1509,17 +1503,21 @@ private fun RouteRuleDialog(onDismiss: () -> Unit, onSave: (RouteRule) -> Result
     var type by remember { mutableStateOf(RouteRuleType.IPCIDRs) }
     var value by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
+    val routeTypes = RouteRuleType.entries
+    val routeTypeLabels = routeTypes.map { stringResource(it.labelRes) }
+    val routeRuleRequired = stringResource(R.string.route_rule_required)
+    val saveFailed = stringResource(R.string.save_failed)
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("添加强制代理规则") },
+        title = { Text(stringResource(R.string.add_route_rule)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (error.isNotBlank()) {
                     Text(error, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
                 }
-                ChoiceRow("规则类型", type.label, RouteRuleType.entries.map { it.label }) { selected ->
-                    type = RouteRuleType.entries.first { it.label == selected }
+                ChoiceRow(stringResource(R.string.rule_type), routeTypeLabels[type.ordinal], routeTypeLabels) { selected ->
+                    type = routeTypes[routeTypeLabels.indexOf(selected).coerceAtLeast(0)]
                 }
                 OutlinedTextField(
                     value = value,
@@ -1527,7 +1525,7 @@ private fun RouteRuleDialog(onDismiss: () -> Unit, onSave: (RouteRule) -> Result
                         value = it
                         error = ""
                     },
-                    label = { Text("规则") },
+                    label = { Text(stringResource(R.string.rule)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -1538,20 +1536,20 @@ private fun RouteRuleDialog(onDismiss: () -> Unit, onSave: (RouteRule) -> Result
                 onClick = {
                     val trimmed = value.trim()
                     if (trimmed.isBlank()) {
-                        error = "规则不能为空"
+                        error = routeRuleRequired
                         return@Button
                     }
                     onSave(RouteRule(type, trimmed)).onFailure { err ->
-                        error = err.message ?: "保存失败"
+                        error = err.message ?: saveFailed
                     }
                 },
             ) {
-                Text("保存")
+                Text(stringResource(R.string.save))
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("取消")
+                Text(stringResource(R.string.cancel))
             }
         },
     )
@@ -1566,7 +1564,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             EditTopBar(
-                title = if (initial.serverHost.isBlank()) "添加配置" else "编辑配置",
+                title = if (initial.serverHost.isBlank()) stringResource(R.string.add_profile) else stringResource(R.string.edit_profile),
                 onBack = onBack,
                 onSave = {
                     val error = config.validate()
@@ -1598,7 +1596,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                 OutlinedTextField(
                     value = config.name,
                     onValueChange = { config = config.copy(name = it) },
-                    label = { Text("名称") },
+                    label = { Text(stringResource(R.string.name)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -1606,24 +1604,24 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                     OutlinedTextField(
                         value = config.serverHost,
                         onValueChange = { config = config.copy(serverHost = it) },
-                        label = { Text("服务器地址") },
+                        label = { Text(stringResource(R.string.server_address)) },
                         singleLine = true,
                         modifier = Modifier.weight(1f),
                     )
                     OutlinedTextField(
                         value = config.serverPort,
                         onValueChange = { config = config.copy(serverPort = it.filter(Char::isDigit)) },
-                        label = { Text("端口") },
+                        label = { Text(stringResource(R.string.port)) },
                         singleLine = true,
                         modifier = Modifier.weight(0.52f),
                     )
                 }
-                ChoiceRow("协议", config.protocol, AppConfig.Protocols) { config = config.copy(protocol = it) }
-                ChoiceRow("Transport", config.transport, AppConfig.Transports) { config = config.copy(transport = it) }
+                ChoiceRow(stringResource(R.string.protocol), config.protocol, AppConfig.Protocols) { config = config.copy(protocol = it) }
+                ChoiceRow(stringResource(R.string.field_transport), config.transport, AppConfig.Transports) { config = config.copy(transport = it) }
                 OutlinedTextField(
                     value = config.token,
                     onValueChange = { config = config.copy(token = it) },
-                    label = { Text("UUID / password / token") },
+                    label = { Text(stringResource(R.string.field_token)) },
                     visualTransformation = PasswordVisualTransformation(),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -1632,14 +1630,14 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                     OutlinedTextField(
                         value = config.sni,
                         onValueChange = { config = config.copy(sni = it) },
-                        label = { Text("SNI") },
+                        label = { Text(stringResource(R.string.field_sni)) },
                         singleLine = true,
                         modifier = Modifier.weight(1f),
                     )
                     OutlinedTextField(
                         value = config.path,
                         onValueChange = { config = config.copy(path = it) },
-                        label = { Text("Path") },
+                        label = { Text(stringResource(R.string.field_path)) },
                         singleLine = true,
                         modifier = Modifier.weight(1f),
                     )
@@ -1647,21 +1645,21 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                 OutlinedTextField(
                     value = config.tunnelSecurity,
                     onValueChange = { config = config.copy(tunnelSecurity = it.lowercase()) },
-                    label = { Text("Security") },
+                    label = { Text(stringResource(R.string.field_security)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = config.flow,
                     onValueChange = { config = config.copy(flow = it) },
-                    label = { Text("Flow") },
+                    label = { Text(stringResource(R.string.field_flow)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = config.realityPublicKey,
                     onValueChange = { config = config.copy(realityPublicKey = it) },
-                    label = { Text("REALITY public key") },
+                    label = { Text(stringResource(R.string.field_reality_public_key)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -1669,14 +1667,14 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                     OutlinedTextField(
                         value = config.realityFingerprint,
                         onValueChange = { config = config.copy(realityFingerprint = it) },
-                        label = { Text("Fingerprint") },
+                        label = { Text(stringResource(R.string.field_fingerprint)) },
                         singleLine = true,
                         modifier = Modifier.weight(1f),
                     )
                     OutlinedTextField(
                         value = config.realityShortId,
                         onValueChange = { config = config.copy(realityShortId = it) },
-                        label = { Text("Short ID") },
+                        label = { Text(stringResource(R.string.field_short_id)) },
                         singleLine = true,
                         modifier = Modifier.weight(1f),
                     )
@@ -1684,17 +1682,17 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                 OutlinedTextField(
                     value = config.realitySpiderX,
                     onValueChange = { config = config.copy(realitySpiderX = it) },
-                    label = { Text("SpiderX") },
+                    label = { Text(stringResource(R.string.field_spider_x)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                ChoiceRow("Upstream", config.upstreamProtocol, AppConfig.UpstreamProtocols) {
+                ChoiceRow(stringResource(R.string.field_upstream), config.upstreamProtocol, AppConfig.UpstreamProtocols) {
                     config = config.copy(upstreamProtocol = it)
                 }
-                ToggleRow("TLS", config.tls) { config = config.copy(tls = it) }
-                ToggleRow("TLS insecure", config.tlsInsecure) { config = config.copy(tlsInsecure = it) }
-                ToggleRow("Mux", config.mux) { config = config.copy(mux = it) }
-                ToggleRow("UDP", config.udp) { config = config.copy(udp = it) }
+                ToggleRow(stringResource(R.string.field_tls), config.tls) { config = config.copy(tls = it) }
+                ToggleRow(stringResource(R.string.field_tls_insecure), config.tlsInsecure) { config = config.copy(tlsInsecure = it) }
+                ToggleRow(stringResource(R.string.field_mux), config.mux) { config = config.copy(mux = it) }
+                ToggleRow(stringResource(R.string.field_udp), config.udp) { config = config.copy(udp = it) }
             }
         }
     }
@@ -1709,14 +1707,14 @@ private fun EditTopBar(title: String, onBack: () -> Unit, onSave: () -> Unit) {
             IconButton(onClick = onBack) {
                 Icon(
                     Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = "返回",
+                    contentDescription = stringResource(R.string.back),
                     tint = MaterialTheme.colorScheme.onSurface,
                 )
             }
         },
         actions = {
             Button(onClick = onSave) {
-                Text("保存")
+                Text(stringResource(R.string.save))
             }
         },
     )
@@ -1786,29 +1784,18 @@ private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
     }
 }
 
-private enum class RouteRuleType(val jsonKey: String, val label: String) {
-    Domains("domains", "精确域名"),
-    DomainRegexes("domain_regexes", "域名正则"),
-    DomainSuffixes("domain_suffixes", "域名后缀"),
-    IPs("ips", "精确 IP"),
-    IPCIDRs("ip_cidrs", "IP CIDR"),
-    IPRanges("ip_ranges", "IP 范围"),
+private enum class RouteRuleType(val jsonKey: String, val labelRes: Int) {
+    Domains("domains", R.string.route_type_domains),
+    DomainRegexes("domain_regexes", R.string.route_type_domain_regexes),
+    DomainSuffixes("domain_suffixes", R.string.route_type_domain_suffixes),
+    IPs("ips", R.string.route_type_ips),
+    IPCIDRs("ip_cidrs", R.string.route_type_ip_cidrs),
+    IPRanges("ip_ranges", R.string.route_type_ip_ranges),
 }
 
 private data class RouteRule(
     val type: RouteRuleType,
     val value: String,
-)
-
-private data class RouteRuleStats(
-    val position: Int,
-    val typeLabel: String,
-    val totalRules: Int,
-    val effectiveRules: Int,
-    val sameTypeRules: Int,
-    val duplicateRules: Int,
-    val defaultRule: Boolean,
-    val recentLogHits: Int,
 )
 
 private fun parseRouteRules(routeConfig: String): List<RouteRule> {
@@ -1844,26 +1831,6 @@ private fun buildRouteConfig(rules: List<RouteRule>): String {
         .toString(2)
 }
 
-private fun routeRuleStats(rule: RouteRule, rules: List<RouteRule>, index: Int): RouteRuleStats {
-    val defaultRules = parseRouteRules(TcptunVpnService.defaultRouteConfig())
-    val logToken = rule.value.lowercase()
-    val recentLogHits = if (logToken.length >= 3 && logToken != ".*") {
-        TcptunState.logs.count { it.lowercase().contains(logToken) }
-    } else {
-        0
-    }
-    return RouteRuleStats(
-        position = index + 1,
-        typeLabel = rule.type.label,
-        totalRules = rules.size,
-        effectiveRules = (defaultRules + rules).distinct().size,
-        sameTypeRules = rules.count { it.type == rule.type },
-        duplicateRules = rules.count { it == rule },
-        defaultRule = defaultRules.any { it == rule },
-        recentLogHits = recentLogHits,
-    )
-}
-
 private data class AppEntry(
     val label: String,
     val packageName: String,
@@ -1884,17 +1851,19 @@ private fun isAppProxied(filter: AppFilterConfig, packageName: String): Boolean 
     }
 }
 
+@Composable
 private fun appFilterModeTitle(filter: AppFilterConfig): String {
     return when (filter.mode) {
-        AppFilterMode.ProxyAll -> "默认全部应用走代理"
-        AppFilterMode.BypassAll -> "仅选中应用走代理"
+        AppFilterMode.ProxyAll -> stringResource(R.string.app_filter_proxy_all_title)
+        AppFilterMode.BypassAll -> stringResource(R.string.app_filter_bypass_all_title)
     }
 }
 
+@Composable
 private fun appFilterModeDescription(filter: AppFilterConfig): String {
     return when (filter.mode) {
-        AppFilterMode.ProxyAll -> "关闭某个应用后，它会绕过 VPN。"
-        AppFilterMode.BypassAll -> "未选中的应用直连；启动前至少保留一个选中应用。"
+        AppFilterMode.ProxyAll -> stringResource(R.string.app_filter_proxy_all_description)
+        AppFilterMode.BypassAll -> stringResource(R.string.app_filter_bypass_all_description)
     }
 }
 
@@ -1933,9 +1902,10 @@ private fun loadFilterableApps(context: Context, savedPackages: Set<String>): Li
 private fun LogsDialog(onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("运行日志") },
+        title = { Text(stringResource(R.string.running_logs)) },
         text = {
             val scrollState = rememberScrollState()
+            val noLogs = stringResource(R.string.no_logs)
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1951,7 +1921,7 @@ private fun LogsDialog(onDismiss: () -> Unit) {
                 ) {
                     SelectionContainer {
                         Text(
-                            TcptunState.logs.joinToString("\n").ifBlank { "No logs yet." },
+                            TcptunState.logs.joinToString("\n").ifBlank { noLogs },
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontFamily = FontFamily.Monospace,
                             style = MaterialTheme.typography.bodySmall,
@@ -1962,12 +1932,12 @@ private fun LogsDialog(onDismiss: () -> Unit) {
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("关闭")
+                Text(stringResource(R.string.close))
             }
         },
         dismissButton = {
             TextButton(onClick = TcptunState::clearLogs) {
-                Text("清空", color = MaterialTheme.colorScheme.error)
+                Text(stringResource(R.string.clear), color = MaterialTheme.colorScheme.error)
             }
         },
     )
@@ -1977,7 +1947,7 @@ private fun shareProfile(context: Context, profile: AppConfig) {
     val send = Intent(Intent.ACTION_SEND)
         .setType("text/plain")
         .putExtra(Intent.EXTRA_TEXT, profile.shareText())
-    context.startActivity(Intent.createChooser(send, "分享配置"))
+    context.startActivity(Intent.createChooser(send, context.getString(R.string.share_profile)))
 }
 
 private data class TcpingTarget(
@@ -1992,13 +1962,21 @@ private data class TcpingResult(
     val error: String?,
 )
 
-private suspend fun tcping(target: TcpingTarget): String = withContext(Dispatchers.IO) {
+private data class TcpingCheck(
+    val message: String,
+    val success: Boolean,
+)
+
+private suspend fun tcping(context: Context, target: TcpingTarget): TcpingCheck = withContext(Dispatchers.IO) {
     val result = tcpingTarget(target)
     val elapsedMs = result.elapsedMs
     if (elapsedMs != null) {
-        "TCPing 成功 · ${target.label} ${elapsedMs}ms"
+        TcpingCheck(context.getString(R.string.tcping_success, target.label, elapsedMs), true)
     } else {
-        "TCPing 失败 · ${target.label} ${result.error ?: "失败"}"
+        TcpingCheck(
+            context.getString(R.string.tcping_failed, target.label, result.error ?: context.getString(R.string.tcping_failed_fallback)),
+            false,
+        )
     }
 }
 
@@ -2117,7 +2095,7 @@ private fun startVpn(context: Context, config: AppConfig) {
             context.startService(intent)
         }
     }.onFailure { err ->
-        TcptunState.error(err.message ?: "启动失败")
+        TcptunState.error(err.message ?: context.getString(R.string.start_failed))
     }
 }
 
@@ -2127,7 +2105,7 @@ private fun stopVpn(context: Context) {
     runCatching {
         context.startService(TcptunVpnService.stopIntent(context))
     }.onFailure { err ->
-        TcptunState.error(err.message ?: "停止失败")
+        TcptunState.error(err.message ?: context.getString(R.string.stop_failed))
     }
 }
 
@@ -2139,17 +2117,18 @@ private fun isVpnTransitionStatus(status: String): Boolean {
     return status == "Starting" || status == "Stopping"
 }
 
+@Composable
 private fun vpnStatusLabel(status: String): String {
     return when (status) {
-        "Starting" -> "启动中"
-        "Running" -> "运行中"
-        "Stopping" -> "停止中"
+        "Starting" -> stringResource(R.string.status_starting)
+        "Running" -> stringResource(R.string.status_running)
+        "Stopping" -> stringResource(R.string.status_stopping)
         else -> status
     }
 }
 
-private fun bridgeTimestampLabel(timestampMs: Long): String {
-    if (timestampMs <= 0) return "None"
+private fun bridgeTimestampLabel(timestampMs: Long, noneLabel: String): String {
+    if (timestampMs <= 0) return noneLabel
     return java.text.DateFormat.getDateTimeInstance(
         java.text.DateFormat.SHORT,
         java.text.DateFormat.MEDIUM,

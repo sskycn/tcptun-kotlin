@@ -42,7 +42,16 @@ data class AppConfig(
         return null
     }
 
-    fun toBridgeJson(localListenAddr: String, routeConfigPath: String = "", verbose: Boolean = false): String {
+    fun toBridgeJson(
+        localListenAddr: String,
+        routeConfigPath: String = "",
+        verbose: Boolean = false,
+        powerSavingMode: Boolean = false,
+    ): String {
+        val heartbeatInterval = if (powerSavingMode) "120s" else "30s"
+        val connectionIdleTimeout = if (powerSavingMode) "5m" else "2m"
+        val udpSessionTimeout = if (powerSavingMode) "2m" else "45s"
+        val retryMaxInterval = if (powerSavingMode) "15s" else "5s"
         return JSONObject()
             .put("mode", "client")
             .put("listen_addrs", JSONArray().put(localListenAddr))
@@ -67,10 +76,10 @@ data class AppConfig(
             .put("enable_udp", udp)
             .put("config_path", "")
             .put("route_config_path", routeConfigPath)
-            .put("heartbeat_interval", "30s")
-            .put("connection_idle_timeout", "2m")
-            .put("udp_session_timeout", "45s")
-            .put("retry_max_interval", "5s")
+            .put("heartbeat_interval", heartbeatInterval)
+            .put("connection_idle_timeout", connectionIdleTimeout)
+            .put("udp_session_timeout", udpSessionTimeout)
+            .put("retry_max_interval", retryMaxInterval)
             .put("verbose", verbose)
             .toString()
     }

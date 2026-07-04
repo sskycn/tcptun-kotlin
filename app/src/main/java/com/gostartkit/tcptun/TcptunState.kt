@@ -19,6 +19,8 @@ data class TcptunDiagnostics(
     val lastRestartReason: String = "None",
     val mtu: Int = 1400,
     val udpEnabled: Boolean = true,
+    val powerSavingMode: Boolean = false,
+    val healthCheckIntervalSeconds: Long = 15,
     val socketProtectEnabled: Boolean = false,
 )
 
