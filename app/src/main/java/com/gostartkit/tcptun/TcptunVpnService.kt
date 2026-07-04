@@ -11,6 +11,8 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
@@ -40,8 +42,8 @@ class TcptunVpnService : VpnService() {
     @Volatile private var bridgeConfigJson: String? = null
     @Volatile private var monitorThread: Thread? = null
     private val connectivity by lazy { getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager }
-    private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
-    private var defaultNetworkCallbackRegistered = false
+    private var underlyingNetworkCallback: ConnectivityManager.NetworkCallback? = null
+    private var underlyingNetworkCallbackRegistered = false
     @Volatile private var currentDefaultNetwork: Network? = null
     @Volatile private var stopping = false
 
@@ -146,7 +148,7 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun buildTun(config: AppConfig): android.os.ParcelFileDescriptor {
-        registerDefaultNetworkCallback()
+        registerUnderlyingNetworkCallback()
         return Builder()
             .setSession(VPN_DISPLAY_NAME)
             .setMtu(VPN_MTU)
@@ -166,9 +168,9 @@ class TcptunVpnService : VpnService() {
             .establish() ?: throw IllegalStateException("VpnService establish() returned null")
     }
 
-    private fun registerDefaultNetworkCallback() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || defaultNetworkCallbackRegistered) return
-        val callback = defaultNetworkCallback ?: object : ConnectivityManager.NetworkCallback() {
+    private fun registerUnderlyingNetworkCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || underlyingNetworkCallbackRegistered) return
+        val callback = underlyingNetworkCallback ?: object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 val previous = currentDefaultNetwork
                 currentDefaultNetwork = network
@@ -186,23 +188,27 @@ class TcptunVpnService : VpnService() {
                 }
                 setUnderlyingNetworks(null)
             }
-        }.also { defaultNetworkCallback = it }
+        }.also { underlyingNetworkCallback = it }
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+            .build()
         runCatching {
-            connectivity.registerDefaultNetworkCallback(callback)
-            defaultNetworkCallbackRegistered = true
-            TcptunState.appendLog("default network callback registered")
+            connectivity.registerNetworkCallback(request, callback)
+            underlyingNetworkCallbackRegistered = true
+            TcptunState.appendLog("underlying network callback registered")
         }.onFailure { err ->
-            TcptunState.appendLog("default network callback unavailable: ${err.message}")
+            TcptunState.appendLog("underlying network callback unavailable: ${err.message}")
         }
     }
 
-    private fun unregisterDefaultNetworkCallback() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || !defaultNetworkCallbackRegistered) return
-        defaultNetworkCallback?.let { callback ->
+    private fun unregisterUnderlyingNetworkCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || !underlyingNetworkCallbackRegistered) return
+        underlyingNetworkCallback?.let { callback ->
             runCatching { connectivity.unregisterNetworkCallback(callback) }
-                .onFailure { err -> TcptunState.appendLog("default network callback unregister failed: ${err.message}") }
+                .onFailure { err -> TcptunState.appendLog("underlying network callback unregister failed: ${err.message}") }
         }
-        defaultNetworkCallbackRegistered = false
+        underlyingNetworkCallbackRegistered = false
         currentDefaultNetwork = null
     }
 
@@ -213,7 +219,7 @@ class TcptunVpnService : VpnService() {
             TcptunState.setStatus("Stopping")
         }
         stopBridgeMonitor()
-        unregisterDefaultNetworkCallback()
+        unregisterUnderlyingNetworkCallback()
         if (clearSavedConfig) {
             clearLastRunningConfig(this)
         }
