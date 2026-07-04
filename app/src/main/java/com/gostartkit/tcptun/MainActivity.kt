@@ -700,6 +700,13 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
                         DiagnosticsLine("VPN", diagnostics.vpnStatus)
                         DiagnosticsLine("Underlying network", diagnostics.underlyingNetwork)
                         DiagnosticsLine("Bridge", diagnostics.bridgeStatus)
+                        DiagnosticsLine("Go state", diagnostics.bridgeEventState)
+                        DiagnosticsLine("Go phase", diagnostics.bridgeEventPhase)
+                        DiagnosticsLine("Go listen", diagnostics.bridgeListen.ifBlank { "None" })
+                        DiagnosticsLine("Go remote", diagnostics.bridgeRemote.ifBlank { "None" })
+                        DiagnosticsLine("Go active", diagnostics.bridgeActiveConnections.toString())
+                        DiagnosticsLine("Go error", diagnostics.bridgeLastError.ifBlank { "None" })
+                        DiagnosticsLine("Go event time", bridgeTimestampLabel(diagnostics.bridgeTimestampMs))
                         DiagnosticsLine("127.0.0.1:1080", if (diagnostics.localProxyReachable) "Reachable" else "Not reachable")
                         DiagnosticsLine("Socket protect", if (diagnostics.socketProtectEnabled) "Enabled" else "Disabled")
                         DiagnosticsLine("最近重启原因", diagnostics.lastRestartReason)
@@ -2139,6 +2146,14 @@ private fun vpnStatusLabel(status: String): String {
         "Stopping" -> "停止中"
         else -> status
     }
+}
+
+private fun bridgeTimestampLabel(timestampMs: Long): String {
+    if (timestampMs <= 0) return "None"
+    return java.text.DateFormat.getDateTimeInstance(
+        java.text.DateFormat.SHORT,
+        java.text.DateFormat.MEDIUM,
+    ).format(java.util.Date(timestampMs))
 }
 
 private const val TCPING_TIMEOUT_MS = 3_000

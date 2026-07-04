@@ -7,6 +7,8 @@ interface TcptunBridge {
     fun stop()
     fun status(): String
     fun setLogCallback(onLog: (String) -> Unit)
+    fun setStatusCallback(onStatus: (String) -> Unit)
+    fun clearStatusCallback()
     fun setSocketProtector(onProtect: (Int) -> Boolean)
     fun clearSocketProtector()
 }
@@ -56,6 +58,44 @@ class ReflectionTcptunBridge : TcptunBridge {
             "SetLogCallback",
             parameterTypes = arrayOf(callbackClass),
             callback,
+        )
+    }
+
+    override fun setStatusCallback(onStatus: (String) -> Unit) {
+        val callbackClass = try {
+            Class.forName("androidbridge.StatusCallback")
+        } catch (err: ClassNotFoundException) {
+            TcptunState.appendLog("androidbridge StatusCallback is not available: ${err.message}")
+            return
+        }
+        val callback = Proxy.newProxyInstance(
+            callbackClass.classLoader,
+            arrayOf(callbackClass),
+        ) { _, method, args ->
+            if (method.name.equals("onStatus", ignoreCase = true) && !args.isNullOrEmpty()) {
+                onStatus(args[0].toString())
+            }
+            null
+        }
+        invokeStatic(
+            "setStatusCallback",
+            "SetStatusCallback",
+            parameterTypes = arrayOf(callbackClass),
+            callback,
+        )
+    }
+
+    override fun clearStatusCallback() {
+        val callbackClass = try {
+            Class.forName("androidbridge.StatusCallback")
+        } catch (_: ClassNotFoundException) {
+            return
+        }
+        invokeStatic(
+            "setStatusCallback",
+            "SetStatusCallback",
+            parameterTypes = arrayOf(callbackClass),
+            null,
         )
     }
 

@@ -27,11 +27,16 @@ type LogCallback interface {
 	OnLog(line string)
 }
 
+type StatusCallback interface {
+	OnStatus(eventJson string)
+}
+
 type SocketProtector interface {
 	Protect(fd int64) bool
 }
 
 func SetLogCallback(cb LogCallback)
+func SetStatusCallback(cb StatusCallback)
 func SetSocketProtector(p SocketProtector)
 func Start(configJson string) error
 func Stop() error
@@ -68,6 +73,12 @@ func Status() string
   "verbose": true
 }
 ```
+
+`SetStatusCallback` is optional for backward compatibility. Newer AARs call
+`StatusCallback.OnStatus(eventJson)` with JSON fields such as `state`, `phase`,
+`listen`, `remote`, `active_connections`, `last_error`, and `timestamp_ms`. The
+Android diagnostics screen shows the latest event, while `Status()` remains the
+fallback simple bridge status.
 
 Build the AAR through this Kotlin project wrapper:
 

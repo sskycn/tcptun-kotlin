@@ -51,6 +51,7 @@ class TcptunVpnService : VpnService() {
     private var underlyingNetworkCallbackRegistered = false
     @Volatile private var currentDefaultNetwork: Network? = null
     @Volatile private var stopping = false
+    @Volatile private var lastBridgeRestartAtMs = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -109,6 +110,10 @@ class TcptunVpnService : VpnService() {
                 val effectiveUdpEnabled = config.udp && runtimeSettings.udpEnabled
                 saveLastRunningConfig(this, config)
                 bridge.setLogCallback(TcptunState::appendLog)
+                bridge.setStatusCallback { eventJson ->
+                    TcptunState.applyBridgeStatusEvent(eventJson)
+                    handleBridgeStatusEvent(eventJson)
+                }
                 bridge.setSocketProtector { fd -> protect(fd) }
                 TcptunState.updateDiagnostics {
                     it.copy(
@@ -196,9 +201,7 @@ class TcptunVpnService : VpnService() {
                 updateUnderlyingDiagnostics(network)
                 setUnderlyingNetworks(arrayOf(network))
                 if (previous != null && previous != network && tun != null && !stopping) {
-                    Thread {
-                        restartBridge("default network changed")
-                    }.start()
+                    requestBridgeRestart("default network changed")
                 }
             }
 
@@ -287,6 +290,7 @@ class TcptunVpnService : VpnService() {
         synchronized(bridgeLock) {
             bridgeConfigJson = null
             runCatching { bridge.stop() }
+            runCatching { bridge.clearStatusCallback() }
             runCatching { bridge.clearSocketProtector() }
         }
     }
@@ -295,6 +299,14 @@ class TcptunVpnService : VpnService() {
         val configJson = bridgeConfigJson ?: return
         synchronized(bridgeLock) {
             if (stopping || tun == null) return
+            val now = System.currentTimeMillis()
+            val elapsedMs = now - lastBridgeRestartAtMs
+            if (elapsedMs < BRIDGE_RESTART_MIN_INTERVAL_MS) {
+                val waitSeconds = ((BRIDGE_RESTART_MIN_INTERVAL_MS - elapsedMs) / 1_000).coerceAtLeast(1)
+                TcptunState.appendLog("tcptun bridge restart skipped by cooldown: $reason; wait ${waitSeconds}s")
+                return
+            }
+            lastBridgeRestartAtMs = now
             TcptunState.appendLog("restarting tcptun bridge: $reason")
             TcptunState.updateDiagnostics { it.copy(lastRestartReason = reason, bridgeStatus = "Restarting") }
             runCatching { bridge.stop() }
@@ -304,6 +316,24 @@ class TcptunVpnService : VpnService() {
             TcptunState.appendLog("tcptun bridge restarted")
             updateBridgeDiagnostics()
         }
+    }
+
+    private fun requestBridgeRestart(reason: String) {
+        Thread {
+            runCatching { restartBridge(reason) }
+                .onFailure { err -> TcptunState.appendLog("tcptun bridge restart failed: ${err.message}") }
+        }.apply {
+            name = "TcptunBridgeRestart"
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun handleBridgeStatusEvent(eventJson: String) {
+        val eventState = runCatching { JSONObject(eventJson).optString("state").lowercase() }.getOrDefault("")
+        if (eventState != "error" && eventState != "stopped") return
+        if (stopping || tun == null) return
+        requestBridgeRestart("tcptun reported $eventState")
     }
 
     private fun startBridgeMonitor() {
@@ -470,6 +500,7 @@ class TcptunVpnService : VpnService() {
         private const val BRIDGE_HEALTH_INTERVAL_MS = 15_000L
         private const val BRIDGE_HEALTH_FAILURE_LIMIT = 2
         private const val BRIDGE_RESTART_DELAY_MS = 300L
+        private const val BRIDGE_RESTART_MIN_INTERVAL_MS = 30_000L
         private const val LOCAL_PROXY_CONNECT_TIMEOUT_MS = 1_000
         private const val ROUTE_CONFIG_FILE = "android-route.json"
         private const val ROUTE_PREFS = "tcptun_route"
