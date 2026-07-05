@@ -130,6 +130,7 @@ fun TcptunScreen() {
     var showRouteEditor by remember { mutableStateOf(false) }
     var showAppFilter by remember { mutableStateOf(false) }
     var showDiagnostics by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
     var tcpingMessage by remember { mutableStateOf("") }
     var tcpingInProgress by remember { mutableStateOf(false) }
@@ -253,6 +254,10 @@ fun TcptunScreen() {
             onBack = { showDiagnostics = false },
             onShowLogs = { showLogs = true },
         )
+    } else if (showSettings) {
+        SettingsPage(
+            onBack = { showSettings = false },
+        )
     } else if (editing == null) {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
@@ -267,6 +272,7 @@ fun TcptunScreen() {
                     onRouteRules = { showRouteEditor = true },
                     onAppFilter = { showAppFilter = true },
                     onDiagnostics = { showDiagnostics = true },
+                    onSettings = { showSettings = true },
                     onBatterySettings = { openBatteryOptimizationSettings(context) },
                 )
             },
@@ -367,6 +373,7 @@ private fun MainActionsFab(
     onRouteRules: () -> Unit,
     onAppFilter: () -> Unit,
     onDiagnostics: () -> Unit,
+    onSettings: () -> Unit,
     onBatterySettings: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -447,10 +454,24 @@ private fun MainActionsFab(
                 leadingIcon = {
                     Icon(Icons.Rounded.NetworkCheck, contentDescription = null)
                 },
-                text = { Text(stringResource(R.string.diagnostics_settings)) },
+                text = { Text(stringResource(R.string.diagnostics)) },
                 onClick = {
                     expanded = false
                     onDiagnostics()
+                },
+                colors = MenuDefaults.itemColors(
+                    textColor = colors.onSurface,
+                    leadingIconColor = colors.onSurfaceVariant,
+                ),
+            )
+            DropdownMenuItem(
+                leadingIcon = {
+                    Icon(Icons.Rounded.Tune, contentDescription = null)
+                },
+                text = { Text(stringResource(R.string.settings)) },
+                onClick = {
+                    expanded = false
+                    onSettings()
                 },
                 colors = MenuDefaults.itemColors(
                     textColor = colors.onSurface,
@@ -671,18 +692,8 @@ private fun BottomStatus(
 
 @Composable
 private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
-    val context = LocalContext.current
-    var settings by remember { mutableStateOf(TcptunVpnService.readRuntimeSettings(context)) }
-    var socksPortText by remember { mutableStateOf(settings.socksPort.toString()) }
     val diagnostics = TcptunState.diagnostics.value
-    val mtuOptions = listOf("1280", "1360", "1400", "1500")
     val noneLabel = stringResource(R.string.none)
-
-    fun saveSettings(next: RuntimeSettings) {
-        TcptunVpnService.writeRuntimeSettings(context, next)
-        settings = TcptunVpnService.readRuntimeSettings(context)
-        socksPortText = settings.socksPort.toString()
-    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -736,6 +747,37 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SettingsPage(onBack: () -> Unit) {
+    val context = LocalContext.current
+    var settings by remember { mutableStateOf(TcptunVpnService.readRuntimeSettings(context)) }
+    var socksPortText by remember { mutableStateOf(settings.socksPort.toString()) }
+    val diagnostics = TcptunState.diagnostics.value
+    val mtuOptions = listOf("1280", "1360", "1400", "1500")
+
+    fun saveSettings(next: RuntimeSettings) {
+        TcptunVpnService.writeRuntimeSettings(context, next)
+        settings = TcptunVpnService.readRuntimeSettings(context)
+        socksPortText = settings.socksPort.toString()
+    }
+
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            SettingsTopBar(onBack = onBack)
+        },
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             item {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
@@ -857,7 +899,7 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
 @Composable
 private fun DiagnosticsTopBar(onBack: () -> Unit, onShowLogs: () -> Unit) {
     TopAppBar(
-        title = { Text(stringResource(R.string.diagnostics_settings), style = MaterialTheme.typography.titleLarge) },
+        title = { Text(stringResource(R.string.diagnostics), style = MaterialTheme.typography.titleLarge) },
         navigationIcon = {
             IconButton(onClick = onBack) {
                 Icon(
@@ -870,6 +912,23 @@ private fun DiagnosticsTopBar(onBack: () -> Unit, onShowLogs: () -> Unit) {
         actions = {
             TextButton(onClick = onShowLogs) {
                 Text(stringResource(R.string.logs))
+            }
+        },
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsTopBar(onBack: () -> Unit) {
+    TopAppBar(
+        title = { Text(stringResource(R.string.settings), style = MaterialTheme.typography.titleLarge) },
+        navigationIcon = {
+            IconButton(onClick = onBack) {
+                Icon(
+                    Icons.AutoMirrored.Rounded.ArrowBack,
+                    contentDescription = stringResource(R.string.back),
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
             }
         },
     )

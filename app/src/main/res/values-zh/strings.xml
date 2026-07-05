@@ -26,7 +26,8 @@
     <string name="stopping">正在停止...</string>
     <string name="not_connected_tap_profile_or_test">未连接，点击列表项启动</string>
     <string name="not_connected_add_profile">未连接，添加配置后点击列表项启动</string>
-    <string name="diagnostics_settings">诊断与设置</string>
+    <string name="diagnostics">诊断</string>
+    <string name="settings">设置</string>
     <string name="battery_settings">省电设置</string>
     <string name="runtime_diagnostics">运行诊断</string>
     <string name="diag_vpn">VPN</string>

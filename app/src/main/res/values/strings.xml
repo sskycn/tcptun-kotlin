@@ -26,7 +26,8 @@
     <string name="stopping">Stopping...</string>
     <string name="not_connected_tap_profile_or_test">Not connected. Tap a profile to start.</string>
     <string name="not_connected_add_profile">Not connected. Add a profile, then tap it to start.</string>
-    <string name="diagnostics_settings">Diagnostics &amp; settings</string>
+    <string name="diagnostics">Diagnostics</string>
+    <string name="settings">Settings</string>
     <string name="battery_settings">Battery settings</string>
     <string name="runtime_diagnostics">Runtime diagnostics</string>
     <string name="diag_vpn">VPN</string>
