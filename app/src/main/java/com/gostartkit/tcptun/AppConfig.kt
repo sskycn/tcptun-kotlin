@@ -28,7 +28,16 @@ data class AppConfig(
     val upstreamProtocol: String = "socks5",
 ) {
     val serverAddr: String
-        get() = "${serverHost.trim()}:${serverPort.trim()}"
+        get() {
+            val host = serverHost.trim()
+            val port = serverPort.trim()
+            val authorityHost = when {
+                host.startsWith("[") && host.endsWith("]") -> host
+                host.contains(":") -> "[$host]"
+                else -> host
+            }
+            return "$authorityHost:$port"
+        }
 
     fun validate(): String? {
         if (name.isBlank()) return "profile name is required"
@@ -51,8 +60,8 @@ data class AppConfig(
         socks5Password: String = "",
         routeExternalSources: Boolean = false,
     ): String {
-        val heartbeatInterval = if (powerSavingMode) "120s" else "30s"
-        val connectionIdleTimeout = if (powerSavingMode) "5m" else "2m"
+        val heartbeatInterval = if (powerSavingMode) "60s" else "30s"
+        val connectionIdleTimeout = if (powerSavingMode) "15m" else "30m"
         val udpSessionTimeout = if (powerSavingMode) "2m" else "45s"
         val retryMaxInterval = if (powerSavingMode) "15s" else "5s"
         return JSONObject()

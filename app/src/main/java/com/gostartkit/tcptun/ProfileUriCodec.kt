@@ -16,6 +16,7 @@ object ProfileUriCodec {
                 trimmed.startsWith("vless://", ignoreCase = true) -> decodeAuthorityProfile("vless", trimmed)
                 trimmed.startsWith("trojan://", ignoreCase = true) -> decodeAuthorityProfile("trojan", trimmed)
                 trimmed.startsWith("native://", ignoreCase = true) -> decodeAuthorityProfile("native", trimmed)
+                trimmed.contains("{") && trimmed.contains("}") -> decodeJsonProfile(trimmed)
                 else -> error("unsupported profile URI")
             }
         }
@@ -124,6 +125,57 @@ object ProfileUriCodec {
         )
     }
 
+    private fun decodeJsonProfile(raw: String): AppConfig {
+        val obj = JSONObject(extractJsonObject(raw))
+        if (obj.has("serverHost") || obj.has("serverPort")) {
+            return AppConfig.fromJson(obj).copy(id = UUID.randomUUID().toString())
+        }
+        if (!obj.has("server_addr") && !obj.has("tunnel_protocol")) {
+            error("unsupported profile JSON")
+        }
+        return decodeTcptunClientJson(obj)
+    }
+
+    private fun decodeTcptunClientJson(obj: JSONObject): AppConfig {
+        val serverAddr = obj.optString("server_addr").trim()
+        if (serverAddr.isBlank()) error("missing client server_addr")
+        val (host, port) = splitHostPort(serverAddr)
+        val protocol = obj.optString("tunnel_protocol", "native").trim().lowercase().ifBlank { "native" }
+        if (protocol !in AppConfig.Protocols) error("unsupported tunnel_protocol: $protocol")
+        val tunnelSecurity = obj.optString("tunnel_security").trim().lowercase()
+        val normalizedSecurity = when (tunnelSecurity) {
+            "", "none", "tls" -> ""
+            else -> tunnelSecurity
+        }
+        val sni = obj.optString("tunnel_tls_server_name").ifBlank {
+            obj.optString("reality_server_name")
+        }
+        return AppConfig(
+            id = UUID.randomUUID().toString(),
+            name = obj.optString("name").ifBlank { host },
+            serverHost = host,
+            serverPort = port,
+            protocol = protocol,
+            transport = transportFromType(obj.optString("tunnel_transport", "raw")),
+            token = obj.optString("token"),
+            sni = sni,
+            path = obj.optString("tunnel_path", "/proxy").ifBlank { "/proxy" },
+            tls = obj.optBoolean("tunnel_tls", false) || tunnelSecurity == "tls",
+            tlsInsecure = obj.optBoolean("tunnel_tls_insecure", false),
+            tunnelSecurity = normalizedSecurity,
+            flow = obj.optString("tunnel_flow"),
+            realityPublicKey = obj.optString("reality_public_key"),
+            realityShortId = obj.optString("reality_short_id").ifBlank {
+                obj.optFirstString("reality_short_ids")
+            },
+            realityFingerprint = obj.optString("reality_fingerprint"),
+            realitySpiderX = obj.optString("reality_spider_x"),
+            mux = obj.optBoolean("tunnel_mux", true),
+            udp = obj.optBoolean("enable_udp", true),
+            upstreamProtocol = obj.optString("upstream_protocol", "socks5").ifBlank { "socks5" },
+        )
+    }
+
     private fun encodeVMess(config: AppConfig): String? {
         val host = config.serverHost.trim()
         val port = config.serverPort.trim()
@@ -192,6 +244,38 @@ object ProfileUriCodec {
         }
     }
 
+    private fun extractJsonObject(raw: String): String {
+        val start = raw.indexOf('{')
+        val end = raw.lastIndexOf('}')
+        if (start < 0 || end <= start) error("unsupported profile JSON")
+        return raw.substring(start, end + 1)
+    }
+
+    private fun splitHostPort(value: String): Pair<String, String> {
+        val trimmed = value.trim()
+        if (trimmed.startsWith("[")) {
+            val hostEnd = trimmed.indexOf(']')
+            if (hostEnd <= 1 || hostEnd + 1 >= trimmed.length || trimmed[hostEnd + 1] != ':') {
+                error("server_addr must be host:port")
+            }
+            val host = trimmed.substring(1, hostEnd)
+            val port = trimmed.substring(hostEnd + 2)
+            validatePort(port)
+            return host to port
+        }
+        val portStart = trimmed.lastIndexOf(':')
+        if (portStart <= 0 || portStart == trimmed.lastIndex) error("server_addr must be host:port")
+        val host = trimmed.substring(0, portStart)
+        val port = trimmed.substring(portStart + 1)
+        validatePort(port)
+        return host to port
+    }
+
+    private fun validatePort(port: String) {
+        val portNumber = port.toIntOrNull()
+        if (portNumber == null || portNumber !in 1..65535) error("missing or invalid server_addr port")
+    }
+
     private fun transportFromType(type: String): String {
         return when (type.lowercase()) {
             "", "tcp", "raw" -> "raw"
@@ -227,6 +311,11 @@ object ProfileUriCodec {
 
     private fun putJsonIfNotBlank(obj: JSONObject, key: String, value: String) {
         if (value.isNotBlank()) obj.put(key, value)
+    }
+
+    private fun JSONObject.optFirstString(name: String): String {
+        val arr = optJSONArray(name) ?: return ""
+        return if (arr.length() > 0) arr.optString(0) else ""
     }
 
     private fun encodeComponent(value: String): String {
