@@ -786,8 +786,8 @@ class TcptunVpnService : VpnService() {
             "com.google.android.gsf",
         )
         private val UPSTREAM_PROBE_TARGETS = listOf(
-            UpstreamProbeTarget("Google", "google.com"),
             UpstreamProbeTarget("GitHub", "github.com"),
+            UpstreamProbeTarget("Cloudflare", "cloudflare.com"),
         )
         private val GOOGLE_PROXY_COMPANIONS = DEFAULT_PROXY_COMPANIONS + "com.android.vending"
         private val META_PROXY_COMPANIONS = setOf(

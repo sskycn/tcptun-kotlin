@@ -2137,6 +2137,6 @@ private fun bridgeTimestampLabel(timestampMs: Long, noneLabel: String): String {
 
 private const val TCPING_TIMEOUT_MS = 3_000
 private val TCPING_TARGETS = listOf(
-    TcpingTarget("Google", "google.com"),
     TcpingTarget("GitHub", "github.com"),
+    TcpingTarget("Cloudflare", "cloudflare.com"),
 )
