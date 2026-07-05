@@ -58,7 +58,7 @@
     <string name="enable_udp_relay">Enable UDP relay</string>
     <string name="power_saving_mode">Power saving mode</string>
     <string name="power_saving_note">Power saving mode disables UDP relay, uses longer bridge heartbeat/retry timers, and lowers idle health-check frequency.</string>
-    <string name="runtime_settings_note">Settings take effect the next time the VPN starts. Disable UDP to check whether disconnects are related to QUIC/UDP routing.</string>
+    <string name="runtime_settings_note">Settings are saved while editing. When you go back, the running VPN restarts once to apply changed settings. Disable UDP to check whether disconnects are related to QUIC/UDP routing.</string>
     <string name="current_effective">Current effective settings</string>
     <string name="back">Back</string>
     <string name="logs">Logs</string>

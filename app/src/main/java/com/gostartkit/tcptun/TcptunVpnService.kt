@@ -88,6 +88,8 @@ class TcptunVpnService : VpnService() {
     @Volatile private var activeSocksUsername = ""
     @Volatile private var activeSocksPassword = ""
     @Volatile private var upstreamProbeIndex = 0
+    @Volatile private var runtimeSettingsApplyGeneration = 0
+    private val runtimeSettingsApplyLock = Any()
     private var deviceActivityReceiver: BroadcastReceiver? = null
 
     override fun onCreate() {
@@ -104,6 +106,7 @@ class TcptunVpnService : VpnService() {
         when (intent?.action) {
             ACTION_START -> startFromIntent(intent)
             ACTION_STOP -> stopVpn()
+            ACTION_APPLY_RUNTIME_SETTINGS -> requestRuntimeSettingsRestart("runtime settings changed")
             else -> restoreLastRunningConfig()
         }
         return START_STICKY
@@ -124,7 +127,7 @@ class TcptunVpnService : VpnService() {
             try {
                 TcptunState.setStatus("Starting")
                 startVpnForeground("Starting")
-                val config = AppConfig(
+                val fallbackConfig = AppConfig(
                     serverHost = intent.getStringExtra("serverHost").orEmpty(),
                     serverPort = intent.getStringExtra("serverPort") ?: "9443",
                     protocol = intent.getStringExtra("protocol") ?: "native",
@@ -144,6 +147,9 @@ class TcptunVpnService : VpnService() {
                     udp = intent.getBooleanExtra("udp", true),
                     upstreamProtocol = intent.getStringExtra("upstreamProtocol") ?: "socks5",
                 )
+                val config = intent.getStringExtra(EXTRA_PROFILE_CONFIG)
+                    ?.let { raw -> runCatching { AppConfig.fromJson(JSONObject(raw)) }.getOrNull() }
+                    ?: fallbackConfig
                 val runtimeSettings = readRuntimeSettings(this)
                 val effectiveUdpEnabled = config.udp && runtimeSettings.udpEnabled && !runtimeSettings.powerSavingMode
                 activeSocksPort = runtimeSettings.socksPort
@@ -480,6 +486,44 @@ class TcptunVpnService : VpnService() {
                 .onFailure { err -> TcptunState.appendLog("tcptun bridge restart failed: ${err.message}") }
         }.apply {
             name = "TcptunBridgeRestart"
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun requestRuntimeSettingsRestart(reason: String) {
+        val generation = synchronized(runtimeSettingsApplyLock) {
+            runtimeSettingsApplyGeneration += 1
+            runtimeSettingsApplyGeneration
+        }
+        TcptunState.appendLog("runtime settings apply requested: $reason")
+        Thread {
+            try {
+                Thread.sleep(RUNTIME_SETTINGS_RESTART_DEBOUNCE_MS)
+                val shouldApply = synchronized(runtimeSettingsApplyLock) {
+                    generation == runtimeSettingsApplyGeneration
+                }
+                if (!shouldApply) return@Thread
+                val config = readLastRunningConfig(this) ?: run {
+                    TcptunState.appendLog("runtime settings apply skipped: no running profile")
+                    if (tun == null) stopSelf()
+                    return@Thread
+                }
+                if (tun == null || stopping) {
+                    TcptunState.appendLog("runtime settings apply skipped: VPN is not running")
+                    if (tun == null) stopSelf()
+                    return@Thread
+                }
+                TcptunState.updateDiagnostics { it.copy(lastRestartReason = reason) }
+                TcptunState.appendLog("restarting VPN to apply runtime settings")
+                startFromIntent(startIntent(this, config))
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            } catch (err: Exception) {
+                TcptunState.appendLog("runtime settings apply failed: ${err.message}")
+            }
+        }.apply {
+            name = "TcptunRuntimeSettingsApply"
             isDaemon = true
             start()
         }
@@ -842,7 +886,9 @@ class TcptunVpnService : VpnService() {
     companion object {
         const val ACTION_START = "com.tcptun.client.START"
         const val ACTION_STOP = "com.tcptun.client.STOP"
+        const val ACTION_APPLY_RUNTIME_SETTINGS = "com.tcptun.client.APPLY_RUNTIME_SETTINGS"
         const val EXTRA_CONFIG = "config"
+        private const val EXTRA_PROFILE_CONFIG = "profileConfig"
         const val LOCAL_SOCKS_HOST = "127.0.0.1"
         const val DEFAULT_SOCKS_PORT = 1080
         const val DEFAULT_VPN_MTU = 1400
@@ -860,6 +906,7 @@ class TcptunVpnService : VpnService() {
         private const val BRIDGE_RESTART_MIN_INTERVAL_MS = 30_000L
         private const val TUNNEL_RESTART_DELAY_MS = 300L
         private const val TUNNEL_RESTART_MIN_INTERVAL_MS = 30_000L
+        private const val RUNTIME_SETTINGS_RESTART_DEBOUNCE_MS = 800L
         private const val TUNNEL_STATS_SIZE = 4
         private const val LOCAL_PROXY_CONNECT_TIMEOUT_MS = 1_000
         private const val UPSTREAM_PROBE_TIMEOUT_MS = 3_000
@@ -992,12 +1039,17 @@ class TcptunVpnService : VpnService() {
                 .putExtra("realityFingerprint", effectiveConfig.realityFingerprint)
                 .putExtra("realitySpiderX", effectiveConfig.realitySpiderX)
                 .putExtra("mux", effectiveConfig.mux)
-                .putExtra("udp", effectiveConfig.udp)
+                .putExtra("udp", config.udp)
                 .putExtra("upstreamProtocol", effectiveConfig.upstreamProtocol)
+                .putExtra(EXTRA_PROFILE_CONFIG, config.toJson().toString())
         }
 
         fun stopIntent(context: Context): Intent {
             return Intent(context, TcptunVpnService::class.java).setAction(ACTION_STOP)
+        }
+
+        fun applyRuntimeSettingsIntent(context: Context): Intent {
+            return Intent(context, TcptunVpnService::class.java).setAction(ACTION_APPLY_RUNTIME_SETTINGS)
         }
 
         fun requestDenseHealthCheck(reason: String) {

@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -756,19 +757,36 @@ private fun SettingsPage(onBack: () -> Unit) {
     val context = LocalContext.current
     var settings by remember { mutableStateOf(TcptunVpnService.readRuntimeSettings(context)) }
     var socksPortText by remember { mutableStateOf(settings.socksPort.toString()) }
+    var settingsDirty by remember { mutableStateOf(false) }
     val diagnostics = TcptunState.diagnostics.value
     val mtuOptions = listOf("1280", "1360", "1400", "1500")
 
     fun saveSettings(next: RuntimeSettings) {
+        val before = settings
         TcptunVpnService.writeRuntimeSettings(context, next)
         settings = TcptunVpnService.readRuntimeSettings(context)
         socksPortText = settings.socksPort.toString()
+        if (settings != before) {
+            settingsDirty = true
+        }
     }
+
+    fun leaveSettings() {
+        val socksPort = socksPortText.toIntOrNull()
+        if (socksPort == null || socksPort !in 1..65535) return
+        if (settingsDirty) {
+            applyRuntimeSettings(context)
+            settingsDirty = false
+        }
+        onBack()
+    }
+
+    BackHandler(onBack = ::leaveSettings)
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            SettingsTopBar(onBack = onBack)
+            SettingsTopBar(onBack = ::leaveSettings)
         },
     ) { padding ->
         LazyColumn(
@@ -2252,6 +2270,16 @@ private fun stopVpn(context: Context) {
         context.startService(TcptunVpnService.stopIntent(context))
     }.onFailure { err ->
         TcptunState.error(err.message ?: context.getString(R.string.stop_failed))
+    }
+}
+
+private fun applyRuntimeSettings(context: Context) {
+    val status = TcptunState.status.value
+    if (status != "Starting" && status != "Running") return
+    runCatching {
+        context.startService(TcptunVpnService.applyRuntimeSettingsIntent(context))
+    }.onFailure { err ->
+        TcptunState.appendLog("runtime settings apply request failed: ${err.message}")
     }
 }
 

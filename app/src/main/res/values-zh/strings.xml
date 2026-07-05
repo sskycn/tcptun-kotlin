@@ -58,7 +58,7 @@
     <string name="enable_udp_relay">启用 UDP 转发</string>
     <string name="power_saving_mode">省电模式</string>
     <string name="power_saving_note">省电模式会关闭 UDP 转发，使用更长的 bridge 心跳/重试参数，并降低空闲健康检查频率。</string>
-    <string name="runtime_settings_note">设置会在下次启动 VPN 时生效。关闭 UDP 可用于判断断流是否和 QUIC/UDP 路径有关。</string>
+    <string name="runtime_settings_note">编辑时会先保存设置；返回时如果有变更，正在运行的 VPN 会重启一次以应用设置。关闭 UDP 可用于判断断流是否和 QUIC/UDP 路径有关。</string>
     <string name="current_effective">当前生效</string>
     <string name="back">返回</string>
     <string name="logs">日志</string>
