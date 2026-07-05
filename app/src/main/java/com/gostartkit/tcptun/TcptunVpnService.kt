@@ -5,8 +5,10 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
@@ -41,6 +43,12 @@ data class RuntimeSettings(
     val powerSavingMode: Boolean = false,
 )
 
+private data class UpstreamProbeTarget(
+    val label: String,
+    val host: String,
+    val port: Int = 443,
+)
+
 class TcptunVpnService : VpnService() {
     private val bridge: TcptunBridge = ReflectionTcptunBridge()
     private val bridgeLock = Any()
@@ -54,10 +62,14 @@ class TcptunVpnService : VpnService() {
     @Volatile private var stopping = false
     @Volatile private var lastBridgeRestartAtMs = 0L
     @Volatile private var stableHealthSuccesses = 0
+    @Volatile private var lastUpstreamProbeAtMs = 0L
+    @Volatile private var upstreamProbeIndex = 0
+    private var deviceActivityReceiver: BroadcastReceiver? = null
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        registerDeviceActivityReceiver()
     }
 
     override fun onBind(intent: Intent?): IBinder? {
@@ -278,7 +290,47 @@ class TcptunVpnService : VpnService() {
 
     override fun onDestroy() {
         stopVpn(setStopped = TcptunState.status.value != "Error", clearSavedConfig = false)
+        unregisterDeviceActivityReceiver()
         super.onDestroy()
+    }
+
+    private fun registerDeviceActivityReceiver() {
+        if (deviceActivityReceiver != null) return
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_ON,
+                    Intent.ACTION_USER_PRESENT -> handleDeviceBecameActive(intent.action.orEmpty())
+                }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("DEPRECATION")
+                registerReceiver(receiver, filter)
+            }
+            deviceActivityReceiver = receiver
+        }.onFailure { err ->
+            TcptunState.appendLog("device activity receiver unavailable: ${err.message}")
+        }
+    }
+
+    private fun unregisterDeviceActivityReceiver() {
+        val receiver = deviceActivityReceiver ?: return
+        runCatching { unregisterReceiver(receiver) }
+            .onFailure { err -> TcptunState.appendLog("device activity receiver unregister failed: ${err.message}") }
+        deviceActivityReceiver = null
+    }
+
+    private fun handleDeviceBecameActive(action: String) {
+        if (stopping || tun == null) return
+        requestDenseHealthCheck("device active: ${action.substringAfterLast('.')}")
     }
 
     private fun startBridge(configJson: String) {
@@ -426,6 +478,9 @@ class TcptunVpnService : VpnService() {
         if (!localProxyReachable) {
             return "local proxy $LOCAL_SOCKS_ADDR is not accepting connections"
         }
+        if (shouldRunUpstreamProbe()) {
+            upstreamProbeFailure()?.let { return it }
+        }
         return null
     }
 
@@ -449,6 +504,87 @@ class TcptunVpnService : VpnService() {
                 socket.connect(InetSocketAddress(LOCAL_SOCKS_HOST, LOCAL_SOCKS_PORT), LOCAL_PROXY_CONNECT_TIMEOUT_MS)
             }
         }.isSuccess
+    }
+
+    private fun shouldRunUpstreamProbe(): Boolean {
+        val now = System.currentTimeMillis()
+        if (now >= denseHealthCheckUntilMs) return false
+        if (now - lastUpstreamProbeAtMs < UPSTREAM_PROBE_MIN_INTERVAL_MS) return false
+        lastUpstreamProbeAtMs = now
+        return true
+    }
+
+    private fun upstreamProbeFailure(): String? {
+        val target = nextUpstreamProbeTarget()
+        return runCatching {
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress(LOCAL_SOCKS_HOST, LOCAL_SOCKS_PORT), UPSTREAM_PROBE_TIMEOUT_MS)
+                socket.soTimeout = UPSTREAM_PROBE_TIMEOUT_MS
+                socks5Connect(socket, target.host, target.port)
+            }
+        }.fold(
+            onSuccess = { null },
+            onFailure = { err ->
+                "upstream probe ${target.label} failed: ${err.message ?: err.javaClass.simpleName}"
+            },
+        )
+    }
+
+    private fun nextUpstreamProbeTarget(): UpstreamProbeTarget {
+        val targets = UPSTREAM_PROBE_TARGETS
+        val index = (upstreamProbeIndex % targets.size).coerceAtLeast(0)
+        upstreamProbeIndex = (index + 1) % targets.size
+        return targets[index]
+    }
+
+    private fun socks5Connect(socket: Socket, host: String, port: Int) {
+        val input = socket.getInputStream()
+        val output = socket.getOutputStream()
+        output.write(byteArrayOf(0x05, 0x01, 0x00))
+        output.flush()
+        val methodReply = input.readExact(2)
+        require(methodReply[0] == 0x05.toByte() && methodReply[1] == 0x00.toByte()) {
+            "SOCKS5 method rejected"
+        }
+
+        val hostBytes = host.encodeToByteArray()
+        require(hostBytes.size <= 255) { "host is too long" }
+        val request = ByteArray(7 + hostBytes.size)
+        request[0] = 0x05
+        request[1] = 0x01
+        request[2] = 0x00
+        request[3] = 0x03
+        request[4] = hostBytes.size.toByte()
+        hostBytes.copyInto(request, destinationOffset = 5)
+        request[request.lastIndex - 1] = ((port ushr 8) and 0xff).toByte()
+        request[request.lastIndex] = (port and 0xff).toByte()
+        output.write(request)
+        output.flush()
+
+        val replyHead = input.readExact(4)
+        require(replyHead[0] == 0x05.toByte()) { "invalid SOCKS5 reply" }
+        require(replyHead[1] == 0x00.toByte()) { "SOCKS5 connect failed: ${replyHead[1].toInt() and 0xff}" }
+        val addressLength = when (replyHead[3].toInt() and 0xff) {
+            0x01 -> 4
+            0x03 -> input.read()
+            0x04 -> 16
+            else -> error("invalid SOCKS5 address type")
+        }
+        require(addressLength >= 0) { "SOCKS5 reply ended early" }
+        input.readExact(addressLength + 2)
+    }
+
+    private fun java.io.InputStream.readExact(length: Int): ByteArray {
+        val data = ByteArray(length)
+        var offset = 0
+        while (offset < length) {
+            val read = read(data, offset, length - offset)
+            if (read < 0) {
+                error("connection closed")
+            }
+            offset += read
+        }
+        return data
     }
 
     private fun buildNotification(state: String): Notification {
@@ -546,6 +682,8 @@ class TcptunVpnService : VpnService() {
         private const val BRIDGE_RESTART_DELAY_MS = 300L
         private const val BRIDGE_RESTART_MIN_INTERVAL_MS = 30_000L
         private const val LOCAL_PROXY_CONNECT_TIMEOUT_MS = 1_000
+        private const val UPSTREAM_PROBE_TIMEOUT_MS = 3_000
+        private const val UPSTREAM_PROBE_MIN_INTERVAL_MS = 10_000L
         private const val ROUTE_CONFIG_FILE = "android-route.json"
         private const val ROUTE_PREFS = "tcptun_route"
         private const val KEY_MANUAL_ROUTE_CONFIG = "manualRouteConfig"
@@ -562,6 +700,10 @@ class TcptunVpnService : VpnService() {
         private val DEFAULT_PROXY_COMPANIONS = setOf(
             "com.google.android.gms",
             "com.google.android.gsf",
+        )
+        private val UPSTREAM_PROBE_TARGETS = listOf(
+            UpstreamProbeTarget("Google", "google.com"),
+            UpstreamProbeTarget("GitHub", "github.com"),
         )
         private val GOOGLE_PROXY_COMPANIONS = DEFAULT_PROXY_COMPANIONS + "com.android.vending"
         private val META_PROXY_COMPANIONS = setOf(
