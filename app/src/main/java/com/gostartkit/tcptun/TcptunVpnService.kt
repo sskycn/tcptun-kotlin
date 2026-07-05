@@ -49,9 +49,20 @@ private data class UpstreamProbeTarget(
     val port: Int = 443,
 )
 
+private enum class HealthRestartTarget {
+    Bridge,
+    Tunnel,
+}
+
+private data class HealthFailure(
+    val reason: String,
+    val restartTarget: HealthRestartTarget,
+)
+
 class TcptunVpnService : VpnService() {
     private val bridge: TcptunBridge = ReflectionTcptunBridge()
     private val bridgeLock = Any()
+    private val tunnelLock = Any()
     private var tun: android.os.ParcelFileDescriptor? = null
     @Volatile private var bridgeConfigJson: String? = null
     @Volatile private var monitorThread: Thread? = null
@@ -63,6 +74,9 @@ class TcptunVpnService : VpnService() {
     @Volatile private var lastBridgeRestartAtMs = 0L
     @Volatile private var stableHealthSuccesses = 0
     @Volatile private var lastUpstreamProbeAtMs = 0L
+    @Volatile private var lastTunnelRestartAtMs = 0L
+    @Volatile private var tunnelMtu = DEFAULT_VPN_MTU
+    @Volatile private var tunnelUdpEnabled = true
     @Volatile private var upstreamProbeIndex = 0
     private var deviceActivityReceiver: BroadcastReceiver? = null
 
@@ -169,8 +183,22 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun startTunnel(vpnTun: android.os.ParcelFileDescriptor, mtu: Int, udpEnabled: Boolean) {
-        tun = vpnTun
-        val hevConfig = HevSocks5Tunnel.writeConfig(
+        synchronized(tunnelLock) {
+            tun = vpnTun
+            tunnelMtu = mtu
+            tunnelUdpEnabled = udpEnabled
+            val hevConfig = writeHevConfig(mtu, udpEnabled)
+            try {
+                HevSocks5Tunnel.start(hevConfig, vpnTun)
+            } catch (err: Exception) {
+                throw IllegalStateException("hev-socks5-tunnel failed: ${err.message}", err)
+            }
+        }
+        TcptunState.appendLog("hev-socks5-tunnel started mtu=$mtu udp=${if (udpEnabled) "udp" else "tcp"}")
+    }
+
+    private fun writeHevConfig(mtu: Int, udpEnabled: Boolean): File {
+        return HevSocks5Tunnel.writeConfig(
             directory = applicationContext.filesDir,
             socksHost = LOCAL_SOCKS_HOST,
             socksPort = LOCAL_SOCKS_PORT,
@@ -178,12 +206,6 @@ class TcptunVpnService : VpnService() {
             dnsServer = VPN_DNS_SERVER,
             udpEnabled = udpEnabled,
         )
-        try {
-            HevSocks5Tunnel.start(hevConfig, vpnTun)
-        } catch (err: Exception) {
-            throw IllegalStateException("hev-socks5-tunnel failed: ${err.message}", err)
-        }
-        TcptunState.appendLog("hev-socks5-tunnel started mtu=$mtu udp=${if (udpEnabled) "udp" else "tcp"}")
     }
 
     private fun buildTun(config: AppConfig, mtu: Int): android.os.ParcelFileDescriptor {
@@ -266,6 +288,8 @@ class TcptunVpnService : VpnService() {
         runCatching { HevSocks5Tunnel.stop() }
         runCatching { tun?.close() }
         tun = null
+        tunnelMtu = DEFAULT_VPN_MTU
+        tunnelUdpEnabled = true
         stopBridge()
         TcptunState.updateDiagnostics {
             it.copy(
@@ -373,6 +397,29 @@ class TcptunVpnService : VpnService() {
         }
     }
 
+    private fun restartTunnel(reason: String) {
+        synchronized(tunnelLock) {
+            val vpnTun = tun ?: return
+            if (stopping) return
+            val now = System.currentTimeMillis()
+            val elapsedMs = now - lastTunnelRestartAtMs
+            if (elapsedMs < TUNNEL_RESTART_MIN_INTERVAL_MS) {
+                val waitSeconds = ((TUNNEL_RESTART_MIN_INTERVAL_MS - elapsedMs) / 1_000).coerceAtLeast(1)
+                TcptunState.appendLog("hev-socks5-tunnel restart skipped by cooldown: $reason; wait ${waitSeconds}s")
+                return
+            }
+            lastTunnelRestartAtMs = now
+            TcptunState.appendLog("restarting hev-socks5-tunnel: $reason")
+            TcptunState.updateDiagnostics { it.copy(lastRestartReason = reason) }
+            runCatching { HevSocks5Tunnel.stop() }
+                .onFailure { err -> TcptunState.appendLog("hev-socks5-tunnel stop failed: ${err.message}") }
+            Thread.sleep(TUNNEL_RESTART_DELAY_MS)
+            val hevConfig = writeHevConfig(tunnelMtu, tunnelUdpEnabled)
+            HevSocks5Tunnel.start(hevConfig, vpnTun)
+            TcptunState.appendLog("hev-socks5-tunnel restarted")
+        }
+    }
+
     private fun requestBridgeRestart(reason: String) {
         Thread {
             runCatching { restartBridge(reason) }
@@ -400,26 +447,41 @@ class TcptunVpnService : VpnService() {
         stopBridgeMonitor()
         stableHealthSuccesses = 0
         monitorThread = Thread {
-            var failures = 0
+            var bridgeFailures = 0
+            var tunnelFailures = 0
             while (!stopping && !Thread.currentThread().isInterrupted) {
                 try {
                     val intervalMs = bridgeHealthIntervalMs()
                     TcptunState.updateDiagnostics { it.copy(healthCheckIntervalSeconds = intervalMs / 1_000) }
                     sleepBridgeHealthInterval(intervalMs)
                     if (tun == null || stopping) continue
-                    val failure = bridgeHealthFailure()
+                    val failure = vpnHealthFailure()
                     if (failure == null) {
-                        failures = 0
+                        bridgeFailures = 0
+                        tunnelFailures = 0
                         stableHealthSuccesses += 1
                         updateBridgeDiagnostics()
                     } else {
-                        failures += 1
                         stableHealthSuccesses = 0
                         requestDenseHealthCheck("health check failed")
-                        TcptunState.appendLog("tcptun bridge health check failed: $failure")
-                        if (failures >= BRIDGE_HEALTH_FAILURE_LIMIT) {
-                            failures = 0
-                            restartBridge(failure)
+                        TcptunState.appendLog("VPN health check failed: ${failure.reason}")
+                        when (failure.restartTarget) {
+                            HealthRestartTarget.Bridge -> {
+                                bridgeFailures += 1
+                                tunnelFailures = 0
+                                if (bridgeFailures >= HEALTH_FAILURE_LIMIT) {
+                                    bridgeFailures = 0
+                                    restartBridge(failure.reason)
+                                }
+                            }
+                            HealthRestartTarget.Tunnel -> {
+                                tunnelFailures += 1
+                                bridgeFailures = 0
+                                if (tunnelFailures >= HEALTH_FAILURE_LIMIT) {
+                                    tunnelFailures = 0
+                                    restartTunnel(failure.reason)
+                                }
+                            }
                         }
                     }
                 } catch (_: InterruptedException) {
@@ -465,21 +527,40 @@ class TcptunVpnService : VpnService() {
         }
     }
 
-    private fun bridgeHealthFailure(): String? {
+    private fun vpnHealthFailure(): HealthFailure? {
+        tunnelHealthFailure()?.let {
+            return HealthFailure(it, HealthRestartTarget.Tunnel)
+        }
         val status = runCatching { bridge.status() }.getOrElse { err ->
             TcptunState.updateDiagnostics { it.copy(bridgeStatus = "Unknown", localProxyReachable = false) }
-            return "status unavailable: ${err.message}"
+            return HealthFailure("status unavailable: ${err.message}", HealthRestartTarget.Bridge)
         }
         val localProxyReachable = canConnectLocalProxy()
         TcptunState.updateDiagnostics { it.copy(bridgeStatus = status, localProxyReachable = localProxyReachable) }
         if (status != "Running") {
-            return "bridge status is $status"
+            return HealthFailure("bridge status is $status", HealthRestartTarget.Bridge)
         }
         if (!localProxyReachable) {
-            return "local proxy $LOCAL_SOCKS_ADDR is not accepting connections"
+            return HealthFailure("local proxy $LOCAL_SOCKS_ADDR is not accepting connections", HealthRestartTarget.Bridge)
         }
         if (shouldRunUpstreamProbe()) {
-            upstreamProbeFailure()?.let { return it }
+            upstreamProbeFailure()?.let { return HealthFailure(it, HealthRestartTarget.Bridge) }
+        }
+        return null
+    }
+
+    private fun tunnelHealthFailure(): String? {
+        val running = runCatching { HevSocks5Tunnel.isRunning() }.getOrElse { err ->
+            return "hev-socks5-tunnel status unavailable: ${err.message ?: err.javaClass.simpleName}"
+        }
+        if (!running) {
+            return "hev-socks5-tunnel is not running"
+        }
+        val stats = runCatching { HevSocks5Tunnel.stats() }.getOrElse { err ->
+            return "hev-socks5-tunnel stats unavailable: ${err.message ?: err.javaClass.simpleName}"
+        }
+        if (stats.size < TUNNEL_STATS_SIZE) {
+            return "hev-socks5-tunnel stats invalid: ${stats.size} values"
         }
         return null
     }
@@ -678,9 +759,12 @@ class TcptunVpnService : VpnService() {
         private const val BRIDGE_DENSE_HEALTH_WINDOW_MS = 120_000L
         private const val BRIDGE_HEALTH_SLEEP_GRANULARITY_MS = 5_000L
         private const val BRIDGE_STABLE_SUCCESS_LIMIT = 2
-        private const val BRIDGE_HEALTH_FAILURE_LIMIT = 2
+        private const val HEALTH_FAILURE_LIMIT = 2
         private const val BRIDGE_RESTART_DELAY_MS = 300L
         private const val BRIDGE_RESTART_MIN_INTERVAL_MS = 30_000L
+        private const val TUNNEL_RESTART_DELAY_MS = 300L
+        private const val TUNNEL_RESTART_MIN_INTERVAL_MS = 30_000L
+        private const val TUNNEL_STATS_SIZE = 4
         private const val LOCAL_PROXY_CONNECT_TIMEOUT_MS = 1_000
         private const val UPSTREAM_PROBE_TIMEOUT_MS = 3_000
         private const val UPSTREAM_PROBE_MIN_INTERVAL_MS = 10_000L

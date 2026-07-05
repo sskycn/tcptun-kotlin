@@ -16,6 +16,10 @@ object HevSocks5Tunnel {
         TProxyStopService()
     }
 
+    fun isRunning(): Boolean {
+        return TProxyIsRunning()
+    }
+
     fun stats(): LongArray {
         return TProxyGetStats()
     }
@@ -67,5 +71,6 @@ object HevSocks5Tunnel {
 
     private external fun TProxyStartService(configPath: String, fd: Int)
     private external fun TProxyStopService()
+    private external fun TProxyIsRunning(): Boolean
     private external fun TProxyGetStats(): LongArray
 }
