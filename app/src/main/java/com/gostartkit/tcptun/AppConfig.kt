@@ -47,6 +47,8 @@ data class AppConfig(
         routeConfigPath: String = "",
         verbose: Boolean = false,
         powerSavingMode: Boolean = false,
+        socks5Username: String = "",
+        socks5Password: String = "",
     ): String {
         val heartbeatInterval = if (powerSavingMode) "120s" else "30s"
         val connectionIdleTimeout = if (powerSavingMode) "5m" else "2m"
@@ -73,6 +75,8 @@ data class AppConfig(
             .put("reality_spider_x", realitySpiderX.trim())
             .put("tunnel_mux", mux)
             .put("upstream_protocol", upstreamProtocol)
+            .put("socks5_username", socks5Username)
+            .put("socks5_password", socks5Password)
             .put("enable_udp", udp)
             .put("config_path", "")
             .put("route_config_path", routeConfigPath)

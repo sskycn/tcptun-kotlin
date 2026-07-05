@@ -31,9 +31,16 @@ object HevSocks5Tunnel {
         mtu: Int,
         dnsServer: String,
         udpEnabled: Boolean,
+        socksUsername: String,
+        socksPassword: String,
     ): File {
         val file = File(directory, "hev-socks5-tunnel.yml")
         val udpMode = if (udpEnabled) "udp" else "tcp"
+        val authConfig = if (socksUsername.isNotEmpty() || socksPassword.isNotEmpty()) {
+            "\n  username: '${socksUsername.yamlSingleQuoted()}'\n  password: '${socksPassword.yamlSingleQuoted()}'"
+        } else {
+            ""
+        }
         file.writeText(
             """
             tunnel:
@@ -47,7 +54,7 @@ object HevSocks5Tunnel {
               port: $socksPort
               address: $socksHost
               udp: '$udpMode'
-              pipeline: false
+              pipeline: false$authConfig
 
             mapdns:
               address: $dnsServer
@@ -73,4 +80,8 @@ object HevSocks5Tunnel {
     private external fun TProxyStopService()
     private external fun TProxyIsRunning(): Boolean
     private external fun TProxyGetStats(): LongArray
+}
+
+private fun String.yamlSingleQuoted(): String {
+    return replace("'", "''")
 }

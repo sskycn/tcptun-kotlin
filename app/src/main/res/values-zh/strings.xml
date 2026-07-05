@@ -21,9 +21,10 @@
     <string name="tcping_failed">TCPing 失败 · %1$s %2$s</string>
     <string name="tcping_failed_fallback">失败</string>
     <string name="connected_tap_test">已连接，点击测试连接</string>
+    <string name="connected_waiting_server">已连接，等待服务器连接</string>
     <string name="connecting">正在连接...</string>
     <string name="stopping">正在停止...</string>
-    <string name="not_connected_tap_profile_or_test">未连接，点击列表项启动；点击这里测试连接</string>
+    <string name="not_connected_tap_profile_or_test">未连接，点击列表项启动</string>
     <string name="not_connected_add_profile">未连接，添加配置后点击列表项启动</string>
     <string name="diagnostics_settings">诊断与设置</string>
     <string name="battery_settings">省电设置</string>
@@ -42,6 +43,14 @@
     <string name="diag_socket_protect">Socket protect</string>
     <string name="diag_health_interval">健康检查间隔</string>
     <string name="diag_power_saving">省电模式</string>
+    <string name="socks_listen">SOCKS 监听</string>
+    <string name="socks_port">SOCKS 端口</string>
+    <string name="socks_port_error">请输入 1 到 65535 之间的端口。</string>
+    <string name="socks_listen_all">监听所有网卡</string>
+    <string name="socks_username">SOCKS 用户名</string>
+    <string name="socks_password">SOCKS 密码</string>
+    <string name="socks_auth">SOCKS 认证</string>
+    <string name="socks_settings_note">默认只监听 127.0.0.1。启用监听所有网卡后会监听 0.0.0.0。用户名和密码可留空。</string>
     <string name="seconds_value">%1$d 秒</string>
     <string name="recent_restart_reason">最近重启原因</string>
     <string name="transparent_proxy_settings">透明代理参数</string>

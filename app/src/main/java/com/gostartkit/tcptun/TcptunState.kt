@@ -16,6 +16,8 @@ data class TcptunDiagnostics(
     val bridgeTimestampMs: Long = 0,
     val underlyingNetwork: String = "None",
     val localProxyReachable: Boolean = false,
+    val localProxyAddress: String = "127.0.0.1:1080",
+    val localProxyPort: Int = 1080,
     val lastRestartReason: String = "None",
     val mtu: Int = 1400,
     val udpEnabled: Boolean = true,

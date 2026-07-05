@@ -34,6 +34,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -89,6 +90,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.tcptun.client.ui.theme.TcpTunTheme
@@ -269,22 +271,26 @@ fun TcptunScreen() {
                 )
             },
             bottomBar = {
+                val serverConnected = hasServerConnection(TcptunState.diagnostics.value)
                 BottomStatus(
                     status = TcptunState.status.value,
                     error = TcptunState.lastError.value,
                     tcpingMessage = tcpingMessage,
                     tcpingInProgress = tcpingInProgress,
                     hasProfile = state.selected != null,
+                    tcpingEnabled = serverConnected,
                     onClick = {
                         if (isVpnTransitionStatus(TcptunState.status.value)) return@BottomStatus
                         if (state.selected == null) return@BottomStatus
                         if (tcpingInProgress) return@BottomStatus
+                        if (!serverConnected) return@BottomStatus
                         val tcpingTarget = TCPING_TARGETS[tcpingTargetIndex]
+                        val tcpingSettings = TcptunVpnService.readRuntimeSettings(context)
                         tcpingTargetIndex = (tcpingTargetIndex + 1) % TCPING_TARGETS.size
                         tcpingInProgress = true
                         tcpingMessage = ""
                         screenScope.launch {
-                            val result = tcping(context, tcpingTarget)
+                            val result = tcping(context, tcpingTarget, tcpingSettings)
                             tcpingMessage = result.message
                             if (!result.success) {
                                 TcptunVpnService.requestDenseHealthCheck("tcping failed: ${tcpingTarget.label}")
@@ -625,6 +631,7 @@ private fun BottomStatus(
     tcpingMessage: String,
     tcpingInProgress: Boolean,
     hasProfile: Boolean,
+    tcpingEnabled: Boolean,
     onClick: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -632,6 +639,7 @@ private fun BottomStatus(
         error.isNotBlank() -> stringResource(R.string.error_prefix, error)
         tcpingInProgress -> stringResource(R.string.tcping_running)
         tcpingMessage.isNotBlank() -> tcpingMessage
+        status == "Running" && !tcpingEnabled -> stringResource(R.string.connected_waiting_server)
         status == "Running" -> stringResource(R.string.connected_tap_test)
         status == "Starting" -> stringResource(R.string.connecting)
         status == "Stopping" -> stringResource(R.string.stopping)
@@ -648,7 +656,7 @@ private fun BottomStatus(
         modifier = Modifier
             .fillMaxWidth()
             .height(72.dp)
-            .clickable(enabled = hasProfile && !tcpingInProgress && !isVpnTransitionStatus(status), onClick = onClick),
+            .clickable(enabled = hasProfile && tcpingEnabled && !tcpingInProgress && !isVpnTransitionStatus(status), onClick = onClick),
         containerColor = colors.surfaceContainer,
         contentColor = contentColor,
     ) {
@@ -665,6 +673,7 @@ private fun BottomStatus(
 private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
     val context = LocalContext.current
     var settings by remember { mutableStateOf(TcptunVpnService.readRuntimeSettings(context)) }
+    var socksPortText by remember { mutableStateOf(settings.socksPort.toString()) }
     val diagnostics = TcptunState.diagnostics.value
     val mtuOptions = listOf("1280", "1360", "1400", "1500")
     val noneLabel = stringResource(R.string.none)
@@ -672,7 +681,7 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
     fun saveSettings(next: RuntimeSettings) {
         TcptunVpnService.writeRuntimeSettings(context, next)
         settings = TcptunVpnService.readRuntimeSettings(context)
-        TcptunState.appendLog("runtime settings saved: mtu=${settings.mtu} udp=${settings.udpEnabled}")
+        socksPortText = settings.socksPort.toString()
     }
 
     Scaffold(
@@ -716,7 +725,10 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
                         DiagnosticsLine(stringResource(R.string.diag_go_active), diagnostics.bridgeActiveConnections.toString())
                         DiagnosticsLine(stringResource(R.string.diag_go_error), diagnostics.bridgeLastError.ifBlank { noneLabel })
                         DiagnosticsLine(stringResource(R.string.diag_go_event_time), bridgeTimestampLabel(diagnostics.bridgeTimestampMs, noneLabel))
-                        DiagnosticsLine(stringResource(R.string.diag_local_proxy), if (diagnostics.localProxyReachable) stringResource(R.string.reachable) else stringResource(R.string.not_reachable))
+                        DiagnosticsLine(
+                            stringResource(R.string.diag_local_proxy),
+                            "${diagnostics.localProxyAddress} · ${if (diagnostics.localProxyReachable) stringResource(R.string.reachable) else stringResource(R.string.not_reachable)}",
+                        )
                         DiagnosticsLine(stringResource(R.string.diag_socket_protect), if (diagnostics.socketProtectEnabled) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.diag_health_interval), stringResource(R.string.seconds_value, diagnostics.healthCheckIntervalSeconds))
                         DiagnosticsLine(stringResource(R.string.diag_power_saving), if (diagnostics.powerSavingMode) stringResource(R.string.enabled) else stringResource(R.string.disabled))
@@ -750,12 +762,57 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
                         ChoiceRow("MTU", settings.mtu.toString(), mtuOptions) { value ->
                             saveSettings(settings.copy(mtu = value.toIntOrNull() ?: TcptunVpnService.DEFAULT_VPN_MTU))
                         }
+                        val socksPort = socksPortText.toIntOrNull()
+                        OutlinedTextField(
+                            value = socksPortText,
+                            onValueChange = { value ->
+                                val digits = value.filter { it.isDigit() }.take(5)
+                                socksPortText = digits
+                                val port = digits.toIntOrNull()
+                                if (port != null && port in 1..65535) {
+                                    saveSettings(settings.copy(socksPort = port))
+                                }
+                            },
+                            label = { Text(stringResource(R.string.socks_port)) },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            isError = socksPort == null || socksPort !in 1..65535,
+                            supportingText = {
+                                if (socksPort == null || socksPort !in 1..65535) {
+                                    Text(stringResource(R.string.socks_port_error))
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        ToggleRow(stringResource(R.string.socks_listen_all), settings.socksListenAll) { checked ->
+                            saveSettings(settings.copy(socksListenAll = checked))
+                        }
+                        OutlinedTextField(
+                            value = settings.socksUsername,
+                            onValueChange = { value -> saveSettings(settings.copy(socksUsername = value.take(255))) },
+                            label = { Text(stringResource(R.string.socks_username)) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedTextField(
+                            value = settings.socksPassword,
+                            onValueChange = { value -> saveSettings(settings.copy(socksPassword = value.take(255))) },
+                            label = { Text(stringResource(R.string.socks_password)) },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                         ToggleRow(stringResource(R.string.enable_udp_relay), settings.udpEnabled) { checked ->
                             saveSettings(settings.copy(udpEnabled = checked))
                         }
                         ToggleRow(stringResource(R.string.power_saving_mode), settings.powerSavingMode) { checked ->
                             saveSettings(settings.copy(powerSavingMode = checked, udpEnabled = settings.udpEnabled && !checked))
                         }
+                        Text(
+                            stringResource(R.string.socks_settings_note),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         Text(
                             stringResource(R.string.power_saving_note),
                             style = MaterialTheme.typography.bodySmall,
@@ -785,6 +842,8 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         DiagnosticsLine("MTU", diagnostics.mtu.toString())
+                        DiagnosticsLine(stringResource(R.string.socks_listen), TcptunVpnService.localSocksListenAddr(settings))
+                        DiagnosticsLine(stringResource(R.string.socks_auth), if (settings.socksUsername.isNotEmpty() || settings.socksPassword.isNotEmpty()) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.field_udp), if (diagnostics.udpEnabled) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.diag_power_saving), if (diagnostics.powerSavingMode) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                     }
@@ -1967,8 +2026,8 @@ private data class TcpingCheck(
     val success: Boolean,
 )
 
-private suspend fun tcping(context: Context, target: TcpingTarget): TcpingCheck = withContext(Dispatchers.IO) {
-    val result = tcpingTarget(target)
+private suspend fun tcping(context: Context, target: TcpingTarget, settings: RuntimeSettings): TcpingCheck = withContext(Dispatchers.IO) {
+    val result = tcpingTarget(target, settings)
     val elapsedMs = result.elapsedMs
     if (elapsedMs != null) {
         TcpingCheck(context.getString(R.string.tcping_success, target.label, elapsedMs), true)
@@ -1980,16 +2039,16 @@ private suspend fun tcping(context: Context, target: TcpingTarget): TcpingCheck 
     }
 }
 
-private fun tcpingTarget(target: TcpingTarget): TcpingResult {
+private fun tcpingTarget(target: TcpingTarget, settings: RuntimeSettings): TcpingResult {
     val start = System.nanoTime()
     return runCatching {
         Socket().use { socket ->
             socket.connect(
-                InetSocketAddress(TcptunVpnService.LOCAL_SOCKS_HOST, TcptunVpnService.LOCAL_SOCKS_PORT),
+                InetSocketAddress(TcptunVpnService.LOCAL_SOCKS_HOST, settings.socksPort),
                 TCPING_TIMEOUT_MS,
             )
             socket.soTimeout = TCPING_TIMEOUT_MS
-            socks5Connect(socket, target.host, target.port)
+            socks5Connect(socket, target.host, target.port, settings.socksUsername, settings.socksPassword)
         }
     }.fold(
         onSuccess = {
@@ -2001,14 +2060,18 @@ private fun tcpingTarget(target: TcpingTarget): TcpingResult {
     )
 }
 
-private fun socks5Connect(socket: Socket, host: String, port: Int) {
+private fun socks5Connect(socket: Socket, host: String, port: Int, username: String, password: String) {
     val input = socket.getInputStream()
     val output = socket.getOutputStream()
-    output.write(byteArrayOf(0x05, 0x01, 0x00))
+    val authEnabled = username.isNotEmpty() || password.isNotEmpty()
+    output.write(if (authEnabled) byteArrayOf(0x05, 0x02, 0x00, 0x02) else byteArrayOf(0x05, 0x01, 0x00))
     output.flush()
     val methodReply = input.readExact(2)
-    require(methodReply[0] == 0x05.toByte() && methodReply[1] == 0x00.toByte()) {
-        "SOCKS5 method rejected"
+    require(methodReply[0] == 0x05.toByte()) { "invalid SOCKS5 method reply" }
+    when (methodReply[1].toInt() and 0xff) {
+        0x00 -> Unit
+        0x02 -> socks5Authenticate(input, output, username, password)
+        else -> error("SOCKS5 method rejected")
     }
 
     val hostBytes = host.encodeToByteArray()
@@ -2036,6 +2099,30 @@ private fun socks5Connect(socket: Socket, host: String, port: Int) {
     }
     require(addressLength >= 0) { "SOCKS5 reply ended early" }
     input.readExact(addressLength + 2)
+}
+
+private fun socks5Authenticate(
+    input: java.io.InputStream,
+    output: java.io.OutputStream,
+    username: String,
+    password: String,
+) {
+    val usernameBytes = username.encodeToByteArray()
+    val passwordBytes = password.encodeToByteArray()
+    require(usernameBytes.size <= 255) { "SOCKS5 username is too long" }
+    require(passwordBytes.size <= 255) { "SOCKS5 password is too long" }
+    val request = ByteArray(3 + usernameBytes.size + passwordBytes.size)
+    request[0] = 0x01
+    request[1] = usernameBytes.size.toByte()
+    usernameBytes.copyInto(request, destinationOffset = 2)
+    request[2 + usernameBytes.size] = passwordBytes.size.toByte()
+    passwordBytes.copyInto(request, destinationOffset = 3 + usernameBytes.size)
+    output.write(request)
+    output.flush()
+    val reply = input.readExact(2)
+    require(reply[0] == 0x01.toByte() && reply[1] == 0x00.toByte()) {
+        "SOCKS5 username/password auth failed"
+    }
 }
 
 private fun java.io.InputStream.readExact(length: Int): ByteArray {
@@ -2113,6 +2200,13 @@ private fun isVpnActiveStatus(status: String): Boolean {
     return status == "Starting" || status == "Running" || status == "Stopping"
 }
 
+private fun hasServerConnection(diagnostics: TcptunDiagnostics): Boolean {
+    if (diagnostics.vpnStatus != "Running") return false
+    val state = diagnostics.bridgeEventState.lowercase()
+    val phase = diagnostics.bridgeEventPhase.lowercase()
+    return state in SERVER_CONNECTED_STATES || phase in SERVER_CONNECTED_PHASES
+}
+
 private fun isVpnTransitionStatus(status: String): Boolean {
     return status == "Starting" || status == "Stopping"
 }
@@ -2136,6 +2230,8 @@ private fun bridgeTimestampLabel(timestampMs: Long, noneLabel: String): String {
 }
 
 private const val TCPING_TIMEOUT_MS = 3_000
+private val SERVER_CONNECTED_STATES = setOf("running", "upstream_connected")
+private val SERVER_CONNECTED_PHASES = setOf("connected", "upstream_connected")
 private val TCPING_TARGETS = listOf(
     TcpingTarget("GitHub", "github.com"),
     TcpingTarget("Cloudflare", "cloudflare.com"),

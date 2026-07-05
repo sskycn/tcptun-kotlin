@@ -41,6 +41,10 @@ data class RuntimeSettings(
     val mtu: Int = TcptunVpnService.DEFAULT_VPN_MTU,
     val udpEnabled: Boolean = true,
     val powerSavingMode: Boolean = false,
+    val socksPort: Int = TcptunVpnService.DEFAULT_SOCKS_PORT,
+    val socksListenAll: Boolean = false,
+    val socksUsername: String = "",
+    val socksPassword: String = "",
 )
 
 private data class UpstreamProbeTarget(
@@ -77,6 +81,12 @@ class TcptunVpnService : VpnService() {
     @Volatile private var lastTunnelRestartAtMs = 0L
     @Volatile private var tunnelMtu = DEFAULT_VPN_MTU
     @Volatile private var tunnelUdpEnabled = true
+    @Volatile private var tunnelSocksPort = DEFAULT_SOCKS_PORT
+    @Volatile private var tunnelSocksUsername = ""
+    @Volatile private var tunnelSocksPassword = ""
+    @Volatile private var activeSocksPort = DEFAULT_SOCKS_PORT
+    @Volatile private var activeSocksUsername = ""
+    @Volatile private var activeSocksPassword = ""
     @Volatile private var upstreamProbeIndex = 0
     private var deviceActivityReceiver: BroadcastReceiver? = null
 
@@ -136,6 +146,9 @@ class TcptunVpnService : VpnService() {
                 )
                 val runtimeSettings = readRuntimeSettings(this)
                 val effectiveUdpEnabled = config.udp && runtimeSettings.udpEnabled && !runtimeSettings.powerSavingMode
+                activeSocksPort = runtimeSettings.socksPort
+                activeSocksUsername = runtimeSettings.socksUsername
+                activeSocksPassword = runtimeSettings.socksPassword
                 saveLastRunningConfig(this, config)
                 bridge.setLogCallback(TcptunState::appendLog)
                 bridge.setStatusCallback { eventJson ->
@@ -150,12 +163,21 @@ class TcptunVpnService : VpnService() {
                         mtu = runtimeSettings.mtu,
                         udpEnabled = effectiveUdpEnabled,
                         powerSavingMode = runtimeSettings.powerSavingMode,
+                        localProxyAddress = localSocksConnectAddr(runtimeSettings),
+                        localProxyPort = runtimeSettings.socksPort,
                         socketProtectEnabled = true,
                     )
                 }
                 startBridge(json)
                 val vpnTun = buildTun(config, runtimeSettings.mtu)
-                startTunnel(vpnTun, runtimeSettings.mtu, effectiveUdpEnabled)
+                startTunnel(
+                    vpnTun,
+                    runtimeSettings.mtu,
+                    effectiveUdpEnabled,
+                    runtimeSettings.socksPort,
+                    runtimeSettings.socksUsername,
+                    runtimeSettings.socksPassword,
+                )
                 startBridgeMonitor()
                 TcptunState.setStatus("Running")
                 updateBridgeDiagnostics()
@@ -182,12 +204,22 @@ class TcptunVpnService : VpnService() {
         startFromIntent(startIntent(this, config))
     }
 
-    private fun startTunnel(vpnTun: android.os.ParcelFileDescriptor, mtu: Int, udpEnabled: Boolean) {
+    private fun startTunnel(
+        vpnTun: android.os.ParcelFileDescriptor,
+        mtu: Int,
+        udpEnabled: Boolean,
+        socksPort: Int,
+        socksUsername: String,
+        socksPassword: String,
+    ) {
         synchronized(tunnelLock) {
             tun = vpnTun
             tunnelMtu = mtu
             tunnelUdpEnabled = udpEnabled
-            val hevConfig = writeHevConfig(mtu, udpEnabled)
+            tunnelSocksPort = socksPort
+            tunnelSocksUsername = socksUsername
+            tunnelSocksPassword = socksPassword
+            val hevConfig = writeHevConfig(mtu, udpEnabled, socksPort, socksUsername, socksPassword)
             try {
                 HevSocks5Tunnel.start(hevConfig, vpnTun)
             } catch (err: Exception) {
@@ -197,14 +229,22 @@ class TcptunVpnService : VpnService() {
         TcptunState.appendLog("hev-socks5-tunnel started mtu=$mtu udp=${if (udpEnabled) "udp" else "tcp"}")
     }
 
-    private fun writeHevConfig(mtu: Int, udpEnabled: Boolean): File {
+    private fun writeHevConfig(
+        mtu: Int,
+        udpEnabled: Boolean,
+        socksPort: Int,
+        socksUsername: String,
+        socksPassword: String,
+    ): File {
         return HevSocks5Tunnel.writeConfig(
             directory = applicationContext.filesDir,
             socksHost = LOCAL_SOCKS_HOST,
-            socksPort = LOCAL_SOCKS_PORT,
+            socksPort = socksPort,
             mtu = mtu,
             dnsServer = VPN_DNS_SERVER,
             udpEnabled = udpEnabled,
+            socksUsername = socksUsername,
+            socksPassword = socksPassword,
         )
     }
 
@@ -290,11 +330,19 @@ class TcptunVpnService : VpnService() {
         tun = null
         tunnelMtu = DEFAULT_VPN_MTU
         tunnelUdpEnabled = true
+        tunnelSocksPort = DEFAULT_SOCKS_PORT
+        tunnelSocksUsername = ""
+        tunnelSocksPassword = ""
+        activeSocksPort = DEFAULT_SOCKS_PORT
+        activeSocksUsername = ""
+        activeSocksPassword = ""
         stopBridge()
         TcptunState.updateDiagnostics {
             it.copy(
                 bridgeStatus = "Stopped",
                 localProxyReachable = false,
+                localProxyAddress = defaultLocalSocksConnectAddr(),
+                localProxyPort = DEFAULT_SOCKS_PORT,
                 socketProtectEnabled = false,
             )
         }
@@ -414,7 +462,13 @@ class TcptunVpnService : VpnService() {
             runCatching { HevSocks5Tunnel.stop() }
                 .onFailure { err -> TcptunState.appendLog("hev-socks5-tunnel stop failed: ${err.message}") }
             Thread.sleep(TUNNEL_RESTART_DELAY_MS)
-            val hevConfig = writeHevConfig(tunnelMtu, tunnelUdpEnabled)
+            val hevConfig = writeHevConfig(
+                tunnelMtu,
+                tunnelUdpEnabled,
+                tunnelSocksPort,
+                tunnelSocksUsername,
+                tunnelSocksPassword,
+            )
             HevSocks5Tunnel.start(hevConfig, vpnTun)
             TcptunState.appendLog("hev-socks5-tunnel restarted")
         }
@@ -536,12 +590,19 @@ class TcptunVpnService : VpnService() {
             return HealthFailure("status unavailable: ${err.message}", HealthRestartTarget.Bridge)
         }
         val localProxyReachable = canConnectLocalProxy()
-        TcptunState.updateDiagnostics { it.copy(bridgeStatus = status, localProxyReachable = localProxyReachable) }
+        TcptunState.updateDiagnostics {
+            it.copy(
+                bridgeStatus = status,
+                localProxyReachable = localProxyReachable,
+                localProxyAddress = activeLocalSocksConnectAddr(),
+                localProxyPort = activeSocksPort,
+            )
+        }
         if (status != "Running") {
             return HealthFailure("bridge status is $status", HealthRestartTarget.Bridge)
         }
         if (!localProxyReachable) {
-            return HealthFailure("local proxy $LOCAL_SOCKS_ADDR is not accepting connections", HealthRestartTarget.Bridge)
+            return HealthFailure("local proxy ${activeLocalSocksConnectAddr()} is not accepting connections", HealthRestartTarget.Bridge)
         }
         if (shouldRunUpstreamProbe()) {
             upstreamProbeFailure()?.let { return HealthFailure(it, HealthRestartTarget.Bridge) }
@@ -575,14 +636,19 @@ class TcptunVpnService : VpnService() {
         val status = runCatching { bridge.status() }.getOrDefault("Unknown")
         val localProxyReachable = canConnectLocalProxy()
         TcptunState.updateDiagnostics {
-            it.copy(bridgeStatus = status, localProxyReachable = localProxyReachable)
+            it.copy(
+                bridgeStatus = status,
+                localProxyReachable = localProxyReachable,
+                localProxyAddress = activeLocalSocksConnectAddr(),
+                localProxyPort = activeSocksPort,
+            )
         }
     }
 
     private fun canConnectLocalProxy(): Boolean {
         return runCatching {
             Socket().use { socket ->
-                socket.connect(InetSocketAddress(LOCAL_SOCKS_HOST, LOCAL_SOCKS_PORT), LOCAL_PROXY_CONNECT_TIMEOUT_MS)
+                socket.connect(InetSocketAddress(LOCAL_SOCKS_HOST, activeSocksPort), LOCAL_PROXY_CONNECT_TIMEOUT_MS)
             }
         }.isSuccess
     }
@@ -599,9 +665,9 @@ class TcptunVpnService : VpnService() {
         val target = nextUpstreamProbeTarget()
         return runCatching {
             Socket().use { socket ->
-                socket.connect(InetSocketAddress(LOCAL_SOCKS_HOST, LOCAL_SOCKS_PORT), UPSTREAM_PROBE_TIMEOUT_MS)
+                socket.connect(InetSocketAddress(LOCAL_SOCKS_HOST, activeSocksPort), UPSTREAM_PROBE_TIMEOUT_MS)
                 socket.soTimeout = UPSTREAM_PROBE_TIMEOUT_MS
-                socks5Connect(socket, target.host, target.port)
+                socks5Connect(socket, target.host, target.port, activeSocksUsername, activeSocksPassword)
             }
         }.fold(
             onSuccess = { null },
@@ -618,14 +684,18 @@ class TcptunVpnService : VpnService() {
         return targets[index]
     }
 
-    private fun socks5Connect(socket: Socket, host: String, port: Int) {
+    private fun socks5Connect(socket: Socket, host: String, port: Int, username: String, password: String) {
         val input = socket.getInputStream()
         val output = socket.getOutputStream()
-        output.write(byteArrayOf(0x05, 0x01, 0x00))
+        val authEnabled = username.isNotEmpty() || password.isNotEmpty()
+        output.write(if (authEnabled) byteArrayOf(0x05, 0x02, 0x00, 0x02) else byteArrayOf(0x05, 0x01, 0x00))
         output.flush()
         val methodReply = input.readExact(2)
-        require(methodReply[0] == 0x05.toByte() && methodReply[1] == 0x00.toByte()) {
-            "SOCKS5 method rejected"
+        require(methodReply[0] == 0x05.toByte()) { "invalid SOCKS5 method reply" }
+        when (methodReply[1].toInt() and 0xff) {
+            0x00 -> Unit
+            0x02 -> socks5Authenticate(input, output, username, password)
+            else -> error("SOCKS5 method rejected")
         }
 
         val hostBytes = host.encodeToByteArray()
@@ -655,6 +725,30 @@ class TcptunVpnService : VpnService() {
         input.readExact(addressLength + 2)
     }
 
+    private fun socks5Authenticate(
+        input: java.io.InputStream,
+        output: java.io.OutputStream,
+        username: String,
+        password: String,
+    ) {
+        val usernameBytes = username.encodeToByteArray()
+        val passwordBytes = password.encodeToByteArray()
+        require(usernameBytes.size <= 255) { "SOCKS5 username is too long" }
+        require(passwordBytes.size <= 255) { "SOCKS5 password is too long" }
+        val request = ByteArray(3 + usernameBytes.size + passwordBytes.size)
+        request[0] = 0x01
+        request[1] = usernameBytes.size.toByte()
+        usernameBytes.copyInto(request, destinationOffset = 2)
+        request[2 + usernameBytes.size] = passwordBytes.size.toByte()
+        passwordBytes.copyInto(request, destinationOffset = 3 + usernameBytes.size)
+        output.write(request)
+        output.flush()
+        val reply = input.readExact(2)
+        require(reply[0] == 0x01.toByte() && reply[1] == 0x00.toByte()) {
+            "SOCKS5 username/password auth failed"
+        }
+    }
+
     private fun java.io.InputStream.readExact(length: Int): ByteArray {
         val data = ByteArray(length)
         var offset = 0
@@ -666,6 +760,10 @@ class TcptunVpnService : VpnService() {
             offset += read
         }
         return data
+    }
+
+    private fun activeLocalSocksConnectAddr(): String {
+        return "$LOCAL_SOCKS_HOST:$activeSocksPort"
     }
 
     private fun buildNotification(state: String): Notification {
@@ -746,9 +844,7 @@ class TcptunVpnService : VpnService() {
         const val ACTION_STOP = "com.tcptun.client.STOP"
         const val EXTRA_CONFIG = "config"
         const val LOCAL_SOCKS_HOST = "127.0.0.1"
-        const val LOCAL_SOCKS_PORT = 1080
-        const val LOCAL_SOCKS_ADDR = "$LOCAL_SOCKS_HOST:$LOCAL_SOCKS_PORT"
-        const val LOCAL_SOCKS_LISTEN_ADDR = "0.0.0.0:$LOCAL_SOCKS_PORT"
+        const val DEFAULT_SOCKS_PORT = 1080
         const val DEFAULT_VPN_MTU = 1400
         private const val VPN_DISPLAY_NAME = "TcpTun VPN"
         private const val CHANNEL_ID = "tcptun_vpn_silent"
@@ -776,6 +872,10 @@ class TcptunVpnService : VpnService() {
         private const val KEY_RUNTIME_MTU = "runtimeMtu"
         private const val KEY_RUNTIME_UDP_ENABLED = "runtimeUdpEnabled"
         private const val KEY_RUNTIME_POWER_SAVING = "runtimePowerSaving"
+        private const val KEY_RUNTIME_SOCKS_PORT = "runtimeSocksPort"
+        private const val KEY_RUNTIME_SOCKS_LISTEN_ALL = "runtimeSocksListenAll"
+        private const val KEY_RUNTIME_SOCKS_USERNAME = "runtimeSocksUsername"
+        private const val KEY_RUNTIME_SOCKS_PASSWORD = "runtimeSocksPassword"
         @Volatile private var denseHealthCheckUntilMs = 0L
         private const val APP_FILTER_PREFS = "tcptun_app_filter"
         private const val KEY_FILTER_MODE = "filterMode"
@@ -863,14 +963,17 @@ class TcptunVpnService : VpnService() {
             val routeConfigPath = ensureAndroidRouteConfig(context)
             val runtimeSettings = readRuntimeSettings(context)
             val effectiveConfig = config.copy(udp = config.udp && runtimeSettings.udpEnabled && !runtimeSettings.powerSavingMode)
+            val localListenAddr = localSocksListenAddr(runtimeSettings)
             return Intent(context, TcptunVpnService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(
                     EXTRA_CONFIG,
                     effectiveConfig.toBridgeJson(
-                        LOCAL_SOCKS_LISTEN_ADDR,
+                        localListenAddr,
                         routeConfigPath,
                         powerSavingMode = runtimeSettings.powerSavingMode,
+                        socks5Username = runtimeSettings.socksUsername,
+                        socks5Password = runtimeSettings.socksPassword,
                     ),
                 )
                 .putExtra("serverHost", effectiveConfig.serverHost)
@@ -931,29 +1034,62 @@ class TcptunVpnService : VpnService() {
             val prefs = context.applicationContext.getSharedPreferences(RUNTIME_PREFS, Context.MODE_PRIVATE)
             val mtu = prefs.getInt(KEY_RUNTIME_MTU, DEFAULT_VPN_MTU).coerceIn(1280, 1500)
             val powerSavingMode = prefs.getBoolean(KEY_RUNTIME_POWER_SAVING, false)
+            val socksPort = prefs.getInt(KEY_RUNTIME_SOCKS_PORT, DEFAULT_SOCKS_PORT).coerceIn(1, 65535)
             return RuntimeSettings(
                 mtu = mtu,
                 udpEnabled = prefs.getBoolean(KEY_RUNTIME_UDP_ENABLED, true) && !powerSavingMode,
                 powerSavingMode = powerSavingMode,
+                socksPort = socksPort,
+                socksListenAll = prefs.getBoolean(KEY_RUNTIME_SOCKS_LISTEN_ALL, false),
+                socksUsername = prefs.getString(KEY_RUNTIME_SOCKS_USERNAME, "").orEmpty(),
+                socksPassword = prefs.getString(KEY_RUNTIME_SOCKS_PASSWORD, "").orEmpty(),
             )
         }
 
         fun writeRuntimeSettings(context: Context, settings: RuntimeSettings) {
             val normalizedPowerSavingMode = settings.powerSavingMode
             val normalizedUdpEnabled = settings.udpEnabled && !normalizedPowerSavingMode
+            val normalizedSocksPort = settings.socksPort.coerceIn(1, 65535)
+            val normalizedSettings = settings.copy(
+                udpEnabled = normalizedUdpEnabled,
+                powerSavingMode = normalizedPowerSavingMode,
+                socksPort = normalizedSocksPort,
+                socksUsername = settings.socksUsername,
+                socksPassword = settings.socksPassword,
+            )
             context.applicationContext.getSharedPreferences(RUNTIME_PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putInt(KEY_RUNTIME_MTU, settings.mtu.coerceIn(1280, 1500))
                 .putBoolean(KEY_RUNTIME_UDP_ENABLED, normalizedUdpEnabled)
                 .putBoolean(KEY_RUNTIME_POWER_SAVING, normalizedPowerSavingMode)
+                .putInt(KEY_RUNTIME_SOCKS_PORT, normalizedSocksPort)
+                .putBoolean(KEY_RUNTIME_SOCKS_LISTEN_ALL, settings.socksListenAll)
+                .putString(KEY_RUNTIME_SOCKS_USERNAME, settings.socksUsername)
+                .putString(KEY_RUNTIME_SOCKS_PASSWORD, settings.socksPassword)
                 .apply()
             TcptunState.updateDiagnostics {
                 it.copy(
                     mtu = settings.mtu.coerceIn(1280, 1500),
                     udpEnabled = normalizedUdpEnabled,
                     powerSavingMode = normalizedPowerSavingMode,
+                    localProxyAddress = localSocksConnectAddr(normalizedSettings),
+                    localProxyPort = normalizedSocksPort,
                 )
             }
+            TcptunState.appendLog("runtime settings saved: socks=${localSocksListenAddr(normalizedSettings)} mtu=${normalizedSettings.mtu} udp=${normalizedSettings.udpEnabled}")
+        }
+
+        fun localSocksListenAddr(settings: RuntimeSettings): String {
+            val host = if (settings.socksListenAll) "0.0.0.0" else LOCAL_SOCKS_HOST
+            return "$host:${settings.socksPort.coerceIn(1, 65535)}"
+        }
+
+        fun localSocksConnectAddr(settings: RuntimeSettings): String {
+            return "$LOCAL_SOCKS_HOST:${settings.socksPort.coerceIn(1, 65535)}"
+        }
+
+        fun defaultLocalSocksConnectAddr(): String {
+            return "$LOCAL_SOCKS_HOST:$DEFAULT_SOCKS_PORT"
         }
 
         private fun saveLastRunningConfig(context: Context, config: AppConfig) {
