@@ -49,6 +49,7 @@ data class AppConfig(
         powerSavingMode: Boolean = false,
         socks5Username: String = "",
         socks5Password: String = "",
+        routeExternalSources: Boolean = false,
     ): String {
         val heartbeatInterval = if (powerSavingMode) "120s" else "30s"
         val connectionIdleTimeout = if (powerSavingMode) "5m" else "2m"
@@ -77,6 +78,7 @@ data class AppConfig(
             .put("upstream_protocol", upstreamProtocol)
             .put("socks5_username", socks5Username)
             .put("socks5_password", socks5Password)
+            .put("route_external_sources", routeExternalSources)
             .put("enable_udp", udp)
             .put("config_path", "")
             .put("route_config_path", routeConfigPath)

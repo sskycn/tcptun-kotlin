@@ -43,6 +43,7 @@ data class RuntimeSettings(
     val powerSavingMode: Boolean = false,
     val socksPort: Int = TcptunVpnService.DEFAULT_SOCKS_PORT,
     val socksListenAll: Boolean = false,
+    val routeExternalSources: Boolean = false,
     val socksUsername: String = "",
     val socksPassword: String = "",
 )
@@ -921,6 +922,7 @@ class TcptunVpnService : VpnService() {
         private const val KEY_RUNTIME_POWER_SAVING = "runtimePowerSaving"
         private const val KEY_RUNTIME_SOCKS_PORT = "runtimeSocksPort"
         private const val KEY_RUNTIME_SOCKS_LISTEN_ALL = "runtimeSocksListenAll"
+        private const val KEY_RUNTIME_ROUTE_EXTERNAL_SOURCES = "runtimeRouteExternalSources"
         private const val KEY_RUNTIME_SOCKS_USERNAME = "runtimeSocksUsername"
         private const val KEY_RUNTIME_SOCKS_PASSWORD = "runtimeSocksPassword"
         @Volatile private var denseHealthCheckUntilMs = 0L
@@ -1021,6 +1023,7 @@ class TcptunVpnService : VpnService() {
                         powerSavingMode = runtimeSettings.powerSavingMode,
                         socks5Username = runtimeSettings.socksUsername,
                         socks5Password = runtimeSettings.socksPassword,
+                        routeExternalSources = runtimeSettings.routeExternalSources,
                     ),
                 )
                 .putExtra("serverHost", effectiveConfig.serverHost)
@@ -1093,6 +1096,7 @@ class TcptunVpnService : VpnService() {
                 powerSavingMode = powerSavingMode,
                 socksPort = socksPort,
                 socksListenAll = prefs.getBoolean(KEY_RUNTIME_SOCKS_LISTEN_ALL, false),
+                routeExternalSources = prefs.getBoolean(KEY_RUNTIME_ROUTE_EXTERNAL_SOURCES, false),
                 socksUsername = prefs.getString(KEY_RUNTIME_SOCKS_USERNAME, "").orEmpty(),
                 socksPassword = prefs.getString(KEY_RUNTIME_SOCKS_PASSWORD, "").orEmpty(),
             )
@@ -1106,6 +1110,7 @@ class TcptunVpnService : VpnService() {
                 udpEnabled = normalizedUdpEnabled,
                 powerSavingMode = normalizedPowerSavingMode,
                 socksPort = normalizedSocksPort,
+                routeExternalSources = settings.routeExternalSources,
                 socksUsername = settings.socksUsername,
                 socksPassword = settings.socksPassword,
             )
@@ -1116,6 +1121,7 @@ class TcptunVpnService : VpnService() {
                 .putBoolean(KEY_RUNTIME_POWER_SAVING, normalizedPowerSavingMode)
                 .putInt(KEY_RUNTIME_SOCKS_PORT, normalizedSocksPort)
                 .putBoolean(KEY_RUNTIME_SOCKS_LISTEN_ALL, settings.socksListenAll)
+                .putBoolean(KEY_RUNTIME_ROUTE_EXTERNAL_SOURCES, settings.routeExternalSources)
                 .putString(KEY_RUNTIME_SOCKS_USERNAME, settings.socksUsername)
                 .putString(KEY_RUNTIME_SOCKS_PASSWORD, settings.socksPassword)
                 .apply()

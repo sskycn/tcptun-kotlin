@@ -847,6 +847,9 @@ private fun SettingsPage(onBack: () -> Unit) {
                         ToggleRow(stringResource(R.string.socks_listen_all), settings.socksListenAll) { checked ->
                             saveSettings(settings.copy(socksListenAll = checked))
                         }
+                        ToggleRow(stringResource(R.string.route_external_sources), settings.routeExternalSources) { checked ->
+                            saveSettings(settings.copy(routeExternalSources = checked))
+                        }
                         OutlinedTextField(
                             value = settings.socksUsername,
                             onValueChange = { value -> saveSettings(settings.copy(socksUsername = value.take(255))) },
@@ -903,6 +906,7 @@ private fun SettingsPage(onBack: () -> Unit) {
                         )
                         DiagnosticsLine("MTU", diagnostics.mtu.toString())
                         DiagnosticsLine(stringResource(R.string.socks_listen), TcptunVpnService.localSocksListenAddr(settings))
+                        DiagnosticsLine(stringResource(R.string.route_external_sources), if (settings.routeExternalSources) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.socks_auth), if (settings.socksUsername.isNotEmpty() || settings.socksPassword.isNotEmpty()) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.field_udp), if (diagnostics.udpEnabled) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.diag_power_saving), if (diagnostics.powerSavingMode) stringResource(R.string.enabled) else stringResource(R.string.disabled))

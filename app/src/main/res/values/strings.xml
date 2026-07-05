@@ -48,10 +48,11 @@
     <string name="socks_port">SOCKS port</string>
     <string name="socks_port_error">Use a port from 1 to 65535.</string>
     <string name="socks_listen_all">Listen on all interfaces</string>
+    <string name="route_external_sources">Route external SOCKS clients</string>
     <string name="socks_username">SOCKS username</string>
     <string name="socks_password">SOCKS password</string>
     <string name="socks_auth">SOCKS auth</string>
-    <string name="socks_settings_note">By default the SOCKS listener binds to 127.0.0.1. Enable all interfaces to bind 0.0.0.0. Username/password are optional.</string>
+    <string name="socks_settings_note">By default the SOCKS listener binds to 127.0.0.1. Enable all interfaces to bind 0.0.0.0. External client routing requires tcptun-go support. Username/password are optional.</string>
     <string name="seconds_value">%1$ds</string>
     <string name="recent_restart_reason">Last restart reason</string>
     <string name="transparent_proxy_settings">Transparent proxy settings</string>
