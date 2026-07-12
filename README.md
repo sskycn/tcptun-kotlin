@@ -161,7 +161,7 @@ To let another device use the running Android client, set that device's HTTP or 
 `PHONE_LAN_IP:1080`. The phone and the other device must be on a network that permits inbound
 connections to the phone.
 
-Each row also has share, edit, and delete actions. Profiles are saved locally in `SharedPreferences`.
+Each row has a share action. Swipe a row to the left to delete it after confirmation. Profiles are saved locally in `SharedPreferences`.
 
 Supported import/export URI schemes:
 

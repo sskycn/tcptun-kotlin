@@ -2,6 +2,7 @@
     <string name="app_name">TcpTun</string>
     <string name="profiles_title">配置项</string>
     <string name="actions">操作</string>
+    <string name="more_options">更多选项</string>
     <string name="import_from_clipboard">从剪切板导入</string>
     <string name="add_profile">添加配置</string>
     <string name="edit_profile">编辑配置</string>
@@ -9,6 +10,8 @@
     <string name="share">分享</string>
     <string name="edit">编辑</string>
     <string name="delete">删除</string>
+    <string name="confirm_delete_profile">删除配置？</string>
+    <string name="confirm_delete_profile_message">确定删除“%1$s”吗？删除后仍可通过提示消息撤销。</string>
     <string name="undo">撤销</string>
     <string name="profile_deleted">已删除 %1$s</string>
     <string name="profile_deleted_prefix">已删除</string>
@@ -51,6 +54,8 @@
     <string name="socks_port_error">请输入 1 到 65535 之间的端口。</string>
     <string name="socks_listen_all">监听所有网卡</string>
     <string name="route_external_sources">外部 SOCKS 客户端使用路由规则</string>
+    <string name="direct_first">直连优先</string>
+    <string name="direct_first_note">对生成的配置先尝试 TCP 直连，直连失败时回落到隧道。UDP 仍使用隧道；完整 JSON 配置保留自身路由。</string>
     <string name="socks_username">SOCKS 用户名</string>
     <string name="socks_password">SOCKS 密码</string>
     <string name="socks_auth">SOCKS 认证</string>

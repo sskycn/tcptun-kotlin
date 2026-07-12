@@ -2,6 +2,7 @@
     <string name="app_name">TcpTun</string>
     <string name="profiles_title">Profiles</string>
     <string name="actions">Actions</string>
+    <string name="more_options">More options</string>
     <string name="import_from_clipboard">Import from clipboard</string>
     <string name="add_profile">Add profile</string>
     <string name="edit_profile">Edit profile</string>
@@ -9,6 +10,8 @@
     <string name="share">Share</string>
     <string name="edit">Edit</string>
     <string name="delete">Delete</string>
+    <string name="confirm_delete_profile">Delete profile?</string>
+    <string name="confirm_delete_profile_message">Delete “%1$s”? This action can be undone from the message shown afterward.</string>
     <string name="undo">Undo</string>
     <string name="profile_deleted">Deleted %1$s</string>
     <string name="profile_deleted_prefix">Deleted</string>
@@ -51,6 +54,8 @@
     <string name="socks_port_error">Use a port from 1 to 65535.</string>
     <string name="socks_listen_all">Listen on all interfaces</string>
     <string name="route_external_sources">Route external SOCKS clients</string>
+    <string name="direct_first">Direct first</string>
+    <string name="direct_first_note">For generated profiles, try direct TCP connections first and fall back to the tunnel when direct access fails. UDP continues to use the tunnel. Full JSON profiles keep their own routing.</string>
     <string name="socks_username">SOCKS username</string>
     <string name="socks_password">SOCKS password</string>
     <string name="socks_auth">SOCKS auth</string>

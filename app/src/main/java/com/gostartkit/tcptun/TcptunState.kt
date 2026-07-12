@@ -1,5 +1,6 @@
 package com.tcptun.client
 
+import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import org.json.JSONObject
@@ -28,6 +29,7 @@ data class TcptunDiagnostics(
 
 object TcptunState {
     private const val MAX_LOGS = 80
+    private const val LOG_TAG = "TcpTun"
 
     val status = mutableStateOf("Stopped")
     val lastError = mutableStateOf("")
@@ -96,6 +98,7 @@ object TcptunState {
     fun appendLog(line: String) {
         val clean = line.trim()
         if (clean.isEmpty()) return
+        Log.i(LOG_TAG, clean)
         if (logs.lastOrNull() == clean) return
         logs.add(clean)
         while (logs.size > MAX_LOGS) {

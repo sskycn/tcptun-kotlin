@@ -32,6 +32,31 @@ class AndroidBridgeContractTest {
     }
 
     @Test
+    fun underlyingNetworkSelectionPrefersValidationBeforeTransport() {
+        val validatedCellular = underlyingNetworkScore(
+            validated = true,
+            ethernet = false,
+            wifi = false,
+            cellular = true,
+        )
+        val unvalidatedWifi = underlyingNetworkScore(
+            validated = false,
+            ethernet = false,
+            wifi = true,
+            cellular = false,
+        )
+        val validatedWifi = underlyingNetworkScore(
+            validated = true,
+            ethernet = false,
+            wifi = true,
+            cellular = false,
+        )
+
+        assertTrue(validatedCellular > unvalidatedWifi)
+        assertTrue(validatedWifi > validatedCellular)
+    }
+
+    @Test
     fun profileShareContainsOnlyUriText() {
         val profile = AppConfig(
             name = "share-test",
@@ -72,6 +97,7 @@ class AndroidBridgeContractTest {
             protocol = "native",
         ).toBridgeJson(
             localListenAddr = "127.0.0.1:18080",
+            directFirst = true,
         )
 
         val root = JSONObject(config)
@@ -79,7 +105,8 @@ class AndroidBridgeContractTest {
         assertTrue(root.has("inbounds"))
         assertTrue(root.has("outbounds"))
         val rules = root.getJSONObject("route").getJSONArray("rules")
-        assertEquals("auto", rules.getJSONObject(0).getString("outbound"))
+        assertEquals("proxy", rules.getJSONObject(0).getString("outbound"))
+        assertEquals("auto", rules.getJSONObject(1).getString("outbound"))
 
         Androidbridge.start(config)
         assertTrue(Androidbridge.status() in setOf("Starting", "Running"))
@@ -113,12 +140,15 @@ class AndroidBridgeContractTest {
             ).toBridgeJson(
                 localListenAddr = "0.0.0.0:18082",
                 routeExternalSources = true,
+                directFirst = true,
             ),
         )
         val routedOutbounds = routedExternal.getJSONArray("outbounds")
         assertEquals("trojan-password", routedOutbounds.getJSONObject(0).getString("password"))
         assertEquals(3, routedOutbounds.length())
-        assertEquals("auto", routedExternal.getJSONObject("route").getJSONArray("rules").getJSONObject(0).getString("outbound"))
+        val routedRules = routedExternal.getJSONObject("route").getJSONArray("rules")
+        assertEquals("proxy", routedRules.getJSONObject(0).getString("outbound"))
+        assertEquals("auto", routedRules.getJSONObject(1).getString("outbound"))
     }
 
     @Test

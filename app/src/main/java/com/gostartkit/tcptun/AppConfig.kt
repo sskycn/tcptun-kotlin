@@ -60,6 +60,7 @@ data class AppConfig(
         socks5Username: String = "",
         socks5Password: String = "",
         routeExternalSources: Boolean = false,
+        directFirst: Boolean = false,
     ): String {
         if (rawConfigJson.isNotBlank()) {
             return prepareRawConfigForAndroid(
@@ -120,7 +121,8 @@ data class AppConfig(
 
         // tcptun-go's direct-first outbound is TCP-only. UDP keeps using the
         // tunnel, matching the previous Android client behavior for public IPs.
-        val allowDirectFirst = listenHost in setOf("127.0.0.1", "::1", "localhost") || routeExternalSources
+        val allowDirectFirst = directFirst &&
+            (listenHost in setOf("127.0.0.1", "::1", "localhost") || routeExternalSources)
         val outbounds = JSONArray()
             .put(proxy)
             .put(JSONObject().put("tag", "direct").put("type", "direct"))
@@ -141,6 +143,18 @@ data class AppConfig(
 
         val rules = JSONArray()
         if (allowDirectFirst) {
+            rules.put(
+                JSONObject()
+                    .put("inbound", JSONArray().put("local"))
+                    .put("network", JSONArray().put("tcp"))
+                    .put(
+                        "domains",
+                        JSONArray()
+                            .put("connectivitycheck.gstatic.com")
+                            .put("cp.cloudflare.com"),
+                    )
+                    .put("outbound", "proxy"),
+            )
             rules.put(
                 JSONObject()
                     .put("inbound", JSONArray().put("local"))

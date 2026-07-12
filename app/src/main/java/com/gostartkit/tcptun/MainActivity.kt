@@ -1,6 +1,7 @@
 package com.tcptun.client
 
 import android.Manifest
+import android.content.ClipData
 import android.content.Context
 import android.content.ClipboardManager
 import android.content.Intent
@@ -40,7 +41,6 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Tune
@@ -66,10 +66,14 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -124,6 +128,7 @@ fun TcptunScreen() {
     var showDiagnostics by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
+    var profilePendingDeletion by remember { mutableStateOf<AppConfig?>(null) }
     var tcpingMessage by remember { mutableStateOf("") }
     var tcpingInProgress by remember { mutableStateOf(false) }
     var tcpingTargetIndex by remember { mutableStateOf(0) }
@@ -163,6 +168,7 @@ fun TcptunScreen() {
             ?.getOrNull()
         if (clipboardProfile != null) {
             save(ProfilesState(state.profiles + clipboardProfile, clipboardProfile.id))
+            clearClipboardText(context, link)
             return
         }
 
@@ -260,7 +266,10 @@ fun TcptunScreen() {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             topBar = {
-                TopBar(title = stringResource(R.string.profiles_title))
+                TopBar(
+                    title = stringResource(R.string.profiles_title),
+                    onSettings = { showSettings = true },
+                )
             },
             snackbarHost = { SnackbarHost(snackbarHostState) },
             floatingActionButton = {
@@ -317,8 +326,7 @@ fun TcptunScreen() {
                         onClick = { toggleProfile(profile) },
                         shareable = ProfileUriCodec.encode(profile) != null,
                         onShare = { shareProfile(context, profile) },
-                        onEdit = { editingProfile = profile },
-                        onDelete = { deleteProfile(profile) },
+                        onDeleteRequest = { profilePendingDeletion = profile },
                     )
                 }
                 if (state.profiles.isEmpty()) {
@@ -349,13 +357,76 @@ fun TcptunScreen() {
     if (showLogs) {
         LogsDialog(onDismiss = { showLogs = false })
     }
+
+    profilePendingDeletion?.let { profile ->
+        AlertDialog(
+            onDismissRequest = { profilePendingDeletion = null },
+            icon = { Icon(Icons.Rounded.Delete, contentDescription = null) },
+            title = { Text(stringResource(R.string.confirm_delete_profile)) },
+            text = { Text(stringResource(R.string.confirm_delete_profile_message, profile.name)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        profilePendingDeletion = null
+                        deleteProfile(profile)
+                    },
+                ) {
+                    Text(stringResource(R.string.delete))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { profilePendingDeletion = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TopBar(title: String) {
+private fun TopBar(
+    title: String,
+    onSettings: () -> Unit,
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+    val colors = MaterialTheme.colorScheme
+
     TopAppBar(
         title = { Text(title, style = MaterialTheme.typography.titleLarge) },
+        actions = {
+            Box {
+                IconButton(onClick = { menuExpanded = true }) {
+                    Icon(
+                        Icons.Rounded.MoreVert,
+                        contentDescription = stringResource(R.string.more_options),
+                    )
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                    shape = RoundedCornerShape(12.dp),
+                    containerColor = colors.surfaceContainer,
+                    tonalElevation = 3.dp,
+                    shadowElevation = 6.dp,
+                ) {
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Icon(Icons.Rounded.Tune, contentDescription = null)
+                        },
+                        text = { Text(stringResource(R.string.settings)) },
+                        onClick = {
+                            menuExpanded = false
+                            onSettings()
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = colors.onSurface,
+                            leadingIconColor = colors.onSurfaceVariant,
+                        ),
+                    )
+                }
+            }
+        },
     )
 }
 
@@ -380,117 +451,92 @@ private fun ProfileRow(
     shareable: Boolean,
     onClick: () -> Unit,
     onShare: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
+    onDeleteRequest: () -> Unit,
 ) {
-    var menuExpanded by remember { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
     val rowColor = if (selected) colors.secondaryContainer else colors.surfaceContainerLow
     val statusColor = if (status == "Running") colors.primary else colors.tertiary
+    val dismissState = rememberSwipeToDismissBoxState()
 
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 108.dp),
-        shape = RoundedCornerShape(8.dp),
-        color = rowColor,
-        tonalElevation = if (selected) 2.dp else 0.dp,
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(enabled = enabled, onClick = onClick),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
+    LaunchedEffect(dismissState.currentValue) {
+        if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart) {
+            onDeleteRequest()
+            dismissState.reset()
+        }
+    }
+
+    SwipeToDismissBox(
+        state = dismissState,
+        enableDismissFromStartToEnd = false,
+        enableDismissFromEndToStart = true,
+        backgroundContent = {
+            Row(
                 modifier = Modifier
-                    .width(5.dp)
-                    .height(72.dp)
-                    .background(if (selected) statusColor else Color.Transparent, RoundedCornerShape(8.dp)),
-            )
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(vertical = 14.dp, horizontal = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                    .fillMaxSize()
+                    .background(colors.errorContainer, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 24.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    profile.name,
-                    style = MaterialTheme.typography.titleLarge,
-                    color = colors.onSurface,
-                )
-                Text(
-                    profile.maskedAddress(),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = colors.onSurfaceVariant,
-                )
-                Text(
-                    text = status?.let { "${profile.label()} · ${vpnStatusLabel(it)}" } ?: profile.label(),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = statusColor,
+                Icon(
+                    Icons.Rounded.Delete,
+                    contentDescription = stringResource(R.string.delete),
+                    tint = colors.onErrorContainer,
                 )
             }
-            Box(
-                modifier = Modifier.padding(end = 8.dp),
+        },
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 108.dp),
+            shape = RoundedCornerShape(8.dp),
+            color = rowColor,
+            tonalElevation = if (selected) 2.dp else 0.dp,
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = enabled, onClick = onClick),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = { menuExpanded = true }) {
-                    Icon(
-                        Icons.Rounded.MoreVert,
-                        contentDescription = stringResource(R.string.profile_actions),
-                        tint = colors.onSurfaceVariant,
+                Box(
+                    modifier = Modifier
+                        .width(5.dp)
+                        .height(72.dp)
+                        .background(if (selected) statusColor else Color.Transparent, RoundedCornerShape(8.dp)),
+                )
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(vertical = 14.dp, horizontal = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        profile.name,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = colors.onSurface,
+                    )
+                    Text(
+                        profile.maskedAddress(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.onSurfaceVariant,
+                    )
+                    Text(
+                        text = status?.let { "${profile.label()} · ${vpnStatusLabel(it)}" } ?: profile.label(),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = statusColor,
                     )
                 }
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                    shape = RoundedCornerShape(12.dp),
-                    containerColor = colors.surfaceContainer,
-                    tonalElevation = 3.dp,
-                    shadowElevation = 6.dp,
+                IconButton(
+                    onClick = onShare,
+                    enabled = shareable,
+                    modifier = Modifier.padding(end = 8.dp),
                 ) {
-                    if (shareable) {
-                        DropdownMenuItem(
-                            leadingIcon = {
-                                Icon(Icons.Rounded.Share, contentDescription = null)
-                            },
-                            text = { Text(stringResource(R.string.share)) },
-                            onClick = {
-                                menuExpanded = false
-                                onShare()
-                            },
-                            colors = MenuDefaults.itemColors(
-                                textColor = colors.onSurface,
-                                leadingIconColor = colors.onSurfaceVariant,
-                            ),
-                        )
-                    }
-                    DropdownMenuItem(
-                        leadingIcon = {
-                            Icon(Icons.Rounded.Edit, contentDescription = null)
-                        },
-                        text = { Text(stringResource(R.string.edit)) },
-                        onClick = {
-                            menuExpanded = false
-                            onEdit()
-                        },
-                        colors = MenuDefaults.itemColors(
-                            textColor = colors.onSurface,
-                            leadingIconColor = colors.onSurfaceVariant,
-                        ),
-                    )
-                    DropdownMenuItem(
-                        leadingIcon = {
-                            Icon(Icons.Rounded.Delete, contentDescription = null)
-                        },
-                        text = { Text(stringResource(R.string.delete)) },
-                        onClick = {
-                            menuExpanded = false
-                            onDelete()
-                        },
-                        colors = MenuDefaults.itemColors(
-                            textColor = colors.error,
-                            leadingIconColor = colors.error,
-                        ),
+                    Icon(
+                        Icons.Rounded.Share,
+                        contentDescription = stringResource(R.string.share),
+                        tint = if (shareable) colors.onSurfaceVariant else colors.onSurface.copy(alpha = 0.38f),
                     )
                 }
             }
@@ -727,6 +773,9 @@ private fun SettingsPage(onBack: () -> Unit) {
                         ToggleRow(stringResource(R.string.route_external_sources), settings.routeExternalSources) { checked ->
                             saveSettings(settings.copy(routeExternalSources = checked))
                         }
+                        ToggleRow(stringResource(R.string.direct_first), settings.directFirst) { checked ->
+                            saveSettings(settings.copy(directFirst = checked))
+                        }
                         OutlinedTextField(
                             value = settings.socksUsername,
                             onValueChange = { value -> saveSettings(settings.copy(socksUsername = value.take(255))) },
@@ -750,6 +799,11 @@ private fun SettingsPage(onBack: () -> Unit) {
                         }
                         Text(
                             stringResource(R.string.socks_settings_note),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            stringResource(R.string.direct_first_note),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -784,6 +838,7 @@ private fun SettingsPage(onBack: () -> Unit) {
                         DiagnosticsLine("MTU", diagnostics.mtu.toString())
                         DiagnosticsLine(stringResource(R.string.socks_listen), TcptunVpnService.localSocksListenAddr(settings))
                         DiagnosticsLine(stringResource(R.string.route_external_sources), if (settings.routeExternalSources) stringResource(R.string.enabled) else stringResource(R.string.disabled))
+                        DiagnosticsLine(stringResource(R.string.direct_first), if (settings.directFirst) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.socks_auth), if (settings.socksUsername.isNotEmpty() || settings.socksPassword.isNotEmpty()) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.field_udp), if (diagnostics.udpEnabled) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.diag_power_saving), if (diagnostics.powerSavingMode) stringResource(R.string.enabled) else stringResource(R.string.disabled))
@@ -1311,6 +1366,23 @@ private fun clipboardText(context: Context): String {
     val clip = clipboard.primaryClip ?: return ""
     if (clip.itemCount == 0) return ""
     return clip.getItemAt(0).coerceToText(context)?.toString().orEmpty()
+}
+
+private fun clearClipboardText(context: Context, expectedText: String) {
+    val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
+    val currentText = clipboard.primaryClip
+        ?.takeIf { it.itemCount > 0 }
+        ?.getItemAt(0)
+        ?.coerceToText(context)
+        ?.toString()
+        ?.trim()
+    if (currentText != expectedText) return
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        clipboard.clearPrimaryClip()
+    } else {
+        clipboard.setPrimaryClip(ClipData.newPlainText("", ""))
+    }
 }
 
 private fun needsNotificationPermission(context: Context): Boolean {
