@@ -55,7 +55,6 @@ internal data class BridgeStatusEvent(
     fun shouldLog(): Boolean {
         return state.lowercase() in setOf(
             "core_ready",
-            "listening",
             "running",
             "degraded",
             "reconnecting",
@@ -215,7 +214,7 @@ object TcptunState {
             "stopping" -> "Stopping"
             "stopped" -> "Stopped"
             "error" -> "Error"
-            "core_ready", "listening", "running", "upstream_connecting", "upstream_connected", "degraded", "reconnecting" -> "Running"
+            "core_ready", "running", "upstream_connecting", "upstream_connected", "degraded", "reconnecting" -> "Running"
             else -> "Unknown"
         }
     }

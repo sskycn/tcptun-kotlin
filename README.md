@@ -53,8 +53,8 @@ func (e *Engine) Status() string
 func (e *Engine) StatusJSON() string
 ```
 
-Each `TcptunVpnService` instance owns one `Engine`; the package-level methods are
-legacy compatibility APIs and are not used by the app.
+Each `TcptunVpnService` instance owns one `Engine`; runtime control is available
+only through that instance.
 
 `Start` receives the current strict `tcptun-go` file configuration. The Android
 app builds a local mixed/SOCKS5 inbound, the selected tunnel outbound, a direct

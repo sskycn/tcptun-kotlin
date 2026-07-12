@@ -6,20 +6,16 @@ import androidbridge.Androidbridge
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONObject
-import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.net.InetAddress
+import java.net.ServerSocket
 
 @RunWith(AndroidJUnit4::class)
 class AndroidBridgeContractTest {
-    @After
-    fun stopBridge() {
-        runCatching { Androidbridge.stop() }
-    }
-
     @Test
     fun appUsesCurrentApplicationId() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -28,7 +24,12 @@ class AndroidBridgeContractTest {
 
     @Test
     fun currentBridgeExposesOptionalApplicationIdentityProvider() {
-        Androidbridge.setAppIdentityProvider(null)
+        val engine = Androidbridge.newEngine()
+        try {
+            engine.setAppIdentityProvider(null)
+        } finally {
+            engine.close()
+        }
     }
 
     @Test
@@ -123,8 +124,7 @@ class AndroidBridgeContractTest {
         assertEquals("example.com", rules.getJSONObject(1).getJSONArray("domain_suffixes").getString(0))
         assertEquals(2, rules.length())
 
-        Androidbridge.start(config.toString())
-        assertTrue(Androidbridge.status() in setOf("Starting", "Running"))
+        assertEngineStarts(config.toString())
     }
 
     @Test
@@ -179,8 +179,7 @@ class AndroidBridgeContractTest {
         assertEquals("proxy", rules.getJSONObject(0).getString("outbound"))
         assertEquals("auto", rules.getJSONObject(1).getString("outbound"))
 
-        Androidbridge.start(config)
-        assertTrue(Androidbridge.status() in setOf("Starting", "Running"))
+        assertEngineStarts(config)
     }
 
     @Test
@@ -257,8 +256,7 @@ class AndroidBridgeContractTest {
         assertEquals("blocked", root.getJSONObject("route").getJSONArray("rules").getJSONObject(0).getString("outbound"))
         assertEquals("prefer_ipv4", root.getJSONObject("dns").getString("strategy"))
 
-        Androidbridge.start(config)
-        assertTrue(Androidbridge.status() in setOf("Starting", "Running"))
+        assertEngineStarts(config)
     }
 
     @Test
@@ -305,7 +303,36 @@ class AndroidBridgeContractTest {
             .getJSONObject(0).getJSONArray("inbound")
         assertEquals("android-vpn", ruleInbound.getString(0))
 
-        Androidbridge.start(prepared.toString())
-        assertTrue(Androidbridge.status() in setOf("Starting", "Running"))
+        assertEngineStarts(prepared.toString())
+    }
+
+    private fun assertEngineStarts(config: String) {
+        val engine = Androidbridge.newEngine()
+        try {
+            engine.start(withAvailableInboundPorts(config))
+            assertTrue(engine.status() in setOf("Starting", "Running"))
+        } finally {
+            engine.close()
+        }
+    }
+
+    private fun withAvailableInboundPorts(config: String): String {
+        val root = JSONObject(config)
+        val inbounds = root.getJSONArray("inbounds")
+        val reservations = List(inbounds.length()) {
+            ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        }
+        try {
+            reservations.forEachIndexed { index, reservation ->
+                val inbound = inbounds.getJSONObject(index)
+                inbound.remove("address")
+                inbound.remove("listen_addresses")
+                inbound.put("listen", "127.0.0.1")
+                inbound.put("port", reservation.localPort)
+            }
+            return root.toString()
+        } finally {
+            reservations.forEach(ServerSocket::close)
+        }
     }
 }
