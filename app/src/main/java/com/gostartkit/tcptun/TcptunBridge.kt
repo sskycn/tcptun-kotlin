@@ -5,7 +5,9 @@ import java.lang.reflect.Proxy
 interface TcptunBridge {
     fun start(configJson: String)
     fun stop()
+    fun close()
     fun status(): String
+    fun statusJson(): String
     fun setLogCallback(onLog: (String) -> Unit)
     fun setStatusCallback(onStatus: (String) -> Unit)
     fun clearStatusCallback()
@@ -15,6 +17,7 @@ interface TcptunBridge {
     fun clearAppIdentityProvider()
 }
 
+/** Owns exactly one gomobile Engine for the lifetime of one VpnService. */
 class ReflectionTcptunBridge : TcptunBridge {
     private val bridgeClass: Class<*> by lazy {
         try {
@@ -26,171 +29,134 @@ class ReflectionTcptunBridge : TcptunBridge {
             )
         }
     }
+    private val engine: Any by lazy {
+        try {
+            bridgeClass.getMethod("newEngine").invoke(null)
+                ?: throw IllegalStateException("androidbridge.NewEngine returned null")
+        } catch (err: ReflectiveOperationException) {
+            val cause = err.cause ?: err
+            throw IllegalStateException(
+                "androidbridge Engine API is missing. Rebuild app/libs/androidbridge.aar from the current tcptun-go checkout.",
+                cause,
+            )
+        }
+    }
+
+    // Keep Java proxies strongly reachable for as long as Go can call them.
+    private var logCallback: Any? = null
+    private var statusCallback: Any? = null
+    private var socketProtector: Any? = null
+    private var appIdentityProvider: Any? = null
 
     override fun start(configJson: String) {
-        invokeStatic("start", "Start", parameterTypes = arrayOf(String::class.java), configJson)
+        invokeEngine("start", arrayOf(String::class.java), configJson)
     }
 
     override fun stop() {
-        invokeStatic("stop", "Stop")
+        invokeEngine("stop")
     }
 
-    override fun status(): String {
-        return (invokeStatic("status", "Status") as? String).orEmpty()
+    override fun close() {
+        invokeEngine("close")
+        logCallback = null
+        statusCallback = null
+        socketProtector = null
+        appIdentityProvider = null
     }
+
+    override fun status(): String = (invokeEngine("status") as? String).orEmpty()
+
+    override fun statusJson(): String = (invokeEngine("statusJSON") as? String).orEmpty()
 
     override fun setLogCallback(onLog: (String) -> Unit) {
-        val callbackClass = try {
-            Class.forName("androidbridge.LogCallback")
-        } catch (err: ClassNotFoundException) {
-            TcptunState.appendLog("androidbridge LogCallback is not available: ${err.message}")
-            return
-        }
-        val callback = Proxy.newProxyInstance(
-            callbackClass.classLoader,
-            arrayOf(callbackClass),
-        ) { _, method, args ->
+        val callbackClass = callbackClass("androidbridge.LogCallback") ?: return
+        val callback = Proxy.newProxyInstance(callbackClass.classLoader, arrayOf(callbackClass)) { _, method, args ->
             if (method.name.equals("onLog", ignoreCase = true) && !args.isNullOrEmpty()) {
                 onLog(args[0].toString())
             }
             null
         }
-        invokeStatic(
-            "setLogCallback",
-            "SetLogCallback",
-            parameterTypes = arrayOf(callbackClass),
-            callback,
-        )
+        logCallback = callback
+        invokeEngine("setLogCallback", arrayOf(callbackClass), callback)
     }
 
     override fun setStatusCallback(onStatus: (String) -> Unit) {
-        val callbackClass = try {
-            Class.forName("androidbridge.StatusCallback")
-        } catch (err: ClassNotFoundException) {
-            TcptunState.appendLog("androidbridge StatusCallback is not available: ${err.message}")
-            return
-        }
-        val callback = Proxy.newProxyInstance(
-            callbackClass.classLoader,
-            arrayOf(callbackClass),
-        ) { _, method, args ->
+        val callbackClass = callbackClass("androidbridge.StatusCallback") ?: return
+        val callback = Proxy.newProxyInstance(callbackClass.classLoader, arrayOf(callbackClass)) { _, method, args ->
             if (method.name.equals("onStatus", ignoreCase = true) && !args.isNullOrEmpty()) {
                 onStatus(args[0].toString())
             }
             null
         }
-        invokeStatic(
-            "setStatusCallback",
-            "SetStatusCallback",
-            parameterTypes = arrayOf(callbackClass),
-            callback,
-        )
+        statusCallback = callback
+        invokeEngine("setStatusCallback", arrayOf(callbackClass), callback)
     }
 
     override fun clearStatusCallback() {
-        val callbackClass = try {
-            Class.forName("androidbridge.StatusCallback")
-        } catch (_: ClassNotFoundException) {
-            return
-        }
-        invokeStatic(
-            "setStatusCallback",
-            "SetStatusCallback",
-            parameterTypes = arrayOf(callbackClass),
-            null,
-        )
+        clearCallback("androidbridge.StatusCallback", "setStatusCallback")
+        statusCallback = null
     }
 
     override fun setSocketProtector(onProtect: (Int) -> Boolean) {
-        val protectorClass = try {
-            Class.forName("androidbridge.SocketProtector")
-        } catch (err: ClassNotFoundException) {
-            TcptunState.appendLog("androidbridge SocketProtector is not available: ${err.message}")
-            return
-        }
-        val protector = Proxy.newProxyInstance(
-            protectorClass.classLoader,
-            arrayOf(protectorClass),
-        ) { _, method, args ->
+        val callbackClass = callbackClass("androidbridge.SocketProtector") ?: return
+        val callback = Proxy.newProxyInstance(callbackClass.classLoader, arrayOf(callbackClass)) { _, method, args ->
             if (method.name.equals("protect", ignoreCase = true) && !args.isNullOrEmpty()) {
                 val fd = (args[0] as? Number)?.toInt() ?: return@newProxyInstance false
                 return@newProxyInstance onProtect(fd)
             }
             false
         }
-        invokeStatic(
-            "setSocketProtector",
-            "SetSocketProtector",
-            parameterTypes = arrayOf(protectorClass),
-            protector,
-        )
+        socketProtector = callback
+        invokeEngine("setSocketProtector", arrayOf(callbackClass), callback)
     }
 
     override fun clearSocketProtector() {
-        val protectorClass = try {
-            Class.forName("androidbridge.SocketProtector")
-        } catch (_: ClassNotFoundException) {
-            return
-        }
-        invokeStatic(
-            "setSocketProtector",
-            "SetSocketProtector",
-            parameterTypes = arrayOf(protectorClass),
-            null,
-        )
+        clearCallback("androidbridge.SocketProtector", "setSocketProtector")
+        socketProtector = null
     }
 
     override fun setAppIdentityProvider(onIdentify: (String) -> String?) {
-        val providerClass = try {
-            Class.forName("androidbridge.AppIdentityProvider")
-        } catch (err: ClassNotFoundException) {
-            TcptunState.appendLog("androidbridge AppIdentityProvider is not available: ${err.message}")
-            return
-        }
-        val provider = Proxy.newProxyInstance(
-            providerClass.classLoader,
-            arrayOf(providerClass),
-        ) { _, method, args ->
+        val callbackClass = callbackClass("androidbridge.AppIdentityProvider") ?: return
+        val callback = Proxy.newProxyInstance(callbackClass.classLoader, arrayOf(callbackClass)) { _, method, args ->
             if (method.name.equals("identifyApp", ignoreCase = true) && !args.isNullOrEmpty()) {
                 return@newProxyInstance onIdentify(args[0].toString()).orEmpty()
             }
             ""
         }
-        invokeStatic(
-            "setAppIdentityProvider",
-            "SetAppIdentityProvider",
-            parameterTypes = arrayOf(providerClass),
-            provider,
-        )
+        appIdentityProvider = callback
+        invokeEngine("setAppIdentityProvider", arrayOf(callbackClass), callback)
     }
 
     override fun clearAppIdentityProvider() {
-        val providerClass = try {
-            Class.forName("androidbridge.AppIdentityProvider")
+        clearCallback("androidbridge.AppIdentityProvider", "setAppIdentityProvider")
+        appIdentityProvider = null
+    }
+
+    private fun callbackClass(name: String): Class<*>? {
+        return try {
+            Class.forName(name)
+        } catch (err: ClassNotFoundException) {
+            TcptunState.appendLog("$name is not available: ${err.message}")
+            null
+        }
+    }
+
+    private fun clearCallback(className: String, methodName: String) {
+        val callbackClass = try {
+            Class.forName(className)
         } catch (_: ClassNotFoundException) {
             return
         }
-        invokeStatic(
-            "setAppIdentityProvider",
-            "SetAppIdentityProvider",
-            parameterTypes = arrayOf(providerClass),
-            null,
-        )
+        invokeEngine(methodName, arrayOf(callbackClass), null)
     }
 
-    private fun invokeStatic(
-        lowerName: String,
-        upperName: String,
+    private fun invokeEngine(
+        name: String,
         parameterTypes: Array<Class<*>> = emptyArray(),
         vararg args: Any?,
     ): Any? {
-        val method = try {
-            bridgeClass.getMethod(lowerName, *parameterTypes)
-        } catch (_: NoSuchMethodException) {
-            bridgeClass.getMethod(upperName, *parameterTypes)
-        }
         return try {
-            method.invoke(null, *args)
+            engine.javaClass.getMethod(name, *parameterTypes).invoke(engine, *args)
         } catch (err: ReflectiveOperationException) {
             val cause = err.cause ?: err
             throw IllegalStateException(cause.message ?: cause.javaClass.name, cause)

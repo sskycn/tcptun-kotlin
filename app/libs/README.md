@@ -4,4 +4,6 @@ Build the gomobile binding artifact from the neighboring `tcptun-go` checkout:
 ./scripts/build-androidbridge.sh
 ```
 
-The wrapper script writes `app/libs/androidbridge.aar`. The app loads `androidbridge.Androidbridge` by reflection at runtime.
+The wrapper writes `app/libs/androidbridge.aar` and `app/libs/androidbridge-sources.jar`.
+The app creates one `androidbridge.Engine` per `VpnService` instance through the
+`Androidbridge.newEngine()` API, loaded by reflection at runtime.

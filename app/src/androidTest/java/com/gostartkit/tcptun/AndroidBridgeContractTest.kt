@@ -32,6 +32,41 @@ class AndroidBridgeContractTest {
     }
 
     @Test
+    fun currentBridgeExposesPerServiceEngineLifecycle() {
+        val engine = Androidbridge.newEngine()
+        try {
+            assertEquals("Stopped", engine.status())
+            assertEquals("stopped", JSONObject(engine.statusJSON()).getString("state"))
+        } finally {
+            engine.close()
+        }
+    }
+
+    @Test
+    fun stateFlowDropsStaleEngineAndSequenceEvents() {
+        val firstEpoch = TcptunState.beginBridgeSession()
+        val accepted = TcptunState.applyBridgeStatusEvent(
+            firstEpoch,
+            """{"session_id":1,"sequence":2,"state":"starting","phase":"accepted"}""",
+        )
+        val staleSequence = TcptunState.applyBridgeStatusEvent(
+            firstEpoch,
+            """{"session_id":1,"sequence":1,"state":"error","phase":"stale"}""",
+        )
+        val secondEpoch = TcptunState.beginBridgeSession()
+        val staleEpoch = TcptunState.applyBridgeStatusEvent(
+            firstEpoch,
+            """{"session_id":2,"sequence":3,"state":"error","phase":"old engine"}""",
+        )
+
+        assertEquals("accepted", accepted?.phase)
+        assertEquals(null, staleSequence)
+        assertEquals(null, staleEpoch)
+        assertEquals(0, TcptunState.state.value.diagnostics.bridgeSequence)
+        assertTrue(secondEpoch > firstEpoch)
+    }
+
+    @Test
     fun underlyingNetworkSelectionPrefersValidationBeforeTransport() {
         val validatedCellular = underlyingNetworkScore(
             validated = true,

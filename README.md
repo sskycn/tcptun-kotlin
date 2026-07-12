@@ -39,14 +39,22 @@ type AppIdentityProvider interface {
 	IdentifyApp(flowJSON string) (identityJSON string, err error)
 }
 
-func SetLogCallback(cb LogCallback)
-func SetStatusCallback(cb StatusCallback)
-func SetSocketProtector(p SocketProtector)
-func SetAppIdentityProvider(provider AppIdentityProvider)
-func Start(configJson string) error
-func Stop() error
-func Status() string
+type Engine struct { /* gomobile-owned runtime */ }
+
+func NewEngine() *Engine
+func (e *Engine) SetLogCallback(cb LogCallback)
+func (e *Engine) SetStatusCallback(cb StatusCallback)
+func (e *Engine) SetSocketProtector(p SocketProtector)
+func (e *Engine) SetAppIdentityProvider(provider AppIdentityProvider)
+func (e *Engine) Start(configJson string) error
+func (e *Engine) Stop() error
+func (e *Engine) Close() error
+func (e *Engine) Status() string
+func (e *Engine) StatusJSON() string
 ```
+
+Each `TcptunVpnService` instance owns one `Engine`; the package-level methods are
+legacy compatibility APIs and are not used by the app.
 
 `Start` receives the current strict `tcptun-go` file configuration. The Android
 app builds a local mixed/SOCKS5 inbound, the selected tunnel outbound, a direct
@@ -77,11 +85,17 @@ tunnel. Custom routing is stored per profile in the strict JSON `route.rules`:
 }
 ```
 
-`SetStatusCallback` is optional for backward compatibility. Newer AARs call
-`StatusCallback.OnStatus(eventJson)` with JSON fields such as `state`, `phase`,
-`listen`, `remote`, `active_connections`, `last_error`, and `timestamp_ms`. The
-Android diagnostics screen shows the latest event, while `Status()` remains the
-fallback simple bridge status.
+`StatusCallback.OnStatus(eventJson)` includes `session_id`, `sequence`, `state`,
+`reason`, `phase`, `listen`, `remote`, `active_connections`, `recoverable`,
+`last_error`, and `timestamp_ms`. The app drops events from an older engine/session
+or with a non-increasing sequence and folds accepted events into one immutable
+`StateFlow` snapshot consumed by Compose.
+
+VPN startup is transactional: the service starts the Engine, waits for
+`state=core_ready`, establishes the Android TUN, then starts tun2socks. Only after
+all three steps succeed is `Running` published. Failure rolls back tun2socks, the
+TUN descriptor, and the Engine in reverse order. Stop and `onRevoke()` use the same
+idempotent teardown; `onDestroy()` finally calls `Engine.Close()`.
 
 `SetAppIdentityProvider` is currently left unset. The existing tun2socks hop
 does not carry the originating Android UID to the local Go inbound, so resolving

@@ -83,6 +83,7 @@ import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -168,6 +169,7 @@ fun TcptunScreen() {
     val snackbarHostState = remember { SnackbarHostState() }
     val bluetoothSnackbarHostState = remember { SnackbarHostState() }
     val screenScope = rememberCoroutineScope()
+    val vpnState by TcptunState.state.collectAsState()
     val vpnLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         pendingConfig?.let {
             startVpn(context, it)
@@ -357,7 +359,7 @@ fun TcptunScreen() {
     }
 
     fun toggleProfile(profile: AppConfig) {
-        val status = TcptunState.status.value
+        val status = vpnState.status
         val active = isVpnActiveStatus(status)
         if (isVpnTransitionStatus(status)) return
         if (active && profile.id == state.selected?.id) {
@@ -428,16 +430,16 @@ fun TcptunScreen() {
                 )
             },
             bottomBar = {
-                val serverConnected = hasServerConnection(TcptunState.diagnostics.value)
+                val serverConnected = hasServerConnection(vpnState.diagnostics)
                 BottomStatus(
-                    status = TcptunState.status.value,
-                    error = TcptunState.lastError.value,
+                    status = vpnState.status,
+                    error = vpnState.lastError,
                     tcpingMessage = tcpingMessage,
                     tcpingInProgress = tcpingInProgress,
                     hasProfile = state.selected != null,
                     tcpingEnabled = serverConnected,
                     onClick = {
-                        if (isVpnTransitionStatus(TcptunState.status.value)) return@BottomStatus
+                        if (isVpnTransitionStatus(vpnState.status)) return@BottomStatus
                         if (state.selected == null) return@BottomStatus
                         if (tcpingInProgress) return@BottomStatus
                         if (!serverConnected) return@BottomStatus
@@ -472,10 +474,10 @@ fun TcptunScreen() {
                         ProfileRow(
                             profile = profile,
                             selected = profile.id == state.selected?.id,
-                            status = TcptunState.status.value.takeIf {
+                            status = vpnState.status.takeIf {
                                 profile.id == state.selected?.id && isVpnActiveStatus(it)
                             },
-                            enabled = !isVpnTransitionStatus(TcptunState.status.value),
+                            enabled = !isVpnTransitionStatus(vpnState.status),
                             onClick = { toggleProfile(profile) },
                             shareable = ProfileUriCodec.encode(profile) != null,
                         onShare = {
@@ -1038,7 +1040,8 @@ private fun BottomStatus(
 
 @Composable
 private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
-    val diagnostics = TcptunState.diagnostics.value
+    val vpnState by TcptunState.state.collectAsState()
+    val diagnostics = vpnState.diagnostics
     val noneLabel = stringResource(R.string.none)
 
     Scaffold(
@@ -1103,7 +1106,8 @@ private fun SettingsPage(onBack: () -> Unit) {
     var settings by remember { mutableStateOf(TcptunVpnService.readRuntimeSettings(context)) }
     var socksPortText by remember { mutableStateOf(settings.socksPort.toString()) }
     var settingsDirty by remember { mutableStateOf(false) }
-    val diagnostics = TcptunState.diagnostics.value
+    val vpnState by TcptunState.state.collectAsState()
+    val diagnostics = vpnState.diagnostics
     val mtuOptions = listOf("1280", "1360", "1400", "1500")
 
     fun saveSettings(next: RuntimeSettings) {
@@ -1976,6 +1980,7 @@ private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
 
 @Composable
 private fun LogsDialog(onDismiss: () -> Unit) {
+    val vpnState by TcptunState.state.collectAsState()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.running_logs)) },
@@ -1997,7 +2002,7 @@ private fun LogsDialog(onDismiss: () -> Unit) {
                 ) {
                     SelectionContainer {
                         Text(
-                            TcptunState.logs.joinToString("\n").ifBlank { noLogs },
+                            vpnState.logs.joinToString("\n").ifBlank { noLogs },
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontFamily = FontFamily.Monospace,
                             style = MaterialTheme.typography.bodySmall,
@@ -2246,7 +2251,7 @@ private fun stopVpn(context: Context) {
 }
 
 private fun applyRuntimeSettings(context: Context) {
-    val status = TcptunState.status.value
+    val status = TcptunState.status
     if (status != "Starting" && status != "Running") return
     runCatching {
         context.startService(TcptunVpnService.applyRuntimeSettingsIntent(context))
@@ -2259,7 +2264,7 @@ private fun isVpnActiveStatus(status: String): Boolean {
     return status == "Starting" || status == "Running" || status == "Stopping"
 }
 
-private fun hasServerConnection(diagnostics: TcptunDiagnostics): Boolean {
+internal fun hasServerConnection(diagnostics: TcptunDiagnostics): Boolean {
     if (diagnostics.vpnStatus != "Running") return false
     val state = diagnostics.bridgeEventState.lowercase()
     val phase = diagnostics.bridgeEventPhase.lowercase()
@@ -2289,7 +2294,7 @@ private fun bridgeTimestampLabel(timestampMs: Long, noneLabel: String): String {
 }
 
 private const val TCPING_TIMEOUT_MS = 3_000
-private val SERVER_CONNECTED_STATES = setOf("running", "upstream_connected")
+private val SERVER_CONNECTED_STATES = setOf("core_ready", "running", "upstream_connected")
 private val SERVER_CONNECTED_PHASES = setOf("connected", "upstream_connected")
 private val TCPING_TARGETS = listOf(
     TcpingTarget("Google", "google.com"),
