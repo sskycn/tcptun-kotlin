@@ -303,6 +303,10 @@ class TcptunVpnService : VpnService() {
             .addRoute("0.0.0.0", 0)
             .addRoute("::", 0)
             .addDnsServer(VPN_DNS_SERVER)
+            // Some Android builds do not reliably route raw Go sockets around the VPN
+            // with protect(fd) alone. Excluding our process keeps bridge upstream sockets
+            // on the selected underlying network; protect(fd) remains a second safeguard.
+            .addDisallowedApplication(packageName)
             .apply {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     setMetered(connectivity.isActiveNetworkMetered)
@@ -1066,6 +1070,7 @@ class TcptunVpnService : VpnService() {
                         socks5Password = runtimeSettings.socksPassword,
                         routeExternalSources = runtimeSettings.routeExternalSources,
                         directFirst = runtimeSettings.directFirst,
+                        managedRouteRules = RouteRuleStore.load(context),
                     ),
                 )
                 .putExtra("serverHost", effectiveConfig.serverHost)

@@ -1,6 +1,8 @@
 package com.tcptun.client
 
 import android.Manifest
+import android.app.Activity
+import android.bluetooth.BluetoothAdapter
 import android.content.ClipData
 import android.content.Context
 import android.content.ClipboardManager
@@ -31,6 +33,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -39,8 +42,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.AltRoute
+import androidx.compose.material.icons.automirrored.rounded.BluetoothSearching
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Tune
@@ -73,6 +81,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -83,6 +92,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -90,16 +100,18 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.tcptun.client.ui.theme.TcpTunTheme
-import com.google.mlkit.vision.barcode.common.Barcode
-import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
-import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.security.SecureRandom
 import java.util.UUID
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -117,8 +129,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun TcptunScreen() {
     val context = LocalContext.current
-    val invalidQrCode = stringResource(R.string.invalid_qr_code)
-    val qrScannerFailed = stringResource(R.string.qr_scanner_failed)
+    val resources = LocalResources.current
+    val emptyClipboard = stringResource(R.string.empty_clipboard)
+    val invalidClipboard = stringResource(R.string.invalid_clipboard_data)
     val profileDeletedPrefix = stringResource(R.string.profile_deleted_prefix)
     val undoLabel = stringResource(R.string.undo)
     var state by remember { mutableStateOf(ProfileStore.load(context)) }
@@ -127,12 +140,33 @@ fun TcptunScreen() {
     var editingProfile by remember { mutableStateOf<AppConfig?>(null) }
     var showDiagnostics by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var showRouteManagement by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
+    var showBluetoothReceiveCode by remember { mutableStateOf(false) }
+    var bluetoothReceiveCodeError by remember { mutableStateOf(false) }
+    var bluetoothSendProfile by remember { mutableStateOf<AppConfig?>(null) }
+    var bluetoothSendCode by remember { mutableStateOf("") }
+    var receivedBluetoothFrame by remember { mutableStateOf<EncryptedBluetoothUriFrame?>(null) }
+    val bluetoothDeliveredAddresses = remember { mutableSetOf<String>() }
+    val bluetoothSendingAddresses = remember { mutableSetOf<String>() }
+    var bluetoothPendingSends by remember { mutableStateOf(0) }
+    var bluetoothShareGeneration by remember { mutableStateOf(0) }
+    val bluetoothSendJobs = remember { mutableSetOf<Job>() }
+    var bluetoothDiscoverySession by remember { mutableStateOf<BluetoothDiscoverySession?>(null) }
+    var bluetoothReceiveSession by remember { mutableStateOf<BluetoothReceiveSession?>(null) }
+    var pendingBluetoothAction by remember { mutableStateOf<BluetoothAction?>(null) }
+    var readyBluetoothAction by remember { mutableStateOf<BluetoothAction?>(null) }
+    var startBluetoothReceiver by remember { mutableStateOf(false) }
+    var bluetoothDiscovering by remember { mutableStateOf(false) }
+    var bluetoothReceiving by remember { mutableStateOf(false) }
+    var bluetoothMessage by remember { mutableStateOf("") }
+    var receivedBluetoothProfile by remember { mutableStateOf<AppConfig?>(null) }
     var profilePendingDeletion by remember { mutableStateOf<AppConfig?>(null) }
     var tcpingMessage by remember { mutableStateOf("") }
     var tcpingInProgress by remember { mutableStateOf(false) }
     var tcpingTargetIndex by remember { mutableStateOf(0) }
     val snackbarHostState = remember { SnackbarHostState() }
+    val bluetoothSnackbarHostState = remember { SnackbarHostState() }
     val screenScope = rememberCoroutineScope()
     val vpnLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         pendingConfig?.let {
@@ -155,7 +189,27 @@ fun TcptunScreen() {
             }
         }
     }
-
+    val bluetoothDiscoverableLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode != Activity.RESULT_CANCELED) startBluetoothReceiver = true
+    }
+    val bluetoothEnableLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        if (BluetoothProfileTransfer.adapter(context)?.isEnabled == true) {
+            readyBluetoothAction = pendingBluetoothAction
+        } else {
+            (pendingBluetoothAction as? BluetoothAction.Send)?.let { shareProfile(context, it.profile) }
+            bluetoothMessage = resources.getString(R.string.bluetooth_disabled)
+            pendingBluetoothAction = null
+        }
+    }
+    val bluetoothPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        if (grants.values.all { it }) {
+            readyBluetoothAction = pendingBluetoothAction
+        } else {
+            (pendingBluetoothAction as? BluetoothAction.Send)?.let { shareProfile(context, it.profile) }
+            bluetoothMessage = resources.getString(R.string.bluetooth_permission_required)
+            pendingBluetoothAction = null
+        }
+    }
     fun save(next: ProfilesState) {
         ProfileStore.save(context, next)
         state = ProfileStore.load(context)
@@ -163,33 +217,119 @@ fun TcptunScreen() {
 
     fun importFromClipboard() {
         val link = clipboardText(context).trim()
-        val clipboardProfile = link.takeIf { it.isNotBlank() }
-            ?.let(ProfileUriCodec::decode)
-            ?.getOrNull()
-        if (clipboardProfile != null) {
-            save(ProfilesState(state.profiles + clipboardProfile, clipboardProfile.id))
-            clearClipboardText(context, link)
+        if (link.isBlank()) {
+            TcptunState.error(emptyClipboard)
             return
         }
+        ProfileUriCodec.decode(link).fold(
+            onSuccess = { profile ->
+                save(ProfilesState(state.profiles + profile, profile.id))
+                clearClipboardText(context, link)
+            },
+            onFailure = { TcptunState.error(invalidClipboard) },
+        )
+    }
 
-        val options = GmsBarcodeScannerOptions.Builder()
-            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-            .enableAutoZoom()
-            .build()
-        GmsBarcodeScanning.getClient(context, options)
-            .startScan()
-            .addOnSuccessListener { barcode ->
-                val value = barcode.rawValue?.trim().orEmpty()
-                ProfileUriCodec.decode(value).fold(
-                    onSuccess = { profile ->
-                        save(ProfilesState(state.profiles + profile, profile.id))
-                    },
-                    onFailure = { TcptunState.error(invalidQrCode) },
-                )
+    fun requestBluetoothAction(action: BluetoothAction) {
+        bluetoothMessage = ""
+        pendingBluetoothAction = action
+        val permissions = bluetoothRuntimePermissions(action)
+        if (permissions.all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }) {
+            readyBluetoothAction = action
+        } else {
+            bluetoothPermissionLauncher.launch(permissions)
+        }
+    }
+
+    fun stopBluetoothSharing(expectedGeneration: Int? = null) {
+        if (expectedGeneration != null && expectedGeneration != bluetoothShareGeneration) return
+        bluetoothShareGeneration += 1
+        bluetoothDiscoverySession?.close()
+        bluetoothDiscoverySession = null
+        bluetoothSendJobs.forEach { it.cancel() }
+        bluetoothSendJobs.clear()
+        if (pendingBluetoothAction is BluetoothAction.Send) pendingBluetoothAction = null
+        if (readyBluetoothAction is BluetoothAction.Send) readyBluetoothAction = null
+        bluetoothDiscovering = false
+        bluetoothPendingSends = 0
+        bluetoothDeliveredAddresses.clear()
+        bluetoothSendingAddresses.clear()
+        bluetoothSendProfile = null
+        bluetoothSendCode = ""
+    }
+
+    LaunchedEffect(readyBluetoothAction) {
+        val action = readyBluetoothAction ?: return@LaunchedEffect
+        readyBluetoothAction = null
+        val adapter = BluetoothProfileTransfer.adapter(context)
+        if (adapter == null) {
+            (action as? BluetoothAction.Send)?.let { shareProfile(context, it.profile) }
+            bluetoothMessage = resources.getString(R.string.bluetooth_not_supported)
+            pendingBluetoothAction = null
+            return@LaunchedEffect
+        }
+        if (!adapter.isEnabled) {
+            bluetoothEnableLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+            return@LaunchedEffect
+        }
+        pendingBluetoothAction = null
+        when (action) {
+            is BluetoothAction.Send -> {
+                bluetoothSendCode = action.code
+                bluetoothSendProfile = action.profile
+                shareProfile(context, action.profile)
             }
-            .addOnFailureListener { err ->
-                TcptunState.error(err.message?.takeIf { it.isNotBlank() } ?: qrScannerFailed)
+            BluetoothAction.Receive -> {
+                bluetoothDiscoverableLauncher.launch(
+                Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
+                    putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, BluetoothDiscoverableSeconds)
+                },
+            )
             }
+        }
+    }
+
+    LaunchedEffect(startBluetoothReceiver) {
+        if (!startBluetoothReceiver) return@LaunchedEffect
+        startBluetoothReceiver = false
+        bluetoothReceiveSession?.close()
+        bluetoothReceiving = true
+        bluetoothMessage = ""
+        BluetoothProfileTransfer.receiveOne(
+            context = context,
+            scope = screenScope,
+            onReceived = { encryptedFrame ->
+                receivedBluetoothFrame = encryptedFrame
+                bluetoothReceiveCodeError = false
+                showBluetoothReceiveCode = true
+            },
+            onError = { error ->
+                if (bluetoothReceiving) {
+                    bluetoothMessage = error.message?.takeIf(String::isNotBlank)
+                        ?: resources.getString(R.string.bluetooth_receive_failed)
+                }
+            },
+            onFinished = {
+                bluetoothReceiving = false
+                bluetoothReceiveSession = null
+            },
+        ).fold(
+            onSuccess = { bluetoothReceiveSession = it },
+            onFailure = {
+                bluetoothReceiving = false
+                bluetoothMessage = it.message?.takeIf(String::isNotBlank)
+                    ?: resources.getString(R.string.bluetooth_receive_failed)
+            },
+        )
+    }
+
+    DisposableEffect(bluetoothDiscoverySession, bluetoothReceiveSession) {
+        onDispose {
+            bluetoothDiscoverySession?.close()
+            bluetoothReceiveSession?.close()
+            bluetoothSendJobs.forEach { it.cancel() }
+            bluetoothSendJobs.clear()
+        }
     }
 
     fun startProfile(config: AppConfig) {
@@ -262,12 +402,22 @@ fun TcptunScreen() {
         SettingsPage(
             onBack = { showSettings = false },
         )
+    } else if (showRouteManagement) {
+        RouteManagementPage(
+            onBack = { showRouteManagement = false },
+        )
     } else if (editing == null) {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             topBar = {
                 TopBar(
                     title = stringResource(R.string.profiles_title),
+                    onBluetoothReceive = {
+                        bluetoothReceiveCodeError = false
+                        receivedBluetoothFrame = null
+                        requestBluetoothAction(BluetoothAction.Receive)
+                    },
+                    onRouteManagement = { showRouteManagement = true },
                     onSettings = { showSettings = true },
                 )
             },
@@ -308,32 +458,58 @@ fun TcptunScreen() {
                 )
             },
         ) { padding ->
-            LazyColumn(
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(state.profiles, key = { it.id }) { profile ->
-                    ProfileRow(
-                        profile = profile,
-                        selected = profile.id == state.selected?.id,
-                        status = TcptunState.status.value.takeIf {
-                            profile.id == state.selected?.id && isVpnActiveStatus(it)
-                        },
-                        enabled = !isVpnTransitionStatus(TcptunState.status.value),
-                        onClick = { toggleProfile(profile) },
-                        shareable = ProfileUriCodec.encode(profile) != null,
-                        onShare = { shareProfile(context, profile) },
-                        onDeleteRequest = { profilePendingDeletion = profile },
-                    )
-                }
-                if (state.profiles.isEmpty()) {
-                    item {
-                        EmptyState(onAdd = { editingProfile = AppConfig(id = UUID.randomUUID().toString(), name = "proxy") })
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(state.profiles, key = { it.id }) { profile ->
+                        ProfileRow(
+                            profile = profile,
+                            selected = profile.id == state.selected?.id,
+                            status = TcptunState.status.value.takeIf {
+                                profile.id == state.selected?.id && isVpnActiveStatus(it)
+                            },
+                            enabled = !isVpnTransitionStatus(TcptunState.status.value),
+                            onClick = { toggleProfile(profile) },
+                            shareable = ProfileUriCodec.encode(profile) != null,
+                        onShare = {
+                            val code = generateBluetoothCode()
+                            bluetoothShareGeneration += 1
+                            val shareGeneration = bluetoothShareGeneration
+                            screenScope.launch {
+                                val result = bluetoothSnackbarHostState.showSnackbar(
+                                    message = resources.getString(R.string.bluetooth_snackbar_code, code),
+                                    actionLabel = resources.getString(R.string.close),
+                                    duration = SnackbarDuration.Indefinite,
+                                )
+                                if (result == SnackbarResult.ActionPerformed) {
+                                    stopBluetoothSharing(shareGeneration)
+                                }
+                            }
+                            requestBluetoothAction(BluetoothAction.Send(profile, code))
+                            },
+                            onDeleteRequest = { profilePendingDeletion = profile },
+                        )
+                    }
+                    if (state.profiles.isEmpty()) {
+                        item {
+                            EmptyState(onAdd = { editingProfile = AppConfig(id = UUID.randomUUID().toString(), name = "proxy") })
+                        }
                     }
                 }
+                SnackbarHost(
+                    hostState = bluetoothSnackbarHostState,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                )
             }
         }
     } else {
@@ -381,12 +557,185 @@ fun TcptunScreen() {
             },
         )
     }
+
+    if (showBluetoothReceiveCode) {
+        BluetoothReceiveCodeDialog(
+            codeMismatch = bluetoothReceiveCodeError,
+            onDismiss = {
+                showBluetoothReceiveCode = false
+                bluetoothReceiveCodeError = false
+                receivedBluetoothFrame = null
+            },
+            onConfirm = { code ->
+                val encryptedFrame = receivedBluetoothFrame ?: return@BluetoothReceiveCodeDialog
+                runCatching { BluetoothUriFrame.decrypt(code, encryptedFrame) }.fold(
+                    onSuccess = { uri ->
+                        bluetoothReceiveCodeError = false
+                        showBluetoothReceiveCode = false
+                        receivedBluetoothFrame = null
+                        ProfileUriCodec.decode(uri).fold(
+                            onSuccess = { receivedBluetoothProfile = it },
+                            onFailure = { bluetoothMessage = resources.getString(R.string.bluetooth_invalid_profile) },
+                        )
+                    },
+                    onFailure = { error ->
+                        if (error is BluetoothCodeMismatchException) {
+                            bluetoothReceiveCodeError = true
+                        } else {
+                            bluetoothMessage = error.message?.takeIf(String::isNotBlank)
+                                ?: resources.getString(R.string.bluetooth_receive_failed)
+                        }
+                    },
+                )
+            },
+        )
+    }
+
+    bluetoothSendProfile?.let { profile ->
+        LaunchedEffect(profile.id, bluetoothSendCode) {
+            bluetoothDiscoverySession?.close()
+            bluetoothSendJobs.forEach { it.cancel() }
+            bluetoothSendJobs.clear()
+            bluetoothDeliveredAddresses.clear()
+            bluetoothSendingAddresses.clear()
+            bluetoothPendingSends = 0
+            bluetoothMessage = ""
+            val shareCode = bluetoothSendCode
+            while (bluetoothSendProfile?.id == profile.id && bluetoothSendCode == shareCode) {
+                bluetoothDiscovering = true
+                suspendCancellableCoroutine { continuation ->
+                    var cycleSession: BluetoothDiscoverySession? = null
+                    val finishCycle = {
+                        if (continuation.isActive) continuation.resume(Unit)
+                    }
+                    BluetoothProfileTransfer.discover(
+                        context = context,
+                        onDevice = { found ->
+                            if (found.address in bluetoothDeliveredAddresses || found.address in bluetoothSendingAddresses) {
+                                return@discover
+                            }
+                            bluetoothSendingAddresses += found.address
+                            bluetoothPendingSends += 1
+                            bluetoothSendJobs += screenScope.launch {
+                                runCatching {
+                                    val uri = requireNotNull(ProfileUriCodec.encode(profile))
+                                    BluetoothProfileTransfer.send(context, found.address, shareCode, uri)
+                                }.fold(
+                                    onSuccess = { result ->
+                                        when (result) {
+                                            BluetoothSendResult.Accepted -> {
+                                                bluetoothDeliveredAddresses += found.address
+                                                TcptunState.appendLog("Bluetooth profile accepted by ${found.name}")
+                                            }
+                                        }
+                                    },
+                                    onFailure = { error ->
+                                        if (error !is kotlinx.coroutines.CancellationException) {
+                                            TcptunState.appendLog("Bluetooth profile send failed for ${found.name}: ${error.message}")
+                                        }
+                                    },
+                                )
+                                bluetoothSendingAddresses -= found.address
+                                bluetoothPendingSends = (bluetoothPendingSends - 1).coerceAtLeast(0)
+                            }
+                        },
+                        onFinished = finishCycle,
+                        onError = { error ->
+                            TcptunState.appendLog(
+                                error.message?.takeIf(String::isNotBlank)
+                                    ?: resources.getString(R.string.bluetooth_discovery_failed),
+                            )
+                            finishCycle()
+                        },
+                    ).onSuccess {
+                        cycleSession = it
+                        bluetoothDiscoverySession = it
+                    }
+                    continuation.invokeOnCancellation { cycleSession?.close() }
+                }
+                bluetoothDiscoverySession?.close()
+                bluetoothDiscoverySession = null
+                bluetoothDiscovering = false
+                if (bluetoothSendProfile?.id == profile.id && bluetoothSendCode == shareCode) {
+                    delay(BluetoothDiscoveryRestartDelayMs)
+                }
+            }
+        }
+    }
+
+    if (bluetoothReceiving) {
+        AlertDialog(
+            onDismissRequest = {},
+            icon = { Icon(Icons.AutoMirrored.Rounded.BluetoothSearching, contentDescription = null) },
+            title = { Text(stringResource(R.string.bluetooth_receiving)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(stringResource(R.string.bluetooth_receiving_note, BluetoothDiscoverableSeconds))
+                    if (bluetoothMessage.isNotBlank()) {
+                        Text(bluetoothMessage, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        bluetoothReceiveSession?.close()
+                        bluetoothReceiveSession = null
+                        bluetoothReceiving = false
+                        bluetoothMessage = ""
+                    },
+                ) { Text(stringResource(R.string.cancel)) }
+            },
+        )
+    }
+
+    receivedBluetoothProfile?.let { profile ->
+        AlertDialog(
+            onDismissRequest = { receivedBluetoothProfile = null },
+            icon = { Icon(Icons.Rounded.Bluetooth, contentDescription = null) },
+            title = { Text(stringResource(R.string.bluetooth_profile_received)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(profile.name, style = MaterialTheme.typography.titleMedium)
+                    Text(profile.maskedAddress(), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(profile.label(), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.bluetooth_confirm_import))
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        save(ProfilesState(state.profiles + profile, profile.id))
+                        receivedBluetoothProfile = null
+                    },
+                ) { Text(stringResource(R.string.import_profile)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { receivedBluetoothProfile = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
+    if (bluetoothMessage.isNotBlank() && bluetoothSendProfile == null && !bluetoothReceiving) {
+        AlertDialog(
+            onDismissRequest = { bluetoothMessage = "" },
+            title = { Text(stringResource(R.string.bluetooth_share)) },
+            text = { Text(bluetoothMessage) },
+            confirmButton = {
+                TextButton(onClick = { bluetoothMessage = "" }) { Text(stringResource(R.string.close)) }
+            },
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TopBar(
     title: String,
+    onBluetoothReceive: () -> Unit,
+    onRouteManagement: () -> Unit,
     onSettings: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -410,6 +759,34 @@ private fun TopBar(
                     tonalElevation = 3.dp,
                     shadowElevation = 6.dp,
                 ) {
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Icon(Icons.AutoMirrored.Rounded.BluetoothSearching, contentDescription = null)
+                        },
+                        text = { Text(stringResource(R.string.bluetooth_receive)) },
+                        onClick = {
+                            menuExpanded = false
+                            onBluetoothReceive()
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = colors.onSurface,
+                            leadingIconColor = colors.onSurfaceVariant,
+                        ),
+                    )
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Icon(Icons.AutoMirrored.Rounded.AltRoute, contentDescription = null)
+                        },
+                        text = { Text(stringResource(R.string.route_management)) },
+                        onClick = {
+                            menuExpanded = false
+                            onRouteManagement()
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = colors.onSurface,
+                            leadingIconColor = colors.onSurfaceVariant,
+                        ),
+                    )
                     DropdownMenuItem(
                         leadingIcon = {
                             Icon(Icons.Rounded.Tune, contentDescription = null)
@@ -543,6 +920,51 @@ private fun ProfileRow(
         }
     }
 }
+
+@Composable
+private fun BluetoothReceiveCodeDialog(
+    codeMismatch: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var code by remember { mutableStateOf("") }
+    LaunchedEffect(codeMismatch) {
+        if (codeMismatch) code = ""
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Rounded.Bluetooth, contentDescription = null) },
+        title = { Text(stringResource(R.string.bluetooth_enter_code)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(stringResource(R.string.bluetooth_enter_code_note))
+                if (codeMismatch) {
+                    Text(
+                        stringResource(R.string.bluetooth_code_mismatch_retry),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                OutlinedTextField(
+                    value = code,
+                    onValueChange = { value -> code = value.filter(Char::isDigit).take(4) },
+                    label = { Text(stringResource(R.string.bluetooth_four_digit_code)) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(code) }, enabled = code.length == 4) {
+                Text(stringResource(R.string.bluetooth_start_receiving))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+        },
+    )
+}
+
 @Composable
 private fun EmptyState(onAdd: () -> Unit) {
     Surface(
@@ -848,6 +1270,385 @@ private fun SettingsPage(onBack: () -> Unit) {
         }
     }
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RouteManagementPage(onBack: () -> Unit) {
+    val context = LocalContext.current
+    var rules by remember { mutableStateOf(RouteRuleStore.load(context)) }
+    var editingRule by remember { mutableStateOf<ManagedRouteRule?>(null) }
+    var deleteCandidate by remember { mutableStateOf<ManagedRouteRule?>(null) }
+    var dirty by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf("") }
+
+    fun persist(next: List<ManagedRouteRule>): Boolean {
+        return RouteRuleStore.save(context, next).fold(
+            onSuccess = {
+                rules = RouteRuleStore.load(context)
+                dirty = true
+                error = ""
+                true
+            },
+            onFailure = {
+                error = it.message.orEmpty()
+                false
+            },
+        )
+    }
+
+    fun leave() {
+        if (dirty) applyRuntimeSettings(context)
+        onBack()
+    }
+
+    BackHandler(onBack = ::leave)
+
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.route_management)) },
+                navigationIcon = {
+                    IconButton(onClick = ::leave) {
+                        Icon(
+                            Icons.AutoMirrored.Rounded.ArrowBack,
+                            contentDescription = stringResource(R.string.back),
+                        )
+                    }
+                },
+            )
+        },
+        floatingActionButton = {
+            FloatingActionButton(onClick = { editingRule = ManagedRouteRule() }) {
+                Icon(Icons.Rounded.Add, contentDescription = stringResource(R.string.add_route_rule))
+            }
+        },
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            item {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            stringResource(R.string.route_rules_count, rules.count { it.enabled }),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            stringResource(R.string.route_management_note),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (error.isNotBlank()) {
+                            Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
+            if (rules.isEmpty()) {
+                item {
+                    RouteRulesEmptyState(onAdd = { editingRule = ManagedRouteRule() })
+                }
+            }
+            itemsIndexed(rules, key = { _, rule -> rule.id }) { index, rule ->
+                ManagedRouteRuleRow(
+                    rule = rule,
+                    onClick = { editingRule = rule },
+                    onEnabledChange = { enabled ->
+                        persist(rules.toMutableList().also { it[index] = rule.copy(enabled = enabled) })
+                    },
+                    onMoveUp = {
+                        if (index > 0) {
+                            persist(rules.toMutableList().also { list ->
+                                val previous = list[index - 1]
+                                list[index - 1] = list[index]
+                                list[index] = previous
+                            })
+                        }
+                    },
+                    onMoveDown = {
+                        if (index < rules.lastIndex) {
+                            persist(rules.toMutableList().also { list ->
+                                val next = list[index + 1]
+                                list[index + 1] = list[index]
+                                list[index] = next
+                            })
+                        }
+                    },
+                    canMoveUp = index > 0,
+                    canMoveDown = index < rules.lastIndex,
+                    onDeleteRequest = { deleteCandidate = rule },
+                )
+            }
+        }
+    }
+
+    editingRule?.let { rule ->
+        ManagedRouteRuleDialog(
+            rule = rule,
+            isNew = rules.none { it.id == rule.id },
+            onDismiss = { editingRule = null },
+            onSave = { updated ->
+                val index = rules.indexOfFirst { it.id == updated.id }
+                val next = rules.toMutableList()
+                if (index >= 0) next[index] = updated else next.add(updated)
+                if (persist(next)) editingRule = null
+            },
+            onDeleteRequest = {
+                editingRule = null
+                deleteCandidate = rule
+            },
+        )
+    }
+
+    deleteCandidate?.let { rule ->
+        AlertDialog(
+            onDismissRequest = { deleteCandidate = null },
+            icon = { Icon(Icons.Rounded.Delete, contentDescription = null) },
+            title = { Text(stringResource(R.string.delete_route_rule)) },
+            text = { Text(stringResource(R.string.delete_route_rule_message, rule.value)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (persist(rules.filterNot { it.id == rule.id })) deleteCandidate = null
+                    },
+                ) {
+                    Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteCandidate = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun ManagedRouteRuleRow(
+    rule: ManagedRouteRule,
+    onClick: () -> Unit,
+    onEnabledChange: (Boolean) -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onDeleteRequest: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    val dismissState = rememberSwipeToDismissBoxState()
+
+    LaunchedEffect(dismissState.currentValue) {
+        if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart) {
+            onDeleteRequest()
+            dismissState.reset()
+        }
+    }
+
+    SwipeToDismissBox(
+        state = dismissState,
+        enableDismissFromStartToEnd = false,
+        enableDismissFromEndToStart = true,
+        backgroundContent = {
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(colors.errorContainer, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 24.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Rounded.Delete, contentDescription = stringResource(R.string.delete), tint = colors.onErrorContainer)
+            }
+        },
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 88.dp),
+            shape = RoundedCornerShape(8.dp),
+            color = if (rule.enabled) colors.surfaceContainerLow else colors.surfaceContainer,
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onClick)
+                    .padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        routeRuleTypeLabel(rule.type),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = colors.primary,
+                    )
+                    Text(rule.value, style = MaterialTheme.typography.bodyLarge, color = colors.onSurface)
+                    Text(
+                        routeOutboundLabel(rule.outbound),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.onSurfaceVariant,
+                    )
+                }
+                Column {
+                    IconButton(onClick = onMoveUp, enabled = canMoveUp) {
+                        Icon(Icons.Rounded.KeyboardArrowUp, contentDescription = stringResource(R.string.move_rule_up))
+                    }
+                    IconButton(onClick = onMoveDown, enabled = canMoveDown) {
+                        Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = stringResource(R.string.move_rule_down))
+                    }
+                }
+                Switch(
+                    checked = rule.enabled,
+                    onCheckedChange = onEnabledChange,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RouteRulesEmptyState(onAdd: () -> Unit) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 36.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        Column(
+            modifier = Modifier.padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text(stringResource(R.string.empty_route_rules), style = MaterialTheme.typography.titleMedium)
+            Button(onClick = onAdd) {
+                Text(stringResource(R.string.add_route_rule))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ManagedRouteRuleDialog(
+    rule: ManagedRouteRule,
+    isNew: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (ManagedRouteRule) -> Unit,
+    onDeleteRequest: () -> Unit,
+) {
+    var type by remember(rule.id) { mutableStateOf(rule.type) }
+    var value by remember(rule.id) { mutableStateOf(rule.value) }
+    var outbound by remember(rule.id) { mutableStateOf(rule.outbound) }
+    var enabled by remember(rule.id) { mutableStateOf(rule.enabled) }
+    var invalid by remember(rule.id) { mutableStateOf(false) }
+    val types = ManagedRouteRuleType.entries
+    val typeLabels = types.map { routeRuleTypeLabel(it) }
+    val outbounds = ManagedRouteOutbound.entries
+    val outboundLabels = outbounds.map { routeOutboundLabel(it) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(if (isNew) R.string.add_route_rule else R.string.edit_route_rule)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                ChoiceRow(stringResource(R.string.route_rule_type), typeLabels[type.ordinal], typeLabels) { selected ->
+                    type = types[typeLabels.indexOf(selected).coerceAtLeast(0)]
+                    invalid = false
+                }
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = {
+                        value = it
+                        invalid = false
+                    },
+                    label = { Text(stringResource(R.string.route_rule_value)) },
+                    supportingText = {
+                        Text(
+                            if (invalid) stringResource(R.string.invalid_route_rule)
+                            else routeRuleExample(type),
+                        )
+                    },
+                    isError = invalid,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                ChoiceRow(
+                    stringResource(R.string.route_rule_outbound),
+                    outboundLabels[outbound.ordinal],
+                    outboundLabels,
+                ) { selected ->
+                    outbound = outbounds[outboundLabels.indexOf(selected).coerceAtLeast(0)]
+                }
+                ToggleRow(stringResource(R.string.enabled), enabled) { enabled = it }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val updated = rule.copy(type = type, value = value, outbound = outbound, enabled = enabled).normalized()
+                    if (updated.isValid()) onSave(updated) else invalid = true
+                },
+            ) {
+                Text(stringResource(R.string.save))
+            }
+        },
+        dismissButton = {
+            Row {
+                if (!isNew) {
+                    TextButton(onClick = onDeleteRequest) {
+                        Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error)
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun routeRuleTypeLabel(type: ManagedRouteRuleType): String = when (type) {
+    ManagedRouteRuleType.Domain -> stringResource(R.string.route_type_domain)
+    ManagedRouteRuleType.DomainSuffix -> stringResource(R.string.route_type_domain_suffix)
+    ManagedRouteRuleType.DomainRegex -> stringResource(R.string.route_type_domain_regex)
+    ManagedRouteRuleType.IP -> stringResource(R.string.route_type_ip)
+    ManagedRouteRuleType.IPCidr -> stringResource(R.string.route_type_ip_cidr)
+    ManagedRouteRuleType.IPRange -> stringResource(R.string.route_type_ip_range)
+}
+
+@Composable
+private fun routeOutboundLabel(outbound: ManagedRouteOutbound): String = when (outbound) {
+    ManagedRouteOutbound.Proxy -> stringResource(R.string.route_outbound_proxy)
+    ManagedRouteOutbound.Direct -> stringResource(R.string.route_outbound_direct)
+}
+
+@Composable
+private fun routeRuleExample(type: ManagedRouteRuleType): String = stringResource(
+    when (type) {
+        ManagedRouteRuleType.Domain -> R.string.route_example_domain
+        ManagedRouteRuleType.DomainSuffix -> R.string.route_example_domain_suffix
+        ManagedRouteRuleType.DomainRegex -> R.string.route_example_domain_regex
+        ManagedRouteRuleType.IP -> R.string.route_example_ip
+        ManagedRouteRuleType.IPCidr -> R.string.route_example_ip_cidr
+        ManagedRouteRuleType.IPRange -> R.string.route_example_ip_range
+    },
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1223,6 +2024,35 @@ private fun shareProfile(context: Context, profile: AppConfig) {
         Intent.createChooser(createProfileShareIntent(profile), context.getString(R.string.share_profile)),
     )
 }
+
+private const val BluetoothDiscoverableSeconds = 120
+private const val BluetoothDiscoveryRestartDelayMs = 750L
+private val BluetoothCodeRandom = SecureRandom()
+
+private sealed interface BluetoothAction {
+    data class Send(val profile: AppConfig, val code: String) : BluetoothAction
+    data object Receive : BluetoothAction
+}
+
+private fun generateBluetoothCode(): String = BluetoothCodeRandom.nextInt(10_000).toString().padStart(4, '0')
+
+private fun bluetoothRuntimePermissions(action: BluetoothAction): Array<String> =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        when (action) {
+            is BluetoothAction.Send -> arrayOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_CONNECT,
+            )
+            BluetoothAction.Receive -> arrayOf(
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.BLUETOOTH_ADVERTISE,
+            )
+        }
+    } else if (action is BluetoothAction.Send) {
+        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+    } else {
+        emptyArray()
+    }
 
 internal fun createProfileShareIntent(profile: AppConfig): Intent {
     val uri = requireNotNull(ProfileUriCodec.encode(profile)) { "profile cannot be encoded as a URI" }

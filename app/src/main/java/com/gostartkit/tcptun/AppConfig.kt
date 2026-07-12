@@ -61,6 +61,7 @@ data class AppConfig(
         socks5Password: String = "",
         routeExternalSources: Boolean = false,
         directFirst: Boolean = false,
+        managedRouteRules: List<ManagedRouteRule> = emptyList(),
     ): String {
         if (rawConfigJson.isNotBlank()) {
             return prepareRawConfigForAndroid(
@@ -142,7 +143,9 @@ data class AppConfig(
         }
 
         val rules = JSONArray()
-        if (allowDirectFirst) {
+        val activeManagedRules = managedRouteRules.map(ManagedRouteRule::normalized)
+            .filter { it.enabled && it.isValid() }
+        if (allowDirectFirst || activeManagedRules.any { it.outbound == ManagedRouteOutbound.Direct }) {
             rules.put(
                 JSONObject()
                     .put("inbound", JSONArray().put("local"))
@@ -155,6 +158,16 @@ data class AppConfig(
                     )
                     .put("outbound", "proxy"),
             )
+        }
+        activeManagedRules.forEach { rule ->
+            rules.put(
+                JSONObject()
+                    .put("inbound", JSONArray().put("local"))
+                    .put(rule.type.jsonKey, JSONArray().put(rule.value))
+                    .put("outbound", rule.outbound.tag),
+            )
+        }
+        if (allowDirectFirst) {
             rules.put(
                 JSONObject()
                     .put("inbound", JSONArray().put("local"))

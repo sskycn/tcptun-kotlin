@@ -57,6 +57,42 @@ class AndroidBridgeContractTest {
     }
 
     @Test
+    fun generatedConfigIncludesEnabledManagedRouteRules() {
+        val config = JSONObject(
+            AppConfig(
+                serverHost = "192.0.2.1",
+                serverPort = "443",
+                token = "route-test",
+                protocol = "native",
+            ).toBridgeJson(
+                localListenAddr = "127.0.0.1:18080",
+                managedRouteRules = listOf(
+                    ManagedRouteRule(
+                        type = ManagedRouteRuleType.DomainSuffix,
+                        value = ".example.com",
+                        outbound = ManagedRouteOutbound.Direct,
+                    ),
+                    ManagedRouteRule(
+                        type = ManagedRouteRuleType.IPCidr,
+                        value = "203.0.113.0/24",
+                        outbound = ManagedRouteOutbound.Proxy,
+                        enabled = false,
+                    ),
+                ),
+            ),
+        )
+
+        val rules = config.getJSONObject("route").getJSONArray("rules")
+        assertEquals("proxy", rules.getJSONObject(0).getString("outbound"))
+        assertEquals("direct", rules.getJSONObject(1).getString("outbound"))
+        assertEquals("example.com", rules.getJSONObject(1).getJSONArray("domain_suffixes").getString(0))
+        assertEquals(2, rules.length())
+
+        Androidbridge.start(config.toString())
+        assertTrue(Androidbridge.status() in setOf("Starting", "Running"))
+    }
+
+    @Test
     fun profileShareContainsOnlyUriText() {
         val profile = AppConfig(
             name = "share-test",
