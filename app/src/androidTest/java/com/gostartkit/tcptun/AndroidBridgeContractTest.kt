@@ -1,5 +1,7 @@
 package com.tcptun.client
 
+import android.content.Intent
+import android.net.Uri
 import androidbridge.Androidbridge
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -22,6 +24,43 @@ class AndroidBridgeContractTest {
     fun appUsesCurrentApplicationId() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         assertEquals("com.tcptun.client.debug", context.packageName)
+    }
+
+    @Test
+    fun currentBridgeExposesOptionalApplicationIdentityProvider() {
+        Androidbridge.setAppIdentityProvider(null)
+    }
+
+    @Test
+    fun profileShareContainsOnlyUriText() {
+        val profile = AppConfig(
+            name = "share-test",
+            serverHost = "192.0.2.1",
+            serverPort = "9443",
+            token = "share-secret",
+            protocol = "native",
+        )
+        val expectedUri = ProfileUriCodec.encode(profile)
+        val intent = createProfileShareIntent(profile)
+
+        assertEquals(Intent.ACTION_SEND, intent.action)
+        assertEquals("text/plain", intent.type)
+        assertEquals(expectedUri, intent.getStringExtra(Intent.EXTRA_TEXT))
+        @Suppress("DEPRECATION")
+        assertEquals(null, intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
+    }
+
+    @Test
+    fun fullConfigCannotBeShared() {
+        val raw = """
+            {
+              "outbounds": [{"tag": "direct", "type": "direct"}],
+              "route": {"default_outbound": "direct", "rules": []}
+            }
+        """.trimIndent()
+        val profile = AppConfig(name = "json", rawConfigJson = raw)
+        assertEquals(null, ProfileUriCodec.encode(profile))
+        assertTrue(runCatching { createProfileShareIntent(profile) }.isFailure)
     }
 
     @Test
@@ -118,6 +157,54 @@ class AndroidBridgeContractTest {
         assertEquals("prefer_ipv4", root.getJSONObject("dns").getString("strategy"))
 
         Androidbridge.start(config)
+        assertTrue(Androidbridge.status() in setOf("Starting", "Running"))
+    }
+
+    @Test
+    fun tcptunGoConfigImportKeepsOnlyOutboundsAndRoute() {
+        val raw = """
+            {
+              "log": {"level": "info"},
+              "inbounds": [
+                {"tag": "local", "type": "mixed", "listen": "127.0.0.1", "port": 1080,
+                 "network": ["tcp", "udp"], "outbound": "proxy"}
+              ],
+              "outbounds": [
+                {"tag": "proxy", "type": "native", "server": "192.0.2.1", "port": 9443,
+                 "token": "android-import-test", "transport": {"type": "raw"}, "mux": {"enabled": true}}
+              ],
+              "route": {
+                "default_outbound": "proxy",
+                "rules": [{"inbound": ["local"], "network": ["tcp"], "outbound": "proxy"}]
+              },
+              "dns": {},
+              "discovery": {}
+            }
+        """.trimIndent()
+
+        val imported = ProfileUriCodec.decode(raw).getOrThrow()
+        assertTrue(imported.rawConfigJson.isNotBlank())
+        val stored = JSONObject(imported.rawConfigJson)
+        assertFalse(stored.has("inbounds"))
+        assertFalse(stored.has("log"))
+        assertFalse(stored.has("dns"))
+        assertFalse(stored.has("discovery"))
+        assertTrue(stored.has("outbounds"))
+        assertTrue(stored.has("route"))
+        assertEquals(
+            "android-vpn",
+            stored.getJSONObject("route").getJSONArray("rules")
+                .getJSONObject(0).getJSONArray("inbound").getString(0),
+        )
+        val prepared = JSONObject(imported.toBridgeJson(localListenAddr = "127.0.0.1:1080"))
+        val inbounds = prepared.getJSONArray("inbounds")
+        assertEquals(1, inbounds.length())
+        assertEquals("android-vpn", inbounds.getJSONObject(0).getString("tag"))
+        val ruleInbound = prepared.getJSONObject("route").getJSONArray("rules")
+            .getJSONObject(0).getJSONArray("inbound")
+        assertEquals("android-vpn", ruleInbound.getString(0))
+
+        Androidbridge.start(prepared.toString())
         assertTrue(Androidbridge.status() in setOf("Starting", "Running"))
     }
 }

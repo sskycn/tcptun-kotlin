@@ -13,6 +13,8 @@
     <string name="profile_deleted">已删除 %1$s</string>
     <string name="profile_deleted_prefix">已删除</string>
     <string name="empty_clipboard">剪切板为空</string>
+    <string name="invalid_qr_code">二维码中没有可导入的配置或 tcptun 配置。</string>
+    <string name="qr_scanner_failed">无法打开二维码扫描器。</string>
     <string name="empty_profiles">还没有配置项</string>
     <string name="error_prefix">错误：%1$s</string>
     <string name="tcping_running">正在 TCPing...</string>

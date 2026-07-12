@@ -13,6 +13,8 @@
     <string name="profile_deleted">Deleted %1$s</string>
     <string name="profile_deleted_prefix">Deleted</string>
     <string name="empty_clipboard">Clipboard is empty</string>
+    <string name="invalid_qr_code">The QR code does not contain a supported profile or tcptun configuration.</string>
+    <string name="qr_scanner_failed">Unable to open the QR code scanner.</string>
     <string name="empty_profiles">No profiles yet</string>
     <string name="error_prefix">Error: %1$s</string>
     <string name="tcping_running">TCPing...</string>

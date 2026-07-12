@@ -5,11 +5,9 @@ import android.content.Context
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -41,12 +39,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.BatterySaver
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.NetworkCheck
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
@@ -91,6 +86,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.tcptun.client.ui.theme.TcpTunTheme
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import kotlinx.coroutines.Dispatchers
 import org.json.JSONObject
 import java.net.InetSocketAddress
@@ -115,7 +113,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun TcptunScreen() {
     val context = LocalContext.current
-    val emptyClipboard = stringResource(R.string.empty_clipboard)
+    val invalidQrCode = stringResource(R.string.invalid_qr_code)
+    val qrScannerFailed = stringResource(R.string.qr_scanner_failed)
     val profileDeletedPrefix = stringResource(R.string.profile_deleted_prefix)
     val undoLabel = stringResource(R.string.undo)
     var state by remember { mutableStateOf(ProfileStore.load(context)) }
@@ -159,18 +158,32 @@ fun TcptunScreen() {
 
     fun importFromClipboard() {
         val link = clipboardText(context).trim()
-        if (link.isBlank()) {
-            TcptunState.error(emptyClipboard)
+        val clipboardProfile = link.takeIf { it.isNotBlank() }
+            ?.let(ProfileUriCodec::decode)
+            ?.getOrNull()
+        if (clipboardProfile != null) {
+            save(ProfilesState(state.profiles + clipboardProfile, clipboardProfile.id))
             return
         }
-        ProfileUriCodec.decode(link).fold(
-            onSuccess = { profile ->
-                save(ProfilesState(state.profiles + profile, profile.id))
-            },
-            onFailure = { err ->
-                TcptunState.error(err.message ?: "import failed")
-            },
-        )
+
+        val options = GmsBarcodeScannerOptions.Builder()
+            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+            .enableAutoZoom()
+            .build()
+        GmsBarcodeScanning.getClient(context, options)
+            .startScan()
+            .addOnSuccessListener { barcode ->
+                val value = barcode.rawValue?.trim().orEmpty()
+                ProfileUriCodec.decode(value).fold(
+                    onSuccess = { profile ->
+                        save(ProfilesState(state.profiles + profile, profile.id))
+                    },
+                    onFailure = { TcptunState.error(invalidQrCode) },
+                )
+            }
+            .addOnFailureListener { err ->
+                TcptunState.error(err.message?.takeIf { it.isNotBlank() } ?: qrScannerFailed)
+            }
     }
 
     fun startProfile(config: AppConfig) {
@@ -252,11 +265,7 @@ fun TcptunScreen() {
             snackbarHost = { SnackbarHost(snackbarHostState) },
             floatingActionButton = {
                 MainActionsFab(
-                    onAdd = { editingProfile = AppConfig(id = UUID.randomUUID().toString(), name = "proxy") },
                     onImport = ::importFromClipboard,
-                    onDiagnostics = { showDiagnostics = true },
-                    onSettings = { showSettings = true },
-                    onBatterySettings = { openBatteryOptimizationSettings(context) },
                 )
             },
             bottomBar = {
@@ -306,6 +315,7 @@ fun TcptunScreen() {
                         },
                         enabled = !isVpnTransitionStatus(TcptunState.status.value),
                         onClick = { toggleProfile(profile) },
+                        shareable = ProfileUriCodec.encode(profile) != null,
                         onShare = { shareProfile(context, profile) },
                         onEdit = { editingProfile = profile },
                         onDelete = { deleteProfile(profile) },
@@ -351,101 +361,13 @@ private fun TopBar(title: String) {
 
 @Composable
 private fun MainActionsFab(
-    onAdd: () -> Unit,
     onImport: () -> Unit,
-    onDiagnostics: () -> Unit,
-    onSettings: () -> Unit,
-    onBatterySettings: () -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    val colors = MaterialTheme.colorScheme
-
-    Box {
-        FloatingActionButton(onClick = { expanded = true }) {
-            Icon(
-                Icons.Rounded.Add,
-                contentDescription = stringResource(R.string.actions),
-            )
-        }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            shape = RoundedCornerShape(12.dp),
-            containerColor = colors.surfaceContainer,
-            tonalElevation = 3.dp,
-            shadowElevation = 6.dp,
-        ) {
-            DropdownMenuItem(
-                leadingIcon = {
-                    Icon(Icons.Rounded.FileDownload, contentDescription = null)
-                },
-                text = { Text(stringResource(R.string.import_from_clipboard)) },
-                onClick = {
-                    expanded = false
-                    onImport()
-                },
-                colors = MenuDefaults.itemColors(
-                    textColor = colors.onSurface,
-                    leadingIconColor = colors.onSurfaceVariant,
-                ),
-            )
-            DropdownMenuItem(
-                leadingIcon = {
-                    Icon(Icons.Rounded.Add, contentDescription = null)
-                },
-                text = { Text(stringResource(R.string.add_profile)) },
-                onClick = {
-                    expanded = false
-                    onAdd()
-                },
-                colors = MenuDefaults.itemColors(
-                    textColor = colors.onSurface,
-                    leadingIconColor = colors.onSurfaceVariant,
-                ),
-            )
-            DropdownMenuItem(
-                leadingIcon = {
-                    Icon(Icons.Rounded.NetworkCheck, contentDescription = null)
-                },
-                text = { Text(stringResource(R.string.diagnostics)) },
-                onClick = {
-                    expanded = false
-                    onDiagnostics()
-                },
-                colors = MenuDefaults.itemColors(
-                    textColor = colors.onSurface,
-                    leadingIconColor = colors.onSurfaceVariant,
-                ),
-            )
-            DropdownMenuItem(
-                leadingIcon = {
-                    Icon(Icons.Rounded.Tune, contentDescription = null)
-                },
-                text = { Text(stringResource(R.string.settings)) },
-                onClick = {
-                    expanded = false
-                    onSettings()
-                },
-                colors = MenuDefaults.itemColors(
-                    textColor = colors.onSurface,
-                    leadingIconColor = colors.onSurfaceVariant,
-                ),
-            )
-            DropdownMenuItem(
-                leadingIcon = {
-                    Icon(Icons.Rounded.BatterySaver, contentDescription = null)
-                },
-                text = { Text(stringResource(R.string.battery_settings)) },
-                onClick = {
-                    expanded = false
-                    onBatterySettings()
-                },
-                colors = MenuDefaults.itemColors(
-                    textColor = colors.onSurface,
-                    leadingIconColor = colors.onSurfaceVariant,
-                ),
-            )
-        }
+    FloatingActionButton(onClick = onImport) {
+        Icon(
+            Icons.Rounded.Add,
+            contentDescription = stringResource(R.string.actions),
+        )
     }
 }
 
@@ -455,6 +377,7 @@ private fun ProfileRow(
     selected: Boolean,
     status: String?,
     enabled: Boolean,
+    shareable: Boolean,
     onClick: () -> Unit,
     onShare: () -> Unit,
     onEdit: () -> Unit,
@@ -525,20 +448,22 @@ private fun ProfileRow(
                     tonalElevation = 3.dp,
                     shadowElevation = 6.dp,
                 ) {
-                    DropdownMenuItem(
-                        leadingIcon = {
-                            Icon(Icons.Rounded.Share, contentDescription = null)
-                        },
-                        text = { Text(stringResource(R.string.share)) },
-                        onClick = {
-                            menuExpanded = false
-                            onShare()
-                        },
-                        colors = MenuDefaults.itemColors(
-                            textColor = colors.onSurface,
-                            leadingIconColor = colors.onSurfaceVariant,
-                        ),
-                    )
+                    if (shareable) {
+                        DropdownMenuItem(
+                            leadingIcon = {
+                                Icon(Icons.Rounded.Share, contentDescription = null)
+                            },
+                            text = { Text(stringResource(R.string.share)) },
+                            onClick = {
+                                menuExpanded = false
+                                onShare()
+                            },
+                            colors = MenuDefaults.itemColors(
+                                textColor = colors.onSurface,
+                                leadingIconColor = colors.onSurfaceVariant,
+                            ),
+                        )
+                    }
                     DropdownMenuItem(
                         leadingIcon = {
                             Icon(Icons.Rounded.Edit, contentDescription = null)
@@ -1239,10 +1164,16 @@ private fun LogsDialog(onDismiss: () -> Unit) {
 }
 
 private fun shareProfile(context: Context, profile: AppConfig) {
-    val send = Intent(Intent.ACTION_SEND)
+    context.startActivity(
+        Intent.createChooser(createProfileShareIntent(profile), context.getString(R.string.share_profile)),
+    )
+}
+
+internal fun createProfileShareIntent(profile: AppConfig): Intent {
+    val uri = requireNotNull(ProfileUriCodec.encode(profile)) { "profile cannot be encoded as a URI" }
+    return Intent(Intent.ACTION_SEND)
         .setType("text/plain")
-        .putExtra(Intent.EXTRA_TEXT, profile.shareText())
-    context.startActivity(Intent.createChooser(send, context.getString(R.string.share_profile)))
+        .putExtra(Intent.EXTRA_TEXT, uri)
 }
 
 private data class TcpingTarget(
@@ -1385,27 +1316,6 @@ private fun clipboardText(context: Context): String {
 private fun needsNotificationPermission(context: Context): Boolean {
     return Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-}
-
-private fun openBatteryOptimizationSettings(context: Context) {
-    val packageName = context.packageName
-    val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-        Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-    } else {
-        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-            .setData(Uri.parse("package:$packageName"))
-    }
-    runCatching { context.startActivity(intent) }
-        .onFailure {
-            runCatching {
-                context.startActivity(
-                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                        .setData(Uri.parse("package:$packageName")),
-                )
-            }.onFailure {
-                context.startActivity(Intent(Settings.ACTION_SETTINGS))
-            }
-        }
 }
 
 private fun startVpn(context: Context, config: AppConfig) {

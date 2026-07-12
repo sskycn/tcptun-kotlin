@@ -415,6 +415,7 @@ class TcptunVpnService : VpnService() {
             runCatching { bridge.stop() }
             runCatching { bridge.clearStatusCallback() }
             runCatching { bridge.clearSocketProtector() }
+            runCatching { bridge.clearAppIdentityProvider() }
         }
     }
 

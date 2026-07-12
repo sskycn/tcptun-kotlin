@@ -11,6 +11,8 @@ interface TcptunBridge {
     fun clearStatusCallback()
     fun setSocketProtector(onProtect: (Int) -> Boolean)
     fun clearSocketProtector()
+    fun setAppIdentityProvider(onIdentify: (String) -> String?)
+    fun clearAppIdentityProvider()
 }
 
 class ReflectionTcptunBridge : TcptunBridge {
@@ -134,6 +136,44 @@ class ReflectionTcptunBridge : TcptunBridge {
             "setSocketProtector",
             "SetSocketProtector",
             parameterTypes = arrayOf(protectorClass),
+            null,
+        )
+    }
+
+    override fun setAppIdentityProvider(onIdentify: (String) -> String?) {
+        val providerClass = try {
+            Class.forName("androidbridge.AppIdentityProvider")
+        } catch (err: ClassNotFoundException) {
+            TcptunState.appendLog("androidbridge AppIdentityProvider is not available: ${err.message}")
+            return
+        }
+        val provider = Proxy.newProxyInstance(
+            providerClass.classLoader,
+            arrayOf(providerClass),
+        ) { _, method, args ->
+            if (method.name.equals("identifyApp", ignoreCase = true) && !args.isNullOrEmpty()) {
+                return@newProxyInstance onIdentify(args[0].toString()).orEmpty()
+            }
+            ""
+        }
+        invokeStatic(
+            "setAppIdentityProvider",
+            "SetAppIdentityProvider",
+            parameterTypes = arrayOf(providerClass),
+            provider,
+        )
+    }
+
+    override fun clearAppIdentityProvider() {
+        val providerClass = try {
+            Class.forName("androidbridge.AppIdentityProvider")
+        } catch (_: ClassNotFoundException) {
+            return
+        }
+        invokeStatic(
+            "setAppIdentityProvider",
+            "SetAppIdentityProvider",
+            parameterTypes = arrayOf(providerClass),
             null,
         )
     }

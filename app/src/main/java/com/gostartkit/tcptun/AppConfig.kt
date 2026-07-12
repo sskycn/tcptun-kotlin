@@ -195,20 +195,69 @@ data class AppConfig(
             .put("username", socks5Username)
             .put("password", socks5Password)
         val inbounds = JSONArray().put(androidInbound)
+        val replacedInboundTags = mutableSetOf(AndroidVpnInboundTag)
         root.optJSONArray("inbounds")?.let { existing ->
             for (index in 0 until existing.length()) {
                 val inbound = existing.optJSONObject(index) ?: continue
-                if (inbound.optString("tag") != AndroidVpnInboundTag) inbounds.put(inbound)
+                val tag = inbound.optString("tag").trim()
+                if (tag == AndroidVpnInboundTag || inboundConflictsWithAndroidListener(inbound, listenHost, listenPort)) {
+                    if (tag.isNotBlank()) replacedInboundTags += tag
+                } else {
+                    inbounds.put(inbound)
+                }
             }
         }
         root.put("inbounds", inbounds)
         if (!route.has("default_outbound")) route.put("default_outbound", defaultOutbound)
         if (!route.has("rules")) route.put("rules", JSONArray())
+        remapInboundRules(route.optJSONArray("rules"), replacedInboundTags)
         if (verbose) {
             val log = root.optJSONObject("log") ?: JSONObject().also { root.put("log", it) }
             log.put("level", "debug")
         }
         return root.toString()
+    }
+
+    private fun inboundConflictsWithAndroidListener(inbound: JSONObject, listenHost: String, listenPort: Int): Boolean {
+        val address = inbound.optString("address").trim()
+        if (address.isNotBlank()) {
+            val parsed = runCatching { splitHostPort(address) }.getOrNull()
+            return parsed != null && parsed.second == listenPort && listenerHostsOverlap(parsed.first, listenHost)
+        }
+        if (inbound.optInt("port", -1) != listenPort) return false
+        val hosts = buildList {
+            inbound.optString("listen").trim().takeIf { it.isNotBlank() }?.let(::add)
+            inbound.optJSONArray("listen_addresses")?.let { values ->
+                for (index in 0 until values.length()) {
+                    values.optString(index).trim().takeIf { it.isNotBlank() }?.let(::add)
+                }
+            }
+        }
+        return hosts.any { listenerHostsOverlap(it, listenHost) }
+    }
+
+    private fun listenerHostsOverlap(first: String, second: String): Boolean {
+        fun normalize(host: String): String = host.trim().removeSurrounding("[", "]").lowercase()
+        val left = normalize(first)
+        val right = normalize(second)
+        if (left == right) return true
+        if (left in WildcardHosts || right in WildcardHosts) return true
+        return left in LoopbackHosts && right in LoopbackHosts
+    }
+
+    private fun remapInboundRules(rules: JSONArray?, replacedTags: Set<String>) {
+        if (rules == null || replacedTags.isEmpty()) return
+        for (ruleIndex in 0 until rules.length()) {
+            val rule = rules.optJSONObject(ruleIndex) ?: continue
+            val tags = rule.optJSONArray("inbound") ?: continue
+            val remapped = linkedSetOf<String>()
+            for (tagIndex in 0 until tags.length()) {
+                val tag = tags.optString(tagIndex).trim()
+                if (tag.isBlank()) continue
+                remapped += if (tag in replacedTags) AndroidVpnInboundTag else tag
+            }
+            rule.put("inbound", JSONArray().apply { remapped.forEach(::put) })
+        }
     }
 
     private fun validateRawConfig(raw: String): String? {
@@ -246,6 +295,8 @@ data class AppConfig(
         val Transports = listOf("raw", "ws", "h2", "h3")
         val UpstreamProtocols = listOf("socks5", "mixed")
         private const val AndroidVpnInboundTag = "android-vpn"
+        private val WildcardHosts = setOf("0.0.0.0", "::", "*")
+        private val LoopbackHosts = setOf("127.0.0.1", "::1", "localhost")
 
         fun load(context: Context): AppConfig {
             return ProfileStore.load(context).profiles.firstOrNull()
@@ -345,10 +396,7 @@ data class AppConfig(
     }
 
     fun shareText(): String {
-        if (rawConfigJson.isNotBlank()) {
-            return runCatching { JSONObject(rawConfigJson).toString(2) }.getOrDefault(rawConfigJson)
-        }
-        return ProfileUriCodec.encode(this) ?: toJson().toString(2)
+        return ProfileUriCodec.encode(this).orEmpty()
     }
 }
 

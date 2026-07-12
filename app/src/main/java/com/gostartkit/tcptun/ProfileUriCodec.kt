@@ -2,6 +2,7 @@ package com.tcptun.client
 
 import android.net.Uri
 import android.util.Base64
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -132,10 +133,23 @@ object ProfileUriCodec {
             return AppConfig.fromJson(obj).copy(id = UUID.randomUUID().toString())
         }
         if (obj.has("inbounds") && obj.has("outbounds")) {
+            val route = obj.optJSONObject("route")?.let { JSONObject(it.toString()) } ?: JSONObject()
+            route.optJSONArray("rules")?.let { rules ->
+                for (ruleIndex in 0 until rules.length()) {
+                    val rule = rules.optJSONObject(ruleIndex) ?: continue
+                    val inboundTags = rule.optJSONArray("inbound") ?: continue
+                    if (inboundTags.length() > 0) {
+                        rule.put("inbound", JSONArray().put(AndroidVpnInboundTag))
+                    }
+                }
+            }
+            val imported = JSONObject()
+                .put("outbounds", obj.getJSONArray("outbounds"))
+                .put("route", route)
             return AppConfig(
                 id = UUID.randomUUID().toString(),
                 name = "tcptun-json",
-                rawConfigJson = obj.toString(2),
+                rawConfigJson = imported.toString(2),
             )
         }
         if (!obj.has("server_addr") && !obj.has("tunnel_protocol")) {
@@ -325,6 +339,8 @@ object ProfileUriCodec {
         val arr = optJSONArray(name) ?: return ""
         return if (arr.length() > 0) arr.optString(0) else ""
     }
+
+    private const val AndroidVpnInboundTag = "android-vpn"
 
     private fun encodeComponent(value: String): String {
         return URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
