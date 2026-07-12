@@ -26,6 +26,7 @@ data class AppConfig(
     val mux: Boolean = true,
     val udp: Boolean = true,
     val upstreamProtocol: String = "socks5",
+    val rawConfigJson: String = "",
 ) {
     val serverAddr: String
         get() {
@@ -41,6 +42,7 @@ data class AppConfig(
 
     fun validate(): String? {
         if (name.isBlank()) return "profile name is required"
+        if (rawConfigJson.isNotBlank()) return validateRawConfig(rawConfigJson)
         if (serverHost.isBlank()) return "server address is required"
         val port = serverPort.toIntOrNull() ?: return "server port must be a number"
         if (port !in 1..65535) return "server port must be between 1 and 65535"
@@ -53,50 +55,185 @@ data class AppConfig(
 
     fun toBridgeJson(
         localListenAddr: String,
-        routeConfigPath: String = "",
         verbose: Boolean = false,
         powerSavingMode: Boolean = false,
         socks5Username: String = "",
         socks5Password: String = "",
         routeExternalSources: Boolean = false,
     ): String {
-        val heartbeatInterval = if (powerSavingMode) "60s" else "30s"
-        val connectionIdleTimeout = if (powerSavingMode) "15m" else "30m"
-        val udpSessionTimeout = if (powerSavingMode) "2m" else "45s"
-        val retryMaxInterval = if (powerSavingMode) "15s" else "5s"
+        if (rawConfigJson.isNotBlank()) {
+            return prepareRawConfigForAndroid(
+                localListenAddr = localListenAddr,
+                udpEnabled = udp,
+                socks5Username = socks5Username,
+                socks5Password = socks5Password,
+                verbose = verbose,
+            )
+        }
+        val (listenHost, listenPort) = splitHostPort(localListenAddr)
+        val networks = JSONArray().put("tcp").apply {
+            if (udp) put("udp")
+        }
+        val inbound = JSONObject()
+            .put("tag", "local")
+            .put("type", upstreamProtocol)
+            .put("listen", listenHost)
+            .put("port", listenPort)
+            .put("network", networks)
+            .put("outbound", "proxy")
+            .put("username", socks5Username)
+            .put("password", socks5Password)
+
+        val proxy = JSONObject()
+            .put("tag", "proxy")
+            .put("type", protocol)
+            .put("server", serverHost.trim().removeSurrounding("[", "]"))
+            .put("port", serverPort.trim().toInt())
+            .put("flow", flow.trim())
+            .put(
+                "transport",
+                JSONObject()
+                    .put("type", transport)
+                    .put("path", normalizedPath())
+                    .put("tls", tls)
+                    .put("server_name", sni.trim())
+                    .put("insecure", tlsInsecure),
+            )
+            .put("mux", JSONObject().put("enabled", mux))
+        when (protocol) {
+            "vless", "vmess" -> proxy.put("uuid", token.trim())
+            "trojan" -> proxy.put("password", token.trim())
+            else -> proxy.put("token", token.trim())
+        }
+        if (tunnelSecurity.equals("reality", ignoreCase = true)) {
+            proxy.put(
+                "security",
+                JSONObject()
+                    .put("type", "reality")
+                    .put("server_name", sni.trim())
+                    .put("fingerprint", realityFingerprint.trim())
+                    .put("public_key", realityPublicKey.trim())
+                    .put("short_id", realityShortId.trim())
+                    .put("spider_x", realitySpiderX.trim()),
+            )
+        }
+
+        // tcptun-go's direct-first outbound is TCP-only. UDP keeps using the
+        // tunnel, matching the previous Android client behavior for public IPs.
+        val allowDirectFirst = listenHost in setOf("127.0.0.1", "::1", "localhost") || routeExternalSources
+        val outbounds = JSONArray()
+            .put(proxy)
+            .put(JSONObject().put("tag", "direct").put("type", "direct"))
+        if (allowDirectFirst) {
+            outbounds.put(
+                JSONObject()
+                    .put("tag", "auto")
+                    .put("type", "direct-first")
+                    .put("primary", "direct")
+                    .put("fallback", "proxy")
+                    .put("network", JSONArray().put("tcp"))
+                    .put("probe_timeout", if (powerSavingMode) "500ms" else "800ms")
+                    .put("failure_threshold", 2)
+                    .put("positive_ttl", "30m")
+                    .put("negative_ttl", if (powerSavingMode) "30m" else "10m"),
+            )
+        }
+
+        val rules = JSONArray()
+        if (allowDirectFirst) {
+            rules.put(
+                JSONObject()
+                    .put("inbound", JSONArray().put("local"))
+                    .put("network", JSONArray().put("tcp"))
+                    .put("outbound", "auto"),
+            )
+        }
         return JSONObject()
-            .put("mode", "client")
-            .put("listen_addrs", JSONArray().put(localListenAddr))
-            .put("local_listen_addr", localListenAddr)
-            .put("server_addr", serverAddr)
-            .put("token", token.trim())
-            .put("tunnel_protocol", protocol)
-            .put("tunnel_transport", transport)
-            .put("tunnel_path", normalizedPath())
-            .put("tunnel_tls", tls)
-            .put("tunnel_tls_server_name", sni.trim())
-            .put("tunnel_tls_insecure", tlsInsecure)
-            .put("tunnel_security", tunnelSecurity.trim())
-            .put("tunnel_flow", flow.trim())
-            .put("reality_server_name", sni.trim())
-            .put("reality_public_key", realityPublicKey.trim())
-            .put("reality_short_id", realityShortId.trim())
-            .put("reality_fingerprint", realityFingerprint.trim())
-            .put("reality_spider_x", realitySpiderX.trim())
-            .put("tunnel_mux", mux)
-            .put("upstream_protocol", upstreamProtocol)
-            .put("socks5_username", socks5Username)
-            .put("socks5_password", socks5Password)
-            .put("route_external_sources", routeExternalSources)
-            .put("enable_udp", udp)
-            .put("config_path", "")
-            .put("route_config_path", routeConfigPath)
-            .put("heartbeat_interval", heartbeatInterval)
-            .put("connection_idle_timeout", connectionIdleTimeout)
-            .put("udp_session_timeout", udpSessionTimeout)
-            .put("retry_max_interval", retryMaxInterval)
-            .put("verbose", verbose)
+            .put("log", JSONObject().put("level", if (verbose) "debug" else "info"))
+            .put("inbounds", JSONArray().put(inbound))
+            .put("outbounds", outbounds)
+            .put("route", JSONObject().put("default_outbound", "proxy").put("rules", rules))
+            .put("dns", JSONObject())
+            .put("discovery", JSONObject())
             .toString()
+    }
+
+    private fun prepareRawConfigForAndroid(
+        localListenAddr: String,
+        udpEnabled: Boolean,
+        socks5Username: String,
+        socks5Password: String,
+        verbose: Boolean,
+    ): String {
+        val root = JSONObject(rawConfigJson)
+        val outbounds = root.optJSONArray("outbounds")
+            ?: throw IllegalArgumentException("outbounds is required")
+        require(outbounds.length() > 0) { "outbounds must not be empty" }
+
+        val route = root.optJSONObject("route") ?: JSONObject().also { root.put("route", it) }
+        val defaultOutbound = route.optString("default_outbound").trim().ifBlank {
+            val existingInbounds = root.optJSONArray("inbounds")
+            var inferred = ""
+            if (existingInbounds != null) {
+                for (index in 0 until existingInbounds.length()) {
+                    inferred = existingInbounds.optJSONObject(index)?.optString("outbound")?.trim().orEmpty()
+                    if (inferred.isNotBlank()) break
+                }
+            }
+            inferred.ifBlank { outbounds.optJSONObject(0)?.optString("tag")?.trim().orEmpty() }
+        }
+        require(defaultOutbound.isNotBlank()) { "route.default_outbound or a tagged outbound is required" }
+
+        val (listenHost, listenPort) = splitHostPort(localListenAddr)
+        val androidInbound = JSONObject()
+            .put("tag", AndroidVpnInboundTag)
+            .put("type", "socks5")
+            .put("listen", listenHost)
+            .put("port", listenPort)
+            .put("network", JSONArray().put("tcp").apply { if (udpEnabled) put("udp") })
+            .put("outbound", defaultOutbound)
+            .put("username", socks5Username)
+            .put("password", socks5Password)
+        val inbounds = JSONArray().put(androidInbound)
+        root.optJSONArray("inbounds")?.let { existing ->
+            for (index in 0 until existing.length()) {
+                val inbound = existing.optJSONObject(index) ?: continue
+                if (inbound.optString("tag") != AndroidVpnInboundTag) inbounds.put(inbound)
+            }
+        }
+        root.put("inbounds", inbounds)
+        if (!route.has("default_outbound")) route.put("default_outbound", defaultOutbound)
+        if (!route.has("rules")) route.put("rules", JSONArray())
+        if (verbose) {
+            val log = root.optJSONObject("log") ?: JSONObject().also { root.put("log", it) }
+            log.put("level", "debug")
+        }
+        return root.toString()
+    }
+
+    private fun validateRawConfig(raw: String): String? {
+        return runCatching {
+            val root = JSONObject(raw)
+            if (root.has("mode")) return@runCatching "legacy mode-based configuration is not supported"
+            val outbounds = root.optJSONArray("outbounds")
+                ?: return@runCatching "outbounds is required"
+            if (outbounds.length() == 0) return@runCatching "outbounds must not be empty"
+            val hasTaggedOutbound = (0 until outbounds.length()).any { index ->
+                outbounds.optJSONObject(index)?.optString("tag")?.isNotBlank() == true
+            }
+            if (hasTaggedOutbound) null else "at least one tagged outbound is required"
+        }.getOrElse { it.message ?: "invalid tcptun JSON" }
+    }
+
+    private fun splitHostPort(address: String): Pair<String, Int> {
+        val trimmed = address.trim()
+        val separator = trimmed.lastIndexOf(':')
+        require(separator > 0) { "invalid local listen address: $address" }
+        val host = trimmed.substring(0, separator).removeSurrounding("[", "]")
+        val port = trimmed.substring(separator + 1).toIntOrNull()
+            ?: throw IllegalArgumentException("invalid local listen port: $address")
+        require(port in 1..65535) { "invalid local listen port: $address" }
+        return host to port
     }
 
     private fun normalizedPath(): String {
@@ -108,6 +245,7 @@ data class AppConfig(
         val Protocols = listOf("native", "vless", "vmess", "trojan")
         val Transports = listOf("raw", "ws", "h2", "h3")
         val UpstreamProtocols = listOf("socks5", "mixed")
+        private const val AndroidVpnInboundTag = "android-vpn"
 
         fun load(context: Context): AppConfig {
             return ProfileStore.load(context).profiles.firstOrNull()
@@ -136,6 +274,7 @@ data class AppConfig(
                 mux = obj.optBoolean("mux", true),
                 udp = obj.optBoolean("udp", true),
                 upstreamProtocol = obj.optString("upstreamProtocol", "socks5"),
+                rawConfigJson = obj.optString("rawConfigJson"),
             )
         }
     }
@@ -153,6 +292,7 @@ data class AppConfig(
     }
 
     fun label(): String {
+        if (rawConfigJson.isNotBlank()) return "TCPTUN / JSON"
         val security = when {
             tunnelSecurity.isNotBlank() -> tunnelSecurity
             sni.isNotBlank() && tls -> "tls"
@@ -164,6 +304,12 @@ data class AppConfig(
     }
 
     fun maskedAddress(): String {
+        if (rawConfigJson.isNotBlank()) {
+            val root = runCatching { JSONObject(rawConfigJson) }.getOrNull()
+            val inbounds = root?.optJSONArray("inbounds")?.length() ?: 0
+            val outbounds = root?.optJSONArray("outbounds")?.length() ?: 0
+            return "$inbounds inbounds · $outbounds outbounds"
+        }
         val host = serverHost.trim()
         val masked = when {
             host.length <= 8 -> host
@@ -195,9 +341,13 @@ data class AppConfig(
             .put("mux", mux)
             .put("udp", udp)
             .put("upstreamProtocol", upstreamProtocol)
+            .put("rawConfigJson", rawConfigJson)
     }
 
     fun shareText(): String {
+        if (rawConfigJson.isNotBlank()) {
+            return runCatching { JSONObject(rawConfigJson).toString(2) }.getOrDefault(rawConfigJson)
+        }
         return ProfileUriCodec.encode(this) ?: toJson().toString(2)
     }
 }
@@ -223,7 +373,7 @@ object ProfileStore {
             val profiles = buildList {
                 for (i in 0 until arr.length()) {
                     val profile = AppConfig.fromJson(arr.getJSONObject(i))
-                    if (profile.serverHost.isNotBlank()) {
+                    if (profile.serverHost.isNotBlank() || profile.rawConfigJson.isNotBlank()) {
                         add(profile)
                     }
                 }

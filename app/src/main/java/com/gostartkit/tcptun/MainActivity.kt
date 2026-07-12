@@ -32,7 +32,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -41,16 +40,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
-import androidx.compose.material.icons.automirrored.rounded.AltRoute
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.BatterySaver
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.NetworkCheck
-import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
@@ -96,11 +92,9 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.tcptun.client.ui.theme.TcpTunTheme
 import kotlinx.coroutines.Dispatchers
-import org.json.JSONArray
 import org.json.JSONObject
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -128,8 +122,6 @@ fun TcptunScreen() {
     var pendingConfig by remember { mutableStateOf<AppConfig?>(null) }
     var pendingNotificationConfig by remember { mutableStateOf<AppConfig?>(null) }
     var editingProfile by remember { mutableStateOf<AppConfig?>(null) }
-    var showRouteEditor by remember { mutableStateOf(false) }
-    var showAppFilter by remember { mutableStateOf(false) }
     var showDiagnostics by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
@@ -242,15 +234,7 @@ fun TcptunScreen() {
     }
 
     val editing = editingProfile
-    if (showRouteEditor) {
-        RouteConfigPage(
-            onBack = { showRouteEditor = false },
-        )
-    } else if (showAppFilter) {
-        AppFilterPage(
-            onBack = { showAppFilter = false },
-        )
-    } else if (showDiagnostics) {
+    if (showDiagnostics) {
         DiagnosticsPage(
             onBack = { showDiagnostics = false },
             onShowLogs = { showLogs = true },
@@ -270,8 +254,6 @@ fun TcptunScreen() {
                 MainActionsFab(
                     onAdd = { editingProfile = AppConfig(id = UUID.randomUUID().toString(), name = "proxy") },
                     onImport = ::importFromClipboard,
-                    onRouteRules = { showRouteEditor = true },
-                    onAppFilter = { showAppFilter = true },
                     onDiagnostics = { showDiagnostics = true },
                     onSettings = { showSettings = true },
                     onBatterySettings = { openBatteryOptimizationSettings(context) },
@@ -371,8 +353,6 @@ private fun TopBar(title: String) {
 private fun MainActionsFab(
     onAdd: () -> Unit,
     onImport: () -> Unit,
-    onRouteRules: () -> Unit,
-    onAppFilter: () -> Unit,
     onDiagnostics: () -> Unit,
     onSettings: () -> Unit,
     onBatterySettings: () -> Unit,
@@ -417,34 +397,6 @@ private fun MainActionsFab(
                 onClick = {
                     expanded = false
                     onAdd()
-                },
-                colors = MenuDefaults.itemColors(
-                    textColor = colors.onSurface,
-                    leadingIconColor = colors.onSurfaceVariant,
-                ),
-            )
-            DropdownMenuItem(
-                leadingIcon = {
-                    Icon(Icons.AutoMirrored.Rounded.AltRoute, contentDescription = null)
-                },
-                text = { Text(stringResource(R.string.route_rules)) },
-                onClick = {
-                    expanded = false
-                    onRouteRules()
-                },
-                colors = MenuDefaults.itemColors(
-                    textColor = colors.onSurface,
-                    leadingIconColor = colors.onSurfaceVariant,
-                ),
-            )
-            DropdownMenuItem(
-                leadingIcon = {
-                    Icon(Icons.Rounded.Apps, contentDescription = null)
-                },
-                text = { Text(stringResource(R.string.app_filter)) },
-                onClick = {
-                    expanded = false
-                    onAppFilter()
                 },
                 colors = MenuDefaults.itemColors(
                     textColor = colors.onSurface,
@@ -978,733 +930,22 @@ private fun DiagnosticsLine(label: String, value: String) {
     }
 }
 
-@Composable
-private fun AppFilterPage(onBack: () -> Unit) {
-    val context = LocalContext.current
-    var query by remember { mutableStateOf("") }
-    var filter by remember { mutableStateOf(TcptunVpnService.readAppFilter(context)) }
-    val apps = remember(context, filter) {
-        loadFilterableApps(context, filter.excludedApps + filter.includedApps)
-    }
-    val normalizedQuery = query.trim().lowercase(Locale.ROOT)
-    val filteredApps = remember(apps, normalizedQuery) {
-        if (normalizedQuery.isBlank()) {
-            apps
-        } else {
-            apps.filter {
-                it.label.lowercase(Locale.ROOT).contains(normalizedQuery) ||
-                    it.packageName.lowercase(Locale.ROOT).contains(normalizedQuery)
-            }
-        }
-    }
-
-    fun saveFilter(next: AppFilterConfig) {
-        TcptunVpnService.writeAppFilter(context, next)
-        filter = TcptunVpnService.readAppFilter(context)
-    }
-
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            AppFilterTopBar(
-                onBack = onBack,
-                onReset = { saveFilter(AppFilterConfig()) },
-                canReset = filter.mode != AppFilterMode.ProxyAll ||
-                    filter.excludedApps.isNotEmpty() ||
-                    filter.includedApps.isNotEmpty(),
-            )
-        },
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp),
-        ) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                saveFilter(
-                                    if (filter.mode == AppFilterMode.ProxyAll) {
-                                        AppFilterConfig(mode = AppFilterMode.BypassAll, includedApps = filter.includedApps)
-                                    } else {
-                                        AppFilterConfig(mode = AppFilterMode.ProxyAll, excludedApps = filter.excludedApps)
-                                    },
-                                )
-                            },
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(3.dp),
-                        ) {
-                            Text(
-                                appFilterModeTitle(filter),
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                            Text(
-                                appFilterModeDescription(filter),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Switch(
-                            checked = filter.mode == AppFilterMode.BypassAll,
-                            onCheckedChange = { checked ->
-                                saveFilter(
-                                    if (checked) {
-                                        AppFilterConfig(mode = AppFilterMode.BypassAll, includedApps = filter.includedApps)
-                                    } else {
-                                        AppFilterConfig(mode = AppFilterMode.ProxyAll, excludedApps = filter.excludedApps)
-                                    },
-                                )
-                            },
-                        )
-                    }
-                    OutlinedTextField(
-                        value = query,
-                        onValueChange = { query = it },
-                        leadingIcon = {
-                            Icon(Icons.Rounded.Search, contentDescription = null)
-                        },
-                        label = { Text(stringResource(R.string.search_apps)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                contentPadding = PaddingValues(vertical = 8.dp),
-            ) {
-                item {
-                    AppFilterListHeader(
-                        totalApps = apps.size,
-                        selectedApps = selectedAppCount(filter, apps),
-                        allSelected = allAppsSelected(filter, apps),
-                        onChange = { checked ->
-                            saveFilter(
-                                if (checked) {
-                                    AppFilterConfig()
-                                } else {
-                                    AppFilterConfig(mode = AppFilterMode.BypassAll)
-                                },
-                            )
-                        },
-                    )
-                }
-                if (filteredApps.isEmpty()) {
-                    item {
-                        AppFilterEmptyState()
-                    }
-                }
-                items(filteredApps, key = { it.packageName }) { app ->
-                    val proxied = isAppProxied(filter, app.packageName)
-                    AppFilterRow(
-                        app = app,
-                        proxied = proxied,
-                        onChange = { checked ->
-                            val next = if (filter.mode == AppFilterMode.ProxyAll) {
-                                filter.copy(
-                                    excludedApps = if (checked) {
-                                        filter.excludedApps - app.packageName
-                                    } else {
-                                        filter.excludedApps + app.packageName
-                                    },
-                                )
-                            } else {
-                                filter.copy(
-                                    includedApps = if (checked) {
-                                        filter.includedApps + app.packageName
-                                    } else {
-                                        filter.includedApps - app.packageName
-                                    },
-                                )
-                            }
-                            saveFilter(next)
-                        },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun AppFilterTopBar(
-    onBack: () -> Unit,
-    onReset: () -> Unit,
-    canReset: Boolean,
-) {
-    TopAppBar(
-        title = { Text(stringResource(R.string.app_filter), style = MaterialTheme.typography.titleLarge) },
-        navigationIcon = {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = stringResource(R.string.back),
-                    tint = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-        },
-        actions = {
-            TextButton(
-                enabled = canReset,
-                onClick = onReset,
-            ) {
-                Text(
-                    stringResource(R.string.reset),
-                    color = if (canReset) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        },
-    )
-}
-
-@Composable
-private fun AppFilterListHeader(
-    totalApps: Int,
-    selectedApps: Int,
-    allSelected: Boolean,
-    onChange: (Boolean) -> Unit,
-) {
-    val colors = MaterialTheme.colorScheme
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 64.dp),
-        shape = RoundedCornerShape(8.dp),
-        color = if (allSelected) colors.secondaryContainer else colors.surfaceContainerLow,
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onChange(!allSelected) }
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(3.dp),
-            ) {
-                Text(
-                    stringResource(R.string.all_apps),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = colors.onSurface,
-                )
-                Text(
-                    stringResource(R.string.selected_apps_count, selectedApps, totalApps),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.onSurfaceVariant,
-                )
-                Text(
-                    when {
-                        selectedApps == totalApps && totalApps > 0 -> stringResource(R.string.all_selected)
-                        selectedApps == 0 -> stringResource(R.string.none_selected)
-                        else -> stringResource(R.string.partially_selected)
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (allSelected) colors.primary else colors.tertiary,
-                )
-            }
-            Switch(
-                checked = allSelected,
-                onCheckedChange = onChange,
-            )
-        }
-    }
-}
-
-@Composable
-private fun AppFilterRow(app: AppEntry, proxied: Boolean, onChange: (Boolean) -> Unit) {
-    val colors = MaterialTheme.colorScheme
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 78.dp),
-        shape = RoundedCornerShape(8.dp),
-        color = if (proxied) colors.secondaryContainer else colors.surfaceContainerLow,
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onChange(!proxied) }
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                Icons.Rounded.Apps,
-                contentDescription = null,
-                tint = if (proxied) colors.onSecondaryContainer else colors.onSurfaceVariant,
-            )
-            Spacer(Modifier.width(12.dp))
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(3.dp),
-            ) {
-                Text(
-                    app.label,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = colors.onSurface,
-                )
-                Text(
-                    app.packageName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.onSurfaceVariant,
-                )
-                Text(
-                    if (proxied) stringResource(R.string.use_proxy) else stringResource(R.string.bypass_proxy),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (proxied) colors.primary else colors.tertiary,
-                )
-            }
-            Switch(checked = proxied, onCheckedChange = onChange)
-        }
-    }
-}
-
-@Composable
-private fun AppFilterEmptyState() {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 48.dp),
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-    ) {
-        Text(
-            stringResource(R.string.empty_app_filter),
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(24.dp),
-        )
-    }
-}
-
-@Composable
-private fun RouteConfigPage(onBack: () -> Unit) {
-    val context = LocalContext.current
-    var rules by remember { mutableStateOf(parseRouteRules(TcptunVpnService.readManualRouteConfig(context))) }
-    var selectedIndex by remember { mutableStateOf<Int?>(null) }
-    var showAddRule by remember { mutableStateOf(false) }
-    var message by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf("") }
-    val routeTypeLabels = RouteRuleType.entries.map { stringResource(it.labelRes) }
-    val routeRulesSaved = stringResource(R.string.route_rules_saved)
-    val routeRulesSaveFailed = stringResource(R.string.route_rules_save_failed)
-    val routeRulesCleared = stringResource(R.string.route_rules_cleared)
-    val routeRulesClearFailed = stringResource(R.string.route_rules_clear_failed)
-
-    fun saveRules(next: List<RouteRule>): Result<Unit> {
-        return TcptunVpnService.writeManualRouteConfig(context, buildRouteConfig(next))
-            .onSuccess {
-                rules = next
-                message = routeRulesSaved
-                error = ""
-            }
-            .onFailure { err ->
-                error = err.message ?: routeRulesSaveFailed
-                message = ""
-            }
-    }
-
-    val selected = selectedIndex?.let { rules.getOrNull(it) }
-    if (selected != null) {
-        RouteRuleDetailPage(
-            rule = selected,
-            index = selectedIndex ?: 0,
-            onBack = { selectedIndex = null },
-            onSave = { updated ->
-                val targetIndex = selectedIndex ?: return@RouteRuleDetailPage Result.failure(
-                    IllegalStateException("missing selected route rule"),
-                )
-                saveRules(rules.toMutableList().also { it[targetIndex] = updated })
-            },
-            onDelete = {
-                val targetIndex = selectedIndex ?: return@RouteRuleDetailPage Result.failure(
-                    IllegalStateException("missing selected route rule"),
-                )
-                saveRules(rules.toMutableList().also { it.removeAt(targetIndex) })
-                    .onSuccess { selectedIndex = null }
-            },
-        )
-        return
-    }
-
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            RouteListTopBar(
-                title = stringResource(R.string.route_rules),
-                onBack = onBack,
-                onAdd = { showAddRule = true },
-                onReset = {
-                    TcptunVpnService.resetManualRouteConfig(context).fold(
-                        onSuccess = {
-                            rules = parseRouteRules(TcptunVpnService.readManualRouteConfig(context))
-                            message = routeRulesCleared
-                            error = ""
-                        },
-                        onFailure = { err ->
-                            error = err.message ?: routeRulesClearFailed
-                            message = ""
-                        },
-                    )
-                },
-            )
-        },
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp),
-        ) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(
-                        stringResource(R.string.route_rules_summary, rules.size, TcptunVpnService.routeConfigFile(context).name),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    if (message.isNotBlank()) {
-                        Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-                    }
-                    if (error.isNotBlank()) {
-                        Text(error, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
-                    }
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                contentPadding = PaddingValues(vertical = 8.dp),
-            ) {
-                if (rules.isEmpty()) {
-                    item {
-                        RouteEmptyState(onAdd = { showAddRule = true })
-                    }
-                }
-                itemsIndexed(rules) { index, rule ->
-                    RouteRuleRow(
-                        rule = rule,
-                        typeLabel = routeTypeLabels[rule.type.ordinal],
-                        onClick = { selectedIndex = index },
-                    )
-                }
-            }
-        }
-    }
-
-    if (showAddRule) {
-        RouteRuleDialog(
-            onDismiss = { showAddRule = false },
-            onSave = { rule ->
-                saveRules(rules + rule).onSuccess {
-                    showAddRule = false
-                }
-            },
-        )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun RouteListTopBar(
-    title: String,
-    onBack: () -> Unit,
-    onAdd: () -> Unit,
-    onReset: () -> Unit,
-) {
-    TopAppBar(
-        title = { Text(title, style = MaterialTheme.typography.titleLarge) },
-        navigationIcon = {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = stringResource(R.string.back),
-                    tint = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-        },
-        actions = {
-            TextButton(onClick = onReset) {
-                Text(stringResource(R.string.clear), color = MaterialTheme.colorScheme.error)
-            }
-            IconButton(onClick = onAdd) {
-                Icon(
-                    Icons.Rounded.Add,
-                    contentDescription = stringResource(R.string.add_rule),
-                    tint = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-        },
-    )
-}
-
-@Composable
-private fun RouteRuleRow(rule: RouteRule, typeLabel: String, onClick: () -> Unit) {
-    val colors = MaterialTheme.colorScheme
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 84.dp),
-        shape = RoundedCornerShape(8.dp),
-        color = colors.surfaceContainerLow,
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onClick),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .width(5.dp)
-                    .height(56.dp)
-                    .background(colors.tertiary, RoundedCornerShape(8.dp)),
-            )
-            Spacer(Modifier.width(12.dp))
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(typeLabel, style = MaterialTheme.typography.titleMedium, color = colors.onSurface)
-                Text(rule.value, style = MaterialTheme.typography.bodyLarge, color = colors.onSurface)
-                Text(
-                    "force_upstream.${rule.type.jsonKey}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.onSurfaceVariant,
-                )
-            }
-            Icon(
-                Icons.AutoMirrored.Rounded.ArrowForward,
-                contentDescription = null,
-                tint = colors.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 12.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun RouteEmptyState(onAdd: () -> Unit) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 48.dp),
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-    ) {
-        Column(
-            modifier = Modifier.padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Text(
-                stringResource(R.string.empty_route_rules),
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Button(onClick = onAdd) {
-                Text(stringResource(R.string.add_rule))
-            }
-        }
-    }
-}
-
-@Composable
-private fun RouteRuleDetailPage(
-    rule: RouteRule,
-    index: Int,
-    onBack: () -> Unit,
-    onSave: (RouteRule) -> Result<Unit>,
-    onDelete: () -> Result<Unit>,
-) {
-    var type by remember(index) { mutableStateOf(rule.type) }
-    var value by remember(index) { mutableStateOf(rule.value) }
-    var message by remember(index) { mutableStateOf("") }
-    var error by remember(index) { mutableStateOf("") }
-    val routeTypes = RouteRuleType.entries
-    val routeTypeLabels = routeTypes.map { stringResource(it.labelRes) }
-    val routeRuleRequired = stringResource(R.string.route_rule_required)
-    val savedLabel = stringResource(R.string.saved)
-    val saveFailed = stringResource(R.string.save_failed)
-    val deleteFailed = stringResource(R.string.delete_failed)
-
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            EditTopBar(
-                title = stringResource(R.string.route_rule_detail),
-                onBack = onBack,
-                onSave = {
-                    val trimmed = value.trim()
-                    if (trimmed.isBlank()) {
-                        error = routeRuleRequired
-                        message = ""
-                        return@EditTopBar
-                    }
-                    onSave(RouteRule(type, trimmed)).fold(
-                        onSuccess = {
-                            message = savedLabel
-                            error = ""
-                        },
-                        onFailure = { err ->
-                            error = err.message ?: saveFailed
-                            message = ""
-                        },
-                    )
-                },
-            )
-        },
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp),
-        ) {
-            Column(
-                modifier = Modifier
-                    .verticalScroll(rememberScrollState())
-                    .padding(bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                if (message.isNotBlank()) {
-                    Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-                }
-                if (error.isNotBlank()) {
-                    Text(error, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
-                }
-                ChoiceRow(stringResource(R.string.rule_type), routeTypeLabels[type.ordinal], routeTypeLabels) { selected ->
-                    type = routeTypes[routeTypeLabels.indexOf(selected).coerceAtLeast(0)]
-                }
-                OutlinedTextField(
-                    value = value,
-                    onValueChange = {
-                        value = it
-                        message = ""
-                        error = ""
-                    },
-                    label = { Text(stringResource(R.string.rule)) },
-                    minLines = 3,
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                TextButton(
-                    onClick = {
-                        onDelete().fold(
-                            onSuccess = {
-                                message = ""
-                                error = ""
-                            },
-                            onFailure = { err ->
-                                error = err.message ?: deleteFailed
-                                message = ""
-                            },
-                        )
-                    },
-                ) {
-                    Text(stringResource(R.string.delete_this_rule), color = MaterialTheme.colorScheme.error)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun RouteRuleDialog(onDismiss: () -> Unit, onSave: (RouteRule) -> Result<Unit>) {
-    var type by remember { mutableStateOf(RouteRuleType.IPCIDRs) }
-    var value by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf("") }
-    val routeTypes = RouteRuleType.entries
-    val routeTypeLabels = routeTypes.map { stringResource(it.labelRes) }
-    val routeRuleRequired = stringResource(R.string.route_rule_required)
-    val saveFailed = stringResource(R.string.save_failed)
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.add_route_rule)) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (error.isNotBlank()) {
-                    Text(error, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
-                }
-                ChoiceRow(stringResource(R.string.rule_type), routeTypeLabels[type.ordinal], routeTypeLabels) { selected ->
-                    type = routeTypes[routeTypeLabels.indexOf(selected).coerceAtLeast(0)]
-                }
-                OutlinedTextField(
-                    value = value,
-                    onValueChange = {
-                        value = it
-                        error = ""
-                    },
-                    label = { Text(stringResource(R.string.rule)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    val trimmed = value.trim()
-                    if (trimmed.isBlank()) {
-                        error = routeRuleRequired
-                        return@Button
-                    }
-                    onSave(RouteRule(type, trimmed)).onFailure { err ->
-                        error = err.message ?: saveFailed
-                    }
-                },
-            ) {
-                Text(stringResource(R.string.save))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.cancel))
-            }
-        },
-    )
-}
 
 @Composable
 private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (AppConfig) -> Unit) {
     var config by remember(initial.id) { mutableStateOf(initial) }
+    var useFullConfig by remember(initial.id) { mutableStateOf(initial.rawConfigJson.isNotBlank()) }
     var formError by remember(initial.id) { mutableStateOf("") }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             EditTopBar(
-                title = if (initial.serverHost.isBlank()) stringResource(R.string.add_profile) else stringResource(R.string.edit_profile),
+                title = if (initial.serverHost.isBlank() && initial.rawConfigJson.isBlank()) {
+                    stringResource(R.string.add_profile)
+                } else {
+                    stringResource(R.string.edit_profile)
+                },
                 onBack = onBack,
                 onSave = {
                     val error = config.validate()
@@ -1740,6 +981,31 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                ToggleRow(stringResource(R.string.full_config_mode), useFullConfig) { enabled ->
+                    useFullConfig = enabled
+                    config = if (enabled) {
+                        val generated = config.toBridgeJson(localListenAddr = "127.0.0.1:1080")
+                        config.copy(rawConfigJson = JSONObject(generated).toString(2))
+                    } else {
+                        config.copy(rawConfigJson = "")
+                    }
+                    formError = ""
+                }
+                if (useFullConfig) {
+                    Text(
+                        stringResource(R.string.full_config_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedTextField(
+                        value = config.rawConfigJson,
+                        onValueChange = { config = config.copy(rawConfigJson = it.take(MAX_FULL_CONFIG_LENGTH)) },
+                        label = { Text(stringResource(R.string.full_config_json)) },
+                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        minLines = 18,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
                         value = config.serverHost,
@@ -1833,10 +1099,13 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                 ToggleRow(stringResource(R.string.field_tls_insecure), config.tlsInsecure) { config = config.copy(tlsInsecure = it) }
                 ToggleRow(stringResource(R.string.field_mux), config.mux) { config = config.copy(mux = it) }
                 ToggleRow(stringResource(R.string.field_udp), config.udp) { config = config.copy(udp = it) }
+                }
             }
         }
     }
 }
+
+private const val MAX_FULL_CONFIG_LENGTH = 512 * 1024
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1922,120 +1191,6 @@ private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
             Switch(checked = checked, onCheckedChange = onChange)
         }
     }
-}
-
-private enum class RouteRuleType(val jsonKey: String, val labelRes: Int) {
-    Domains("domains", R.string.route_type_domains),
-    DomainRegexes("domain_regexes", R.string.route_type_domain_regexes),
-    DomainSuffixes("domain_suffixes", R.string.route_type_domain_suffixes),
-    IPs("ips", R.string.route_type_ips),
-    IPCIDRs("ip_cidrs", R.string.route_type_ip_cidrs),
-    IPRanges("ip_ranges", R.string.route_type_ip_ranges),
-}
-
-private data class RouteRule(
-    val type: RouteRuleType,
-    val value: String,
-)
-
-private fun parseRouteRules(routeConfig: String): List<RouteRule> {
-    return runCatching {
-        val root = JSONObject(routeConfig.ifBlank { "{}" })
-        val forceUpstream = root.optJSONObject("force_upstream") ?: JSONObject()
-        buildList {
-            RouteRuleType.entries.forEach { type ->
-                val array = forceUpstream.optJSONArray(type.jsonKey) ?: return@forEach
-                for (i in 0 until array.length()) {
-                    val value = array.optString(i).trim()
-                    if (value.isNotBlank()) {
-                        add(RouteRule(type, value))
-                    }
-                }
-            }
-        }
-    }.getOrElse { emptyList() }
-}
-
-private fun buildRouteConfig(rules: List<RouteRule>): String {
-    val forceUpstream = JSONObject()
-    RouteRuleType.entries.forEach { type ->
-        val array = JSONArray()
-        rules.filter { it.type == type }
-            .map { it.value.trim() }
-            .filter { it.isNotBlank() }
-            .forEach { array.put(it) }
-        forceUpstream.put(type.jsonKey, array)
-    }
-    return JSONObject()
-        .put("force_upstream", forceUpstream)
-        .toString(2)
-}
-
-private data class AppEntry(
-    val label: String,
-    val packageName: String,
-)
-
-private fun selectedAppCount(filter: AppFilterConfig, apps: List<AppEntry>): Int {
-    return apps.count { isAppProxied(filter, it.packageName) }
-}
-
-private fun allAppsSelected(filter: AppFilterConfig, apps: List<AppEntry>): Boolean {
-    return apps.isNotEmpty() && apps.all { isAppProxied(filter, it.packageName) }
-}
-
-private fun isAppProxied(filter: AppFilterConfig, packageName: String): Boolean {
-    return when (filter.mode) {
-        AppFilterMode.ProxyAll -> packageName !in filter.excludedApps
-        AppFilterMode.BypassAll -> packageName in filter.includedApps
-    }
-}
-
-@Composable
-private fun appFilterModeTitle(filter: AppFilterConfig): String {
-    return when (filter.mode) {
-        AppFilterMode.ProxyAll -> stringResource(R.string.app_filter_proxy_all_title)
-        AppFilterMode.BypassAll -> stringResource(R.string.app_filter_bypass_all_title)
-    }
-}
-
-@Composable
-private fun appFilterModeDescription(filter: AppFilterConfig): String {
-    return when (filter.mode) {
-        AppFilterMode.ProxyAll -> stringResource(R.string.app_filter_proxy_all_description)
-        AppFilterMode.BypassAll -> stringResource(R.string.app_filter_bypass_all_description)
-    }
-}
-
-private fun loadFilterableApps(context: Context, savedPackages: Set<String>): List<AppEntry> {
-    val packageManager = context.packageManager
-    val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-    val resolveInfos = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        packageManager.queryIntentActivities(
-            launcherIntent,
-            PackageManager.ResolveInfoFlags.of(0),
-        )
-    } else {
-        @Suppress("DEPRECATION")
-        packageManager.queryIntentActivities(launcherIntent, 0)
-    }
-    val appsByPackage = linkedMapOf<String, AppEntry>()
-    resolveInfos.forEach { info ->
-        val packageName = info.activityInfo?.packageName?.trim().orEmpty()
-        if (packageName.isBlank() || packageName == context.packageName) return@forEach
-        val label = info.loadLabel(packageManager)?.toString()?.trim().orEmpty()
-            .ifBlank { packageName }
-        appsByPackage.putIfAbsent(packageName, AppEntry(label, packageName))
-    }
-    savedPackages
-        .filter { it.isNotBlank() && it != context.packageName }
-        .forEach { packageName ->
-            appsByPackage.putIfAbsent(packageName, AppEntry(packageName, packageName))
-        }
-    return appsByPackage.values.sortedWith(
-        compareBy<AppEntry> { it.label.lowercase(Locale.ROOT) }
-            .thenBy { it.packageName },
-    )
 }
 
 @Composable
@@ -2130,6 +1285,7 @@ private fun tcpingTarget(target: TcpingTarget, settings: RuntimeSettings): Tcpin
             )
             socket.soTimeout = TCPING_TIMEOUT_MS
             socks5Connect(socket, target.host, target.port, settings.socksUsername, settings.socksPassword)
+            completeTlsHandshake(socket, target.host, target.port, TCPING_TIMEOUT_MS)
         }
     }.fold(
         onSuccess = {
@@ -2324,6 +1480,7 @@ private const val TCPING_TIMEOUT_MS = 3_000
 private val SERVER_CONNECTED_STATES = setOf("running", "upstream_connected")
 private val SERVER_CONNECTED_PHASES = setOf("connected", "upstream_connected")
 private val TCPING_TARGETS = listOf(
+    TcpingTarget("Google", "google.com"),
     TcpingTarget("GitHub", "github.com"),
     TcpingTarget("Cloudflare", "cloudflare.com"),
 )

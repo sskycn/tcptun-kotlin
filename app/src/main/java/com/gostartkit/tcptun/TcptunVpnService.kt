@@ -20,22 +20,10 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
-
-enum class AppFilterMode {
-    ProxyAll,
-    BypassAll,
-}
-
-data class AppFilterConfig(
-    val mode: AppFilterMode = AppFilterMode.ProxyAll,
-    val excludedApps: Set<String> = emptySet(),
-    val includedApps: Set<String> = emptySet(),
-)
 
 data class RuntimeSettings(
     val mtu: Int = TcptunVpnService.DEFAULT_VPN_MTU,
@@ -52,6 +40,8 @@ private data class UpstreamProbeTarget(
     val label: String,
     val host: String,
     val port: Int = 443,
+    val path: String = "/",
+    val expectedStatus: Int? = null,
 )
 
 private enum class HealthRestartTarget {
@@ -176,7 +166,7 @@ class TcptunVpnService : VpnService() {
                     )
                 }
                 startBridge(json)
-                val vpnTun = buildTun(config, runtimeSettings.mtu)
+                val vpnTun = buildTun(runtimeSettings.mtu)
                 startTunnel(
                     vpnTun,
                     runtimeSettings.mtu,
@@ -255,21 +245,20 @@ class TcptunVpnService : VpnService() {
         )
     }
 
-    private fun buildTun(config: AppConfig, mtu: Int): android.os.ParcelFileDescriptor {
+    private fun buildTun(mtu: Int): android.os.ParcelFileDescriptor {
         registerUnderlyingNetworkCallback()
         return Builder()
             .setSession(VPN_DISPLAY_NAME)
             .setMtu(mtu)
             .addAddress("10.77.0.2", 32)
             .addAddress("fd00:7777::2", 128)
-            .addProxyRoutes()
-            .addRoute("2000::", 3)
+            .addRoute("0.0.0.0", 0)
+            .addRoute("::", 0)
             .addDnsServer(VPN_DNS_SERVER)
             .apply {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     setMetered(connectivity.isActiveNetworkMetered)
                 }
-                addAppFilter(this@TcptunVpnService)
                 allowFamily(android.system.OsConstants.AF_INET)
                 allowFamily(android.system.OsConstants.AF_INET6)
             }
@@ -713,6 +702,15 @@ class TcptunVpnService : VpnService() {
                 socket.connect(InetSocketAddress(LOCAL_SOCKS_HOST, activeSocksPort), UPSTREAM_PROBE_TIMEOUT_MS)
                 socket.soTimeout = UPSTREAM_PROBE_TIMEOUT_MS
                 socks5Connect(socket, target.host, target.port, activeSocksUsername, activeSocksPassword)
+                val expectedStatus = target.expectedStatus
+                if (expectedStatus == null) {
+                    completeTlsHandshake(socket, target.host, target.port, UPSTREAM_PROBE_TIMEOUT_MS)
+                } else {
+                    val status = fetchHttpsStatus(socket, target.host, target.port, target.path, UPSTREAM_PROBE_TIMEOUT_MS)
+                    require(status == expectedStatus) {
+                        "HTTP ${target.label} returned $status, expected $expectedStatus"
+                    }
+                }
             }
         }.fold(
             onSuccess = { null },
@@ -912,9 +910,6 @@ class TcptunVpnService : VpnService() {
         private const val LOCAL_PROXY_CONNECT_TIMEOUT_MS = 1_000
         private const val UPSTREAM_PROBE_TIMEOUT_MS = 3_000
         private const val UPSTREAM_PROBE_MIN_INTERVAL_MS = 10_000L
-        private const val ROUTE_CONFIG_FILE = "android-route.json"
-        private const val ROUTE_PREFS = "tcptun_route"
-        private const val KEY_MANUAL_ROUTE_CONFIG = "manualRouteConfig"
         private const val RUNTIME_PREFS = "tcptun_runtime"
         private const val KEY_LAST_RUNNING_CONFIG = "lastRunningConfig"
         private const val KEY_RUNTIME_MTU = "runtimeMtu"
@@ -926,90 +921,12 @@ class TcptunVpnService : VpnService() {
         private const val KEY_RUNTIME_SOCKS_USERNAME = "runtimeSocksUsername"
         private const val KEY_RUNTIME_SOCKS_PASSWORD = "runtimeSocksPassword"
         @Volatile private var denseHealthCheckUntilMs = 0L
-        private const val APP_FILTER_PREFS = "tcptun_app_filter"
-        private const val KEY_FILTER_MODE = "filterMode"
-        private const val KEY_EXCLUDED_APPS = "excludedApps"
-        private const val KEY_INCLUDED_APPS = "includedApps"
-        private val DEFAULT_PROXY_COMPANIONS = setOf(
-            "com.google.android.gms",
-            "com.google.android.gsf",
-        )
         private val UPSTREAM_PROBE_TARGETS = listOf(
-            UpstreamProbeTarget("GitHub", "github.com"),
-            UpstreamProbeTarget("Cloudflare", "cloudflare.com"),
-        )
-        private val GOOGLE_PROXY_COMPANIONS = DEFAULT_PROXY_COMPANIONS + "com.android.vending"
-        private val META_PROXY_COMPANIONS = setOf(
-            "com.facebook.services",
-            "com.facebook.system",
-            "com.facebook.appmanager",
-        )
-        private val APP_PROXY_COMPANIONS_BY_PACKAGE = mapOf(
-            "com.google.android.apps.googlevoice" to GOOGLE_PROXY_COMPANIONS,
-        )
-        private val APP_PROXY_COMPANIONS_BY_PREFIX = mapOf(
-            "com.google." to GOOGLE_PROXY_COMPANIONS,
-            "com.facebook." to META_PROXY_COMPANIONS,
+            UpstreamProbeTarget("Google 204", "connectivitycheck.gstatic.com", path = "/generate_204", expectedStatus = 204),
         )
         private const val VPN_DNS_SERVER = "1.1.1.1"
-        private const val VPN_DNS_ROUTE = "1.1.1.1/32"
-        private val ROUTE_KEYS = listOf("domains", "domain_regexes", "domain_suffixes", "ips", "ip_cidrs", "ip_ranges")
-        private val IPV4_PROXY_ROUTES = listOf(
-            "1.0.0.0" to 8,
-            "2.0.0.0" to 7,
-            "4.0.0.0" to 6,
-            "8.0.0.0" to 7,
-            "11.0.0.0" to 8,
-            "12.0.0.0" to 6,
-            "16.0.0.0" to 4,
-            "32.0.0.0" to 3,
-            "64.0.0.0" to 3,
-            "96.0.0.0" to 6,
-            "100.0.0.0" to 10,
-            "100.128.0.0" to 9,
-            "101.0.0.0" to 8,
-            "102.0.0.0" to 7,
-            "104.0.0.0" to 5,
-            "112.0.0.0" to 5,
-            "120.0.0.0" to 6,
-            "124.0.0.0" to 7,
-            "126.0.0.0" to 8,
-            "128.0.0.0" to 3,
-            "160.0.0.0" to 5,
-            "168.0.0.0" to 8,
-            "169.0.0.0" to 9,
-            "169.128.0.0" to 10,
-            "169.192.0.0" to 11,
-            "169.224.0.0" to 12,
-            "169.240.0.0" to 13,
-            "169.248.0.0" to 14,
-            "169.252.0.0" to 15,
-            "169.255.0.0" to 16,
-            "170.0.0.0" to 7,
-            "172.0.0.0" to 12,
-            "172.32.0.0" to 11,
-            "172.64.0.0" to 10,
-            "172.128.0.0" to 9,
-            "173.0.0.0" to 8,
-            "174.0.0.0" to 7,
-            "176.0.0.0" to 4,
-            "192.0.0.0" to 9,
-            "192.128.0.0" to 11,
-            "192.160.0.0" to 13,
-            "192.169.0.0" to 16,
-            "192.170.0.0" to 15,
-            "192.172.0.0" to 14,
-            "192.176.0.0" to 12,
-            "192.192.0.0" to 10,
-            "193.0.0.0" to 8,
-            "194.0.0.0" to 7,
-            "196.0.0.0" to 6,
-            "200.0.0.0" to 5,
-            "208.0.0.0" to 4,
-        )
 
         fun startIntent(context: Context, config: AppConfig): Intent {
-            val routeConfigPath = ensureAndroidRouteConfig(context)
             val runtimeSettings = readRuntimeSettings(context)
             val effectiveConfig = config.copy(udp = config.udp && runtimeSettings.udpEnabled && !runtimeSettings.powerSavingMode)
             val localListenAddr = localSocksListenAddr(runtimeSettings)
@@ -1019,7 +936,6 @@ class TcptunVpnService : VpnService() {
                     EXTRA_CONFIG,
                     effectiveConfig.toBridgeJson(
                         localListenAddr,
-                        routeConfigPath,
                         powerSavingMode = runtimeSettings.powerSavingMode,
                         socks5Username = runtimeSettings.socksUsername,
                         socks5Password = runtimeSettings.socksPassword,
@@ -1061,28 +977,6 @@ class TcptunVpnService : VpnService() {
                 denseHealthCheckUntilMs = nextUntilMs
             }
             TcptunState.appendLog("dense bridge health check requested: $reason")
-        }
-
-        fun readAppFilter(context: Context): AppFilterConfig {
-            val prefs = context.applicationContext.getSharedPreferences(APP_FILTER_PREFS, Context.MODE_PRIVATE)
-            val mode = when (prefs.getString(KEY_FILTER_MODE, AppFilterMode.ProxyAll.name)) {
-                AppFilterMode.BypassAll.name -> AppFilterMode.BypassAll
-                else -> AppFilterMode.ProxyAll
-            }
-            return AppFilterConfig(
-                mode = mode,
-                excludedApps = normalizedPackages(context, prefs.getStringSet(KEY_EXCLUDED_APPS, emptySet()).orEmpty()),
-                includedApps = normalizedPackages(context, prefs.getStringSet(KEY_INCLUDED_APPS, emptySet()).orEmpty()),
-            )
-        }
-
-        fun writeAppFilter(context: Context, filter: AppFilterConfig) {
-            context.applicationContext.getSharedPreferences(APP_FILTER_PREFS, Context.MODE_PRIVATE)
-                .edit()
-                .putString(KEY_FILTER_MODE, filter.mode.name)
-                .putStringSet(KEY_EXCLUDED_APPS, normalizedPackages(context, filter.excludedApps))
-                .putStringSet(KEY_INCLUDED_APPS, normalizedPackages(context, filter.includedApps))
-                .apply()
         }
 
         fun readRuntimeSettings(context: Context): RuntimeSettings {
@@ -1171,263 +1065,5 @@ class TcptunVpnService : VpnService() {
                 .apply()
         }
 
-        fun routeConfigFile(context: Context): File {
-            return File(context.applicationContext.filesDir, ROUTE_CONFIG_FILE)
-        }
-
-        fun readRouteConfig(context: Context): String {
-            val file = routeConfigFile(context)
-            return runCatching {
-                if (file.exists()) file.readText() else buildEffectiveRouteConfig(context)
-            }.getOrElse {
-                buildEffectiveRouteConfig(context)
-            }
-        }
-
-        fun readManualRouteConfig(context: Context): String {
-            val prefs = context.applicationContext.getSharedPreferences(ROUTE_PREFS, Context.MODE_PRIVATE)
-            val saved = prefs.getString(KEY_MANUAL_ROUTE_CONFIG, null)
-            if (saved != null) {
-                return importPersistedRouteConfig(context, removeLegacyDefaultRouteConfig(saved), saved)
-            }
-            val migrated = migrateManualRouteConfig(context)
-            prefs.edit().putString(KEY_MANUAL_ROUTE_CONFIG, migrated).apply()
-            return migrated
-        }
-
-        fun writeManualRouteConfig(context: Context, routeConfig: String): Result<Unit> {
-            return runCatching {
-                JSONObject(routeConfig)
-                val normalized = routeConfig.trim() + "\n"
-                context.applicationContext.getSharedPreferences(ROUTE_PREFS, Context.MODE_PRIVATE)
-                    .edit()
-                    .putString(KEY_MANUAL_ROUTE_CONFIG, normalized)
-                    .apply()
-                writeEffectiveRouteConfig(context)
-            }
-        }
-
-        fun resetManualRouteConfig(context: Context): Result<Unit> {
-            return writeManualRouteConfig(context, emptyRouteConfig())
-        }
-
-        fun defaultRouteConfig(): String {
-            return buildAndroidRouteConfig()
-        }
-
-        private fun ensureAndroidRouteConfig(context: Context): String {
-            val file = routeConfigFile(context)
-            runCatching {
-                importPersistedRouteConfig(context)
-                writeEffectiveRouteConfig(context)
-            }.onFailure { err ->
-                TcptunState.appendLog("write android route config failed: ${err.message}")
-                return ""
-            }
-            return file.absolutePath
-        }
-
-        private fun writeEffectiveRouteConfig(context: Context) {
-            routeConfigFile(context).writeText(buildEffectiveRouteConfig(context).trim() + "\n")
-        }
-
-        private fun buildEffectiveRouteConfig(context: Context): String {
-            return mergeRouteConfigs(defaultRouteConfig(), readManualRouteConfig(context))
-        }
-
-        private fun importPersistedRouteConfig(context: Context): String {
-            return importPersistedRouteConfig(context, readManualRouteConfig(context))
-        }
-
-        private fun importPersistedRouteConfig(context: Context, manualConfig: String, savedConfig: String = manualConfig): String {
-            val file = routeConfigFile(context)
-            val persisted = runCatching {
-                if (!file.exists()) {
-                    emptyRouteConfig()
-                } else {
-                    removeLegacyDefaultRouteConfig(subtractRouteConfig(file.readText(), defaultRouteConfig()))
-                }
-            }.getOrDefault(emptyRouteConfig())
-            val merged = mergeRouteConfigs(manualConfig, persisted)
-            if (merged != savedConfig) {
-                context.applicationContext.getSharedPreferences(ROUTE_PREFS, Context.MODE_PRIVATE)
-                    .edit()
-                    .putString(KEY_MANUAL_ROUTE_CONFIG, merged)
-                    .apply()
-            }
-            return merged
-        }
-
-        private fun migrateManualRouteConfig(context: Context): String {
-            val file = routeConfigFile(context)
-            if (!file.exists()) return emptyRouteConfig()
-            val effective = runCatching { file.readText() }.getOrDefault("")
-            if (effective.isBlank()) return emptyRouteConfig()
-            return removeLegacyDefaultRouteConfig(subtractRouteConfig(effective, defaultRouteConfig()))
-        }
-
-        private fun Builder.addProxyRoutes(): Builder {
-            IPV4_PROXY_ROUTES.forEach { (address, prefixLength) ->
-                addRoute(address, prefixLength)
-            }
-            return this
-        }
-
-        private fun Builder.addAppFilter(context: Context): Builder {
-            val filter = readAppFilter(context)
-            when (filter.mode) {
-                AppFilterMode.ProxyAll -> {
-                    (filter.excludedApps + context.packageName)
-                        .distinct()
-                        .forEach { packageName ->
-                            runCatching {
-                                addDisallowedApplication(packageName)
-                            }.onFailure { err ->
-                                TcptunState.appendLog("skip excluded app $packageName: ${err.message}")
-                            }
-                    }
-                }
-                AppFilterMode.BypassAll -> {
-                    if (filter.includedApps.isEmpty()) {
-                        throw IllegalStateException(context.getString(R.string.app_filter_requires_one_app))
-                    }
-                    var allowedCount = 0
-                    var selectedAllowedCount = 0
-                    val effectiveIncludedApps = effectiveIncludedPackages(filter.includedApps)
-                    val companionApps = effectiveIncludedApps - filter.includedApps
-                    if (companionApps.isNotEmpty()) {
-                        TcptunState.appendLog("auto include companion apps: ${companionApps.joinToString()}")
-                    }
-                    effectiveIncludedApps.forEach { packageName ->
-                        runCatching {
-                            addAllowedApplication(packageName)
-                            allowedCount++
-                            if (packageName in filter.includedApps) {
-                                selectedAllowedCount++
-                            }
-                        }.onFailure { err ->
-                            TcptunState.appendLog("skip included app $packageName: ${err.message}")
-                        }
-                    }
-                    if (allowedCount == 0 || selectedAllowedCount == 0) {
-                        throw IllegalStateException(context.getString(R.string.app_filter_no_available_selected_app))
-                    }
-                }
-            }
-            return this
-        }
-
-        private fun effectiveIncludedPackages(packages: Set<String>): Set<String> {
-            val normalized = packages
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-                .toMutableSet()
-            if (normalized.isNotEmpty()) {
-                normalized.addAll(DEFAULT_PROXY_COMPANIONS)
-            }
-            normalized.toList().forEach { packageName ->
-                APP_PROXY_COMPANIONS_BY_PACKAGE[packageName]?.let(normalized::addAll)
-                APP_PROXY_COMPANIONS_BY_PREFIX
-                    .filterKeys(packageName::startsWith)
-                    .values
-                    .forEach(normalized::addAll)
-            }
-            return normalized.toSortedSet()
-        }
-
-        private fun normalizedPackages(context: Context, packages: Set<String>): Set<String> {
-            return packages
-                .map { it.trim() }
-                .filter { it.isNotBlank() && it != context.packageName }
-                .toSortedSet()
-        }
-
-        private fun buildAndroidRouteConfig(): String {
-            return JSONObject()
-                .put(
-                    "force_upstream",
-                    JSONObject()
-                        .put("ip_cidrs", JSONArray().put(VPN_DNS_ROUTE)),
-                )
-                .toString(2)
-        }
-
-        private fun legacyAndroidRouteConfig(): String {
-            val ipCidrs = JSONArray()
-            IPV4_PROXY_ROUTES.forEach { (address, prefixLength) ->
-                ipCidrs.put("$address/$prefixLength")
-            }
-            ipCidrs.put("2000::/3")
-            return JSONObject()
-                .put(
-                    "force_upstream",
-                    JSONObject()
-                        .put("domain_regexes", JSONArray().put(".*"))
-                        .put("ip_cidrs", ipCidrs),
-                )
-                .toString(2)
-        }
-
-        private fun removeLegacyDefaultRouteConfig(routeConfig: String): String {
-            return subtractRouteConfig(routeConfig, legacyAndroidRouteConfig())
-        }
-
-        private fun emptyRouteConfig(): String {
-            return JSONObject()
-                .put("force_upstream", JSONObject())
-                .toString(2)
-        }
-
-        private fun mergeRouteConfigs(baseConfig: String, extraConfig: String): String {
-            val merged = JSONObject()
-            val forceUpstream = JSONObject()
-            val base = JSONObject(baseConfig.ifBlank { "{}" }).optJSONObject("force_upstream") ?: JSONObject()
-            val extra = JSONObject(extraConfig.ifBlank { "{}" }).optJSONObject("force_upstream") ?: JSONObject()
-            ROUTE_KEYS.forEach { key ->
-                val array = JSONArray()
-                val seen = linkedSetOf<String>()
-                appendRouteValues(base.optJSONArray(key), seen, array)
-                appendRouteValues(extra.optJSONArray(key), seen, array)
-                forceUpstream.put(key, array)
-            }
-            return merged.put("force_upstream", forceUpstream).toString(2)
-        }
-
-        private fun subtractRouteConfig(config: String, defaults: String): String {
-            val manual = JSONObject()
-            val forceUpstream = JSONObject()
-            val source = JSONObject(config.ifBlank { "{}" }).optJSONObject("force_upstream") ?: JSONObject()
-            val defaultSource = JSONObject(defaults.ifBlank { "{}" }).optJSONObject("force_upstream") ?: JSONObject()
-            ROUTE_KEYS.forEach { key ->
-                val defaultValues = jsonArrayValues(defaultSource.optJSONArray(key)).toSet()
-                val array = JSONArray()
-                jsonArrayValues(source.optJSONArray(key))
-                    .filterNot { it in defaultValues }
-                    .distinct()
-                    .forEach { array.put(it) }
-                forceUpstream.put(key, array)
-            }
-            return manual.put("force_upstream", forceUpstream).toString(2)
-        }
-
-        private fun appendRouteValues(source: JSONArray?, seen: MutableSet<String>, target: JSONArray) {
-            jsonArrayValues(source).forEach { value ->
-                if (seen.add(value)) {
-                    target.put(value)
-                }
-            }
-        }
-
-        private fun jsonArrayValues(array: JSONArray?): List<String> {
-            if (array == null) return emptyList()
-            return buildList {
-                for (i in 0 until array.length()) {
-                    val value = array.optString(i).trim()
-                    if (value.isNotBlank()) {
-                        add(value)
-                    }
-                }
-            }
-        }
     }
 }

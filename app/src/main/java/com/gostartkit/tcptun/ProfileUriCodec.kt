@@ -23,6 +23,7 @@ object ProfileUriCodec {
     }
 
     fun encode(config: AppConfig): String? {
+        if (config.rawConfigJson.isNotBlank()) return null
         return when (config.protocol) {
             "native" -> encodeAuthorityProfile("native", config)
             "vless" -> encodeAuthorityProfile("vless", config)
@@ -129,6 +130,13 @@ object ProfileUriCodec {
         val obj = JSONObject(extractJsonObject(raw))
         if (obj.has("serverHost") || obj.has("serverPort")) {
             return AppConfig.fromJson(obj).copy(id = UUID.randomUUID().toString())
+        }
+        if (obj.has("inbounds") && obj.has("outbounds")) {
+            return AppConfig(
+                id = UUID.randomUUID().toString(),
+                name = "tcptun-json",
+                rawConfigJson = obj.toString(2),
+            )
         }
         if (!obj.has("server_addr") && !obj.has("tunnel_protocol")) {
             error("unsupported profile JSON")

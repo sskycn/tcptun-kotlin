@@ -35,42 +35,45 @@ type SocketProtector interface {
 	Protect(fd int64) bool
 }
 
+type AppIdentityProvider interface {
+	IdentifyApp(flowJSON string) (identityJSON string, err error)
+}
+
 func SetLogCallback(cb LogCallback)
 func SetStatusCallback(cb StatusCallback)
 func SetSocketProtector(p SocketProtector)
+func SetAppIdentityProvider(provider AppIdentityProvider)
 func Start(configJson string) error
 func Stop() error
 func Status() string
 ```
 
-`Start` should start the existing tcptun client mixed proxy on the `local_listen_addr` from `configJson`. The Android app currently sends:
+`Start` receives the current strict `tcptun-go` file configuration. The Android
+app builds a local mixed/SOCKS5 inbound, the selected tunnel outbound, a direct
+outbound, and a TCP-only `direct-first` outbound. UDP continues through the
+tunnel. Custom routing is stored per profile in the strict JSON `route.rules`:
 
 ```json
 {
-  "mode": "client",
-  "listen_addrs": ["0.0.0.0:1080"],
-  "local_listen_addr": "0.0.0.0:1080",
-  "server_addr": "203.0.113.10:9443",
-  "token": "uuid-or-password",
-  "tunnel_protocol": "native",
-  "tunnel_transport": "raw",
-  "tunnel_path": "/proxy",
-  "tunnel_tls": false,
-  "tunnel_tls_server_name": "",
-  "tunnel_tls_insecure": false,
-  "tunnel_security": "",
-  "tunnel_flow": "",
-  "reality_server_name": "",
-  "reality_public_key": "",
-  "reality_short_id": "",
-  "reality_fingerprint": "",
-  "reality_spider_x": "",
-  "tunnel_mux": true,
-  "upstream_protocol": "socks5",
-  "enable_udp": true,
-  "config_path": "",
-  "route_config_path": "",
-  "verbose": true
+  "log": {"level": "info"},
+  "inbounds": [
+    {"tag": "local", "type": "mixed", "listen": "127.0.0.1", "port": 1080,
+     "network": ["tcp", "udp"], "outbound": "proxy"}
+  ],
+  "outbounds": [
+    {"tag": "proxy", "type": "native", "server": "203.0.113.10", "port": 9443,
+     "token": "secret", "transport": {"type": "raw"}, "mux": {"enabled": true}},
+    {"tag": "direct", "type": "direct"},
+    {"tag": "auto", "type": "direct-first", "primary": "direct", "fallback": "proxy",
+     "network": ["tcp"], "probe_timeout": "800ms", "failure_threshold": 2,
+     "positive_ttl": "30m", "negative_ttl": "10m"}
+  ],
+  "route": {
+    "default_outbound": "proxy",
+    "rules": [{"network": ["tcp"], "outbound": "auto"}]
+  },
+  "dns": {},
+  "discovery": {}
 }
 ```
 
@@ -79,6 +82,17 @@ func Status() string
 `listen`, `remote`, `active_connections`, `last_error`, and `timestamp_ms`. The
 Android diagnostics screen shows the latest event, while `Status()` remains the
 fallback simple bridge status.
+
+`SetAppIdentityProvider` is currently left unset. The existing tun2socks hop
+does not carry the originating Android UID to the local Go inbound, so resolving
+the accepted loopback socket would incorrectly identify the client process.
+Android per-app filtering is intentionally not used: the VPN installs IPv4 and
+IPv6 default routes and sends all captured traffic to tcptun-go.
+
+Profiles can also store a complete strict tcptun-go JSON document. The app
+preserves all supported `log`, `inbounds`, `outbounds`, `route`, `dns`, and
+`discovery` fields, then injects/replaces one `android-vpn` SOCKS5 inbound at
+runtime so the TUN adapter uses the selected local port, UDP mode, and auth.
 
 Build the AAR through this Kotlin project wrapper:
 
@@ -112,6 +126,9 @@ Install the debug APK:
 ```bash
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+
+Debug builds use `com.tcptun.client.debug`, so they can coexist with a signed
+release installation.
 
 ## Server example
 
@@ -168,13 +185,15 @@ vless://00000000-0000-4000-8000-000000000000@203.0.113.10:443?security=reality&e
 - URI import/export for native, VLESS, VMess, and Trojan profiles, including REALITY `pbk`, `sid`, `fp`, `spx`, `flow`, and `sni`.
 - Protocol and transport selection UI.
 - Optional token, SNI, path, TLS, TLS insecure, REALITY short ID, mux, upstream protocol, and UDP UI.
-- App filter modes for Android VPN routing: all apps proxied by default, or no apps proxied by default.
+- IPv4/IPv6 default routes send all VPN traffic into tcptun-go; Go routing selects direct, proxy, chain, direct-first, or blackhole outbounds.
 - Status display: `Stopped`, `Starting`, `Running`, `Error`.
 - Recent log display.
 - Native `hev-socks5-tunnel` forwarding from TUN to local SOCKS5/mixed proxy.
 - Runtime reflection bridge to gomobile AAR.
 - In-app diagnostics for VPN, underlying network, bridge state, local proxy reachability, MTU, UDP, and socket protect.
 - Runtime MTU and UDP test-mode settings.
+- Strict tcptun-go topology config and cached TCP direct-first routing.
+- Import, edit, persist, share, and run complete strict tcptun-go JSON profiles.
 
 ## Not yet supported
 
