@@ -25,8 +25,6 @@
     <string name="turn_flashlight_off">关闭手电筒</string>
     <string name="edit">编辑</string>
     <string name="delete">删除</string>
-    <string name="confirm_delete_profile">删除配置？</string>
-    <string name="confirm_delete_profile_message">确定删除“%1$s”吗？删除后仍可通过提示消息撤销。</string>
     <string name="undo">撤销</string>
     <string name="profile_deleted">已删除 %1$s</string>
     <string name="profile_deleted_prefix">已删除</string>

@@ -86,8 +86,8 @@ tunnel. Custom routing is stored per profile in the strict JSON `route.rules`:
 ```
 
 `StatusCallback.OnStatus(eventJson)` includes `session_id`, `sequence`, `state`,
-`reason`, `phase`, `listen`, `remote`, `active_connections`, `recoverable`,
-`last_error`, and `timestamp_ms`. The app drops events from an older engine/session
+`reason`, `phase`, `listen`, `remote`, `active_connections`, `mux_sources`,
+`mux_sessions`, `mux_streams`, `recoverable`, `last_error`, and `timestamp_ms`. The app drops events from an older engine/session
 or with a non-increasing sequence and folds accepted events into one immutable
 `StateFlow` snapshot consumed by Compose.
 
@@ -205,7 +205,7 @@ To let another device use the running Android client, set that device's HTTP or 
 `PHONE_LAN_IP:1080`. The phone and the other device must be on a network that permits inbound
 connections to the phone.
 
-Each row has a share action. Swipe a row to the left to delete it after confirmation. Profiles are saved locally in `SharedPreferences`.
+Each row has a share action. Swipe a row to the left to delete it; the snackbar action can undo the deletion. Profiles are saved locally in `SharedPreferences`.
 
 Supported import/export URI schemes:
 

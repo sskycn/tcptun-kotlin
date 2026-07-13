@@ -44,6 +44,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.AltRoute
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
@@ -137,7 +138,6 @@ fun TcptunScreen() {
     var showRouteManagement by remember { mutableStateOf(false) }
     var showQrScanner by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
-    var profilePendingDeletion by remember { mutableStateOf<AppConfig?>(null) }
     var profileQrCode by remember { mutableStateOf<AppConfig?>(null) }
     var tcpingMessage by remember { mutableStateOf("") }
     var tcpingInProgress by remember { mutableStateOf(false) }
@@ -287,7 +287,6 @@ fun TcptunScreen() {
             topBar = {
                 TopBar(
                     title = stringResource(R.string.profiles_title),
-                    onScan = { showQrScanner = true },
                     onRouteManagement = { showRouteManagement = true },
                     onSettings = { showSettings = true },
                 )
@@ -296,6 +295,7 @@ fun TcptunScreen() {
             floatingActionButton = {
                 MainActionsFab(
                     onImport = ::importFromClipboard,
+                    onScan = { showQrScanner = true },
                 )
             },
             bottomBar = {
@@ -351,7 +351,7 @@ fun TcptunScreen() {
                             shareable = ProfileUriCodec.encode(profile) != null,
                             onShare = { shareProfile(context, profile) },
                             onShowQrCode = { profileQrCode = profile },
-                            onDeleteRequest = { profilePendingDeletion = profile },
+                            onDeleteRequest = { deleteProfile(profile) },
                         )
                     }
                     if (state.profiles.isEmpty()) {
@@ -391,37 +391,12 @@ fun TcptunScreen() {
         )
     }
 
-    profilePendingDeletion?.let { profile ->
-        AlertDialog(
-            onDismissRequest = { profilePendingDeletion = null },
-            icon = { Icon(Icons.Rounded.Delete, contentDescription = null) },
-            title = { Text(stringResource(R.string.confirm_delete_profile)) },
-            text = { Text(stringResource(R.string.confirm_delete_profile_message, profile.name)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        profilePendingDeletion = null
-                        deleteProfile(profile)
-                    },
-                ) {
-                    Text(stringResource(R.string.delete))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { profilePendingDeletion = null }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-        )
-    }
-
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TopBar(
     title: String,
-    onScan: () -> Unit,
     onRouteManagement: () -> Unit,
     onSettings: () -> Unit,
 ) {
@@ -446,20 +421,6 @@ private fun TopBar(
                     tonalElevation = 3.dp,
                     shadowElevation = 6.dp,
                 ) {
-                    DropdownMenuItem(
-                        leadingIcon = {
-                            Icon(Icons.Rounded.QrCodeScanner, contentDescription = null)
-                        },
-                        text = { Text(stringResource(R.string.scan_qr_code)) },
-                        onClick = {
-                            menuExpanded = false
-                            onScan()
-                        },
-                        colors = MenuDefaults.itemColors(
-                            textColor = colors.onSurface,
-                            leadingIconColor = colors.onSurfaceVariant,
-                        ),
-                    )
                     DropdownMenuItem(
                         leadingIcon = {
                             Icon(Icons.AutoMirrored.Rounded.AltRoute, contentDescription = null)
@@ -497,12 +458,55 @@ private fun TopBar(
 @Composable
 private fun MainActionsFab(
     onImport: () -> Unit,
+    onScan: () -> Unit,
 ) {
-    FloatingActionButton(onClick = onImport) {
-        Icon(
-            Icons.Rounded.Add,
-            contentDescription = stringResource(R.string.actions),
-        )
+    var menuExpanded by remember { mutableStateOf(false) }
+    val colors = MaterialTheme.colorScheme
+
+    Box(contentAlignment = Alignment.BottomEnd) {
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false },
+            shape = RoundedCornerShape(12.dp),
+            containerColor = colors.surfaceContainer,
+            tonalElevation = 3.dp,
+            shadowElevation = 6.dp,
+        ) {
+            DropdownMenuItem(
+                leadingIcon = {
+                    Icon(Icons.Rounded.QrCodeScanner, contentDescription = null)
+                },
+                text = { Text(stringResource(R.string.scan_qr_code)) },
+                onClick = {
+                    menuExpanded = false
+                    onScan()
+                },
+                colors = MenuDefaults.itemColors(
+                    textColor = colors.onSurface,
+                    leadingIconColor = colors.onSurfaceVariant,
+                ),
+            )
+            DropdownMenuItem(
+                leadingIcon = {
+                    Icon(Icons.Rounded.ContentPaste, contentDescription = null)
+                },
+                text = { Text(stringResource(R.string.import_from_clipboard)) },
+                onClick = {
+                    menuExpanded = false
+                    onImport()
+                },
+                colors = MenuDefaults.itemColors(
+                    textColor = colors.onSurface,
+                    leadingIconColor = colors.onSurfaceVariant,
+                ),
+            )
+        }
+        FloatingActionButton(onClick = { menuExpanded = true }) {
+            Icon(
+                Icons.Rounded.Add,
+                contentDescription = stringResource(R.string.actions),
+            )
+        }
     }
 }
 
@@ -624,8 +628,10 @@ private fun ProfileQrCodeDialog(
     profile: AppConfig,
     onDismiss: () -> Unit,
 ) {
+    val context = LocalContext.current
     val uri = remember(profile) { requireNotNull(ProfileUriCodec.encode(profile)) }
-    val bitmap = remember(uri) { generateQrCodeBitmap(uri, 768) }
+    val logo = remember(context) { ContextCompat.getDrawable(context, R.mipmap.ic_launcher) }
+    val bitmap = remember(uri, logo) { generateQrCodeBitmap(uri, 768, logo) }
 
     AlertDialog(
         onDismissRequest = onDismiss,

@@ -73,6 +73,13 @@ private data class BridgeReadyWaiter(
     val future: CompletableFuture<Unit> = CompletableFuture(),
 )
 
+private data class BridgeRuntimeSnapshot(
+    val activeConnections: Int,
+    val muxSources: Int,
+    val muxSessions: Int,
+    val muxStreams: Int,
+)
+
 internal fun underlyingNetworkScore(
     validated: Boolean,
     ethernet: Boolean,
@@ -465,6 +472,10 @@ class TcptunVpnService : VpnService() {
         TcptunState.updateDiagnostics {
             it.copy(
                 bridgeStatus = "Stopped",
+                bridgeActiveConnections = 0,
+                bridgeMuxSources = 0,
+                bridgeMuxSessions = 0,
+                bridgeMuxStreams = 0,
                 localProxyReachable = false,
                 localProxyAddress = defaultLocalSocksConnectAddr(),
                 localProxyPort = DEFAULT_SOCKS_PORT,
@@ -824,6 +835,7 @@ class TcptunVpnService : VpnService() {
             TcptunState.updateDiagnostics { it.copy(bridgeStatus = "Unknown", localProxyReachable = false) }
             return HealthFailure("status unavailable: ${err.message}", HealthRestartTarget.Bridge)
         }
+        val runtimeSnapshot = bridgeRuntimeSnapshot()
         val localProxyReachable = canConnectLocalProxy()
         TcptunState.updateDiagnostics {
             it.copy(
@@ -831,6 +843,10 @@ class TcptunVpnService : VpnService() {
                 localProxyReachable = localProxyReachable,
                 localProxyAddress = activeLocalSocksConnectAddr(),
                 localProxyPort = activeSocksPort,
+                bridgeActiveConnections = runtimeSnapshot?.activeConnections ?: it.bridgeActiveConnections,
+                bridgeMuxSources = runtimeSnapshot?.muxSources ?: it.bridgeMuxSources,
+                bridgeMuxSessions = runtimeSnapshot?.muxSessions ?: it.bridgeMuxSessions,
+                bridgeMuxStreams = runtimeSnapshot?.muxStreams ?: it.bridgeMuxStreams,
             )
         }
         if (status != "Running") {
@@ -869,6 +885,7 @@ class TcptunVpnService : VpnService() {
 
     private fun updateBridgeDiagnostics() {
         val status = runCatching { bridge.status() }.getOrDefault("Unknown")
+        val runtimeSnapshot = bridgeRuntimeSnapshot()
         val localProxyReachable = canConnectLocalProxy()
         TcptunState.updateDiagnostics {
             it.copy(
@@ -876,8 +893,24 @@ class TcptunVpnService : VpnService() {
                 localProxyReachable = localProxyReachable,
                 localProxyAddress = activeLocalSocksConnectAddr(),
                 localProxyPort = activeSocksPort,
+                bridgeActiveConnections = runtimeSnapshot?.activeConnections ?: it.bridgeActiveConnections,
+                bridgeMuxSources = runtimeSnapshot?.muxSources ?: it.bridgeMuxSources,
+                bridgeMuxSessions = runtimeSnapshot?.muxSessions ?: it.bridgeMuxSessions,
+                bridgeMuxStreams = runtimeSnapshot?.muxStreams ?: it.bridgeMuxStreams,
             )
         }
+    }
+
+    private fun bridgeRuntimeSnapshot(): BridgeRuntimeSnapshot? {
+        return runCatching {
+            val json = JSONObject(bridge.statusJson())
+            BridgeRuntimeSnapshot(
+                activeConnections = json.optInt("active_connections", 0),
+                muxSources = json.optInt("mux_sources", 0),
+                muxSessions = json.optInt("mux_sessions", 0),
+                muxStreams = json.optInt("mux_streams", 0),
+            )
+        }.getOrNull()
     }
 
     private fun canConnectLocalProxy(): Boolean {
