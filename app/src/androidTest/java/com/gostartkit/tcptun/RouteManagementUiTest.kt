@@ -19,7 +19,6 @@ class RouteManagementUiTest {
     fun opensStructuredRouteRuleEditorFromTopBar() {
         val activity = composeRule.activity
         composeRule.onNodeWithContentDescription(activity.getString(R.string.more_options)).performClick()
-        composeRule.onNodeWithText(activity.getString(R.string.bluetooth_receive)).assertIsDisplayed()
         composeRule.onNodeWithText(activity.getString(R.string.route_management)).performClick()
         composeRule.onNodeWithText(activity.getString(R.string.route_management)).assertIsDisplayed()
 

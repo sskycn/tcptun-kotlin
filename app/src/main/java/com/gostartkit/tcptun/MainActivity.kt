@@ -1,8 +1,6 @@
 package com.tcptun.client
 
 import android.Manifest
-import android.app.Activity
-import android.bluetooth.BluetoothAdapter
 import android.content.ClipData
 import android.content.Context
 import android.content.ClipboardManager
@@ -19,7 +17,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -43,13 +43,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.AltRoute
-import androidx.compose.material.icons.automirrored.rounded.BluetoothSearching
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.QrCode2
+import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
@@ -81,7 +81,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -92,8 +91,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -102,17 +101,12 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.tcptun.client.ui.theme.TcpTunTheme
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.security.SecureRandom
 import java.util.UUID
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import kotlin.coroutines.resume
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -130,7 +124,6 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun TcptunScreen() {
     val context = LocalContext.current
-    val resources = LocalResources.current
     val emptyClipboard = stringResource(R.string.empty_clipboard)
     val invalidClipboard = stringResource(R.string.invalid_clipboard_data)
     val profileDeletedPrefix = stringResource(R.string.profile_deleted_prefix)
@@ -142,32 +135,14 @@ fun TcptunScreen() {
     var showDiagnostics by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showRouteManagement by remember { mutableStateOf(false) }
+    var showQrScanner by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
-    var showBluetoothReceiveCode by remember { mutableStateOf(false) }
-    var bluetoothReceiveCodeError by remember { mutableStateOf(false) }
-    var bluetoothSendProfile by remember { mutableStateOf<AppConfig?>(null) }
-    var bluetoothSendCode by remember { mutableStateOf("") }
-    var receivedBluetoothFrame by remember { mutableStateOf<EncryptedBluetoothUriFrame?>(null) }
-    val bluetoothDeliveredAddresses = remember { mutableSetOf<String>() }
-    val bluetoothSendingAddresses = remember { mutableSetOf<String>() }
-    var bluetoothPendingSends by remember { mutableStateOf(0) }
-    var bluetoothShareGeneration by remember { mutableStateOf(0) }
-    val bluetoothSendJobs = remember { mutableSetOf<Job>() }
-    var bluetoothDiscoverySession by remember { mutableStateOf<BluetoothDiscoverySession?>(null) }
-    var bluetoothReceiveSession by remember { mutableStateOf<BluetoothReceiveSession?>(null) }
-    var pendingBluetoothAction by remember { mutableStateOf<BluetoothAction?>(null) }
-    var readyBluetoothAction by remember { mutableStateOf<BluetoothAction?>(null) }
-    var startBluetoothReceiver by remember { mutableStateOf(false) }
-    var bluetoothDiscovering by remember { mutableStateOf(false) }
-    var bluetoothReceiving by remember { mutableStateOf(false) }
-    var bluetoothMessage by remember { mutableStateOf("") }
-    var receivedBluetoothProfile by remember { mutableStateOf<AppConfig?>(null) }
     var profilePendingDeletion by remember { mutableStateOf<AppConfig?>(null) }
+    var profileQrCode by remember { mutableStateOf<AppConfig?>(null) }
     var tcpingMessage by remember { mutableStateOf("") }
     var tcpingInProgress by remember { mutableStateOf(false) }
     var tcpingTargetIndex by remember { mutableStateOf(0) }
     val snackbarHostState = remember { SnackbarHostState() }
-    val bluetoothSnackbarHostState = remember { SnackbarHostState() }
     val screenScope = rememberCoroutineScope()
     val vpnState by TcptunState.state.collectAsState()
     val vpnLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -191,27 +166,6 @@ fun TcptunScreen() {
             }
         }
     }
-    val bluetoothDiscoverableLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode != Activity.RESULT_CANCELED) startBluetoothReceiver = true
-    }
-    val bluetoothEnableLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        if (BluetoothProfileTransfer.adapter(context)?.isEnabled == true) {
-            readyBluetoothAction = pendingBluetoothAction
-        } else {
-            (pendingBluetoothAction as? BluetoothAction.Send)?.let { shareProfile(context, it.profile) }
-            bluetoothMessage = resources.getString(R.string.bluetooth_disabled)
-            pendingBluetoothAction = null
-        }
-    }
-    val bluetoothPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
-        if (grants.values.all { it }) {
-            readyBluetoothAction = pendingBluetoothAction
-        } else {
-            (pendingBluetoothAction as? BluetoothAction.Send)?.let { shareProfile(context, it.profile) }
-            bluetoothMessage = resources.getString(R.string.bluetooth_permission_required)
-            pendingBluetoothAction = null
-        }
-    }
     fun save(next: ProfilesState) {
         ProfileStore.save(context, next)
         state = ProfileStore.load(context)
@@ -232,106 +186,20 @@ fun TcptunScreen() {
         )
     }
 
-    fun requestBluetoothAction(action: BluetoothAction) {
-        bluetoothMessage = ""
-        pendingBluetoothAction = action
-        val permissions = bluetoothRuntimePermissions(action)
-        if (permissions.all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }) {
-            readyBluetoothAction = action
-        } else {
-            bluetoothPermissionLauncher.launch(permissions)
-        }
-    }
-
-    fun stopBluetoothSharing(expectedGeneration: Int? = null) {
-        if (expectedGeneration != null && expectedGeneration != bluetoothShareGeneration) return
-        bluetoothShareGeneration += 1
-        bluetoothDiscoverySession?.close()
-        bluetoothDiscoverySession = null
-        bluetoothSendJobs.forEach { it.cancel() }
-        bluetoothSendJobs.clear()
-        if (pendingBluetoothAction is BluetoothAction.Send) pendingBluetoothAction = null
-        if (readyBluetoothAction is BluetoothAction.Send) readyBluetoothAction = null
-        bluetoothDiscovering = false
-        bluetoothPendingSends = 0
-        bluetoothDeliveredAddresses.clear()
-        bluetoothSendingAddresses.clear()
-        bluetoothSendProfile = null
-        bluetoothSendCode = ""
-    }
-
-    LaunchedEffect(readyBluetoothAction) {
-        val action = readyBluetoothAction ?: return@LaunchedEffect
-        readyBluetoothAction = null
-        val adapter = BluetoothProfileTransfer.adapter(context)
-        if (adapter == null) {
-            (action as? BluetoothAction.Send)?.let { shareProfile(context, it.profile) }
-            bluetoothMessage = resources.getString(R.string.bluetooth_not_supported)
-            pendingBluetoothAction = null
-            return@LaunchedEffect
-        }
-        if (!adapter.isEnabled) {
-            bluetoothEnableLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
-            return@LaunchedEffect
-        }
-        pendingBluetoothAction = null
-        when (action) {
-            is BluetoothAction.Send -> {
-                bluetoothSendCode = action.code
-                bluetoothSendProfile = action.profile
-                shareProfile(context, action.profile)
-            }
-            BluetoothAction.Receive -> {
-                bluetoothDiscoverableLauncher.launch(
-                Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
-                    putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, BluetoothDiscoverableSeconds)
-                },
-            )
-            }
-        }
-    }
-
-    LaunchedEffect(startBluetoothReceiver) {
-        if (!startBluetoothReceiver) return@LaunchedEffect
-        startBluetoothReceiver = false
-        bluetoothReceiveSession?.close()
-        bluetoothReceiving = true
-        bluetoothMessage = ""
-        BluetoothProfileTransfer.receiveOne(
-            context = context,
-            scope = screenScope,
-            onReceived = { encryptedFrame ->
-                receivedBluetoothFrame = encryptedFrame
-                bluetoothReceiveCodeError = false
-                showBluetoothReceiveCode = true
-            },
-            onError = { error ->
-                if (bluetoothReceiving) {
-                    bluetoothMessage = error.message?.takeIf(String::isNotBlank)
-                        ?: resources.getString(R.string.bluetooth_receive_failed)
+    fun importScannedProfile(link: String): Boolean {
+        var imported = false
+        ProfileUriCodec.decode(link.trim()).fold(
+            onSuccess = { profile ->
+                save(ProfilesState(state.profiles + profile, profile.id))
+                showQrScanner = false
+                imported = true
+                screenScope.launch {
+                    snackbarHostState.showSnackbar(context.getString(R.string.profile_imported, profile.name))
                 }
             },
-            onFinished = {
-                bluetoothReceiving = false
-                bluetoothReceiveSession = null
-            },
-        ).fold(
-            onSuccess = { bluetoothReceiveSession = it },
-            onFailure = {
-                bluetoothReceiving = false
-                bluetoothMessage = it.message?.takeIf(String::isNotBlank)
-                    ?: resources.getString(R.string.bluetooth_receive_failed)
-            },
+            onFailure = {},
         )
-    }
-
-    DisposableEffect(bluetoothDiscoverySession, bluetoothReceiveSession) {
-        onDispose {
-            bluetoothDiscoverySession?.close()
-            bluetoothReceiveSession?.close()
-            bluetoothSendJobs.forEach { it.cancel() }
-            bluetoothSendJobs.clear()
-        }
+        return imported
     }
 
     fun startProfile(config: AppConfig) {
@@ -395,7 +263,12 @@ fun TcptunScreen() {
     }
 
     val editing = editingProfile
-    if (showDiagnostics) {
+    if (showQrScanner) {
+        QrScannerPage(
+            onBack = { showQrScanner = false },
+            onProfileScanned = ::importScannedProfile,
+        )
+    } else if (showDiagnostics) {
         DiagnosticsPage(
             onBack = { showDiagnostics = false },
             onShowLogs = { showLogs = true },
@@ -414,11 +287,7 @@ fun TcptunScreen() {
             topBar = {
                 TopBar(
                     title = stringResource(R.string.profiles_title),
-                    onBluetoothReceive = {
-                        bluetoothReceiveCodeError = false
-                        receivedBluetoothFrame = null
-                        requestBluetoothAction(BluetoothAction.Receive)
-                    },
+                    onScan = { showQrScanner = true },
                     onRouteManagement = { showRouteManagement = true },
                     onSettings = { showSettings = true },
                 )
@@ -480,22 +349,8 @@ fun TcptunScreen() {
                             enabled = !isVpnTransitionStatus(vpnState.status),
                             onClick = { toggleProfile(profile) },
                             shareable = ProfileUriCodec.encode(profile) != null,
-                        onShare = {
-                            val code = generateBluetoothCode()
-                            bluetoothShareGeneration += 1
-                            val shareGeneration = bluetoothShareGeneration
-                            screenScope.launch {
-                                val result = bluetoothSnackbarHostState.showSnackbar(
-                                    message = resources.getString(R.string.bluetooth_snackbar_code, code),
-                                    actionLabel = resources.getString(R.string.close),
-                                    duration = SnackbarDuration.Indefinite,
-                                )
-                                if (result == SnackbarResult.ActionPerformed) {
-                                    stopBluetoothSharing(shareGeneration)
-                                }
-                            }
-                            requestBluetoothAction(BluetoothAction.Send(profile, code))
-                            },
+                            onShare = { shareProfile(context, profile) },
+                            onShowQrCode = { profileQrCode = profile },
                             onDeleteRequest = { profilePendingDeletion = profile },
                         )
                     }
@@ -505,13 +360,6 @@ fun TcptunScreen() {
                         }
                     }
                 }
-                SnackbarHost(
-                    hostState = bluetoothSnackbarHostState,
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                )
             }
         }
     } else {
@@ -534,6 +382,13 @@ fun TcptunScreen() {
 
     if (showLogs) {
         LogsDialog(onDismiss = { showLogs = false })
+    }
+
+    profileQrCode?.let { profile ->
+        ProfileQrCodeDialog(
+            profile = profile,
+            onDismiss = { profileQrCode = null },
+        )
     }
 
     profilePendingDeletion?.let { profile ->
@@ -560,183 +415,13 @@ fun TcptunScreen() {
         )
     }
 
-    if (showBluetoothReceiveCode) {
-        BluetoothReceiveCodeDialog(
-            codeMismatch = bluetoothReceiveCodeError,
-            onDismiss = {
-                showBluetoothReceiveCode = false
-                bluetoothReceiveCodeError = false
-                receivedBluetoothFrame = null
-            },
-            onConfirm = { code ->
-                val encryptedFrame = receivedBluetoothFrame ?: return@BluetoothReceiveCodeDialog
-                runCatching { BluetoothUriFrame.decrypt(code, encryptedFrame) }.fold(
-                    onSuccess = { uri ->
-                        bluetoothReceiveCodeError = false
-                        showBluetoothReceiveCode = false
-                        receivedBluetoothFrame = null
-                        ProfileUriCodec.decode(uri).fold(
-                            onSuccess = { receivedBluetoothProfile = it },
-                            onFailure = { bluetoothMessage = resources.getString(R.string.bluetooth_invalid_profile) },
-                        )
-                    },
-                    onFailure = { error ->
-                        if (error is BluetoothCodeMismatchException) {
-                            bluetoothReceiveCodeError = true
-                        } else {
-                            bluetoothMessage = error.message?.takeIf(String::isNotBlank)
-                                ?: resources.getString(R.string.bluetooth_receive_failed)
-                        }
-                    },
-                )
-            },
-        )
-    }
-
-    bluetoothSendProfile?.let { profile ->
-        LaunchedEffect(profile.id, bluetoothSendCode) {
-            bluetoothDiscoverySession?.close()
-            bluetoothSendJobs.forEach { it.cancel() }
-            bluetoothSendJobs.clear()
-            bluetoothDeliveredAddresses.clear()
-            bluetoothSendingAddresses.clear()
-            bluetoothPendingSends = 0
-            bluetoothMessage = ""
-            val shareCode = bluetoothSendCode
-            while (bluetoothSendProfile?.id == profile.id && bluetoothSendCode == shareCode) {
-                bluetoothDiscovering = true
-                suspendCancellableCoroutine { continuation ->
-                    var cycleSession: BluetoothDiscoverySession? = null
-                    val finishCycle = {
-                        if (continuation.isActive) continuation.resume(Unit)
-                    }
-                    BluetoothProfileTransfer.discover(
-                        context = context,
-                        onDevice = { found ->
-                            if (found.address in bluetoothDeliveredAddresses || found.address in bluetoothSendingAddresses) {
-                                return@discover
-                            }
-                            bluetoothSendingAddresses += found.address
-                            bluetoothPendingSends += 1
-                            bluetoothSendJobs += screenScope.launch {
-                                runCatching {
-                                    val uri = requireNotNull(ProfileUriCodec.encode(profile))
-                                    BluetoothProfileTransfer.send(context, found.address, shareCode, uri)
-                                }.fold(
-                                    onSuccess = { result ->
-                                        when (result) {
-                                            BluetoothSendResult.Accepted -> {
-                                                bluetoothDeliveredAddresses += found.address
-                                                TcptunState.appendLog("Bluetooth profile accepted by ${found.name}")
-                                            }
-                                        }
-                                    },
-                                    onFailure = { error ->
-                                        if (error !is kotlinx.coroutines.CancellationException) {
-                                            TcptunState.appendLog("Bluetooth profile send failed for ${found.name}: ${error.message}")
-                                        }
-                                    },
-                                )
-                                bluetoothSendingAddresses -= found.address
-                                bluetoothPendingSends = (bluetoothPendingSends - 1).coerceAtLeast(0)
-                            }
-                        },
-                        onFinished = finishCycle,
-                        onError = { error ->
-                            TcptunState.appendLog(
-                                error.message?.takeIf(String::isNotBlank)
-                                    ?: resources.getString(R.string.bluetooth_discovery_failed),
-                            )
-                            finishCycle()
-                        },
-                    ).onSuccess {
-                        cycleSession = it
-                        bluetoothDiscoverySession = it
-                    }
-                    continuation.invokeOnCancellation { cycleSession?.close() }
-                }
-                bluetoothDiscoverySession?.close()
-                bluetoothDiscoverySession = null
-                bluetoothDiscovering = false
-                if (bluetoothSendProfile?.id == profile.id && bluetoothSendCode == shareCode) {
-                    delay(BluetoothDiscoveryRestartDelayMs)
-                }
-            }
-        }
-    }
-
-    if (bluetoothReceiving) {
-        AlertDialog(
-            onDismissRequest = {},
-            icon = { Icon(Icons.AutoMirrored.Rounded.BluetoothSearching, contentDescription = null) },
-            title = { Text(stringResource(R.string.bluetooth_receiving)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(stringResource(R.string.bluetooth_receiving_note, BluetoothDiscoverableSeconds))
-                    if (bluetoothMessage.isNotBlank()) {
-                        Text(bluetoothMessage, color = MaterialTheme.colorScheme.error)
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        bluetoothReceiveSession?.close()
-                        bluetoothReceiveSession = null
-                        bluetoothReceiving = false
-                        bluetoothMessage = ""
-                    },
-                ) { Text(stringResource(R.string.cancel)) }
-            },
-        )
-    }
-
-    receivedBluetoothProfile?.let { profile ->
-        AlertDialog(
-            onDismissRequest = { receivedBluetoothProfile = null },
-            icon = { Icon(Icons.Rounded.Bluetooth, contentDescription = null) },
-            title = { Text(stringResource(R.string.bluetooth_profile_received)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(profile.name, style = MaterialTheme.typography.titleMedium)
-                    Text(profile.maskedAddress(), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(profile.label(), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(stringResource(R.string.bluetooth_confirm_import))
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        save(ProfilesState(state.profiles + profile, profile.id))
-                        receivedBluetoothProfile = null
-                    },
-                ) { Text(stringResource(R.string.import_profile)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { receivedBluetoothProfile = null }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-        )
-    }
-
-    if (bluetoothMessage.isNotBlank() && bluetoothSendProfile == null && !bluetoothReceiving) {
-        AlertDialog(
-            onDismissRequest = { bluetoothMessage = "" },
-            title = { Text(stringResource(R.string.bluetooth_share)) },
-            text = { Text(bluetoothMessage) },
-            confirmButton = {
-                TextButton(onClick = { bluetoothMessage = "" }) { Text(stringResource(R.string.close)) }
-            },
-        )
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TopBar(
     title: String,
-    onBluetoothReceive: () -> Unit,
+    onScan: () -> Unit,
     onRouteManagement: () -> Unit,
     onSettings: () -> Unit,
 ) {
@@ -763,12 +448,12 @@ private fun TopBar(
                 ) {
                     DropdownMenuItem(
                         leadingIcon = {
-                            Icon(Icons.AutoMirrored.Rounded.BluetoothSearching, contentDescription = null)
+                            Icon(Icons.Rounded.QrCodeScanner, contentDescription = null)
                         },
-                        text = { Text(stringResource(R.string.bluetooth_receive)) },
+                        text = { Text(stringResource(R.string.scan_qr_code)) },
                         onClick = {
                             menuExpanded = false
-                            onBluetoothReceive()
+                            onScan()
                         },
                         colors = MenuDefaults.itemColors(
                             textColor = colors.onSurface,
@@ -830,6 +515,7 @@ private fun ProfileRow(
     shareable: Boolean,
     onClick: () -> Unit,
     onShare: () -> Unit,
+    onShowQrCode: () -> Unit,
     onDeleteRequest: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -910,11 +596,21 @@ private fun ProfileRow(
                 IconButton(
                     onClick = onShare,
                     enabled = shareable,
-                    modifier = Modifier.padding(end = 8.dp),
                 ) {
                     Icon(
                         Icons.Rounded.Share,
                         contentDescription = stringResource(R.string.share),
+                        tint = if (shareable) colors.onSurfaceVariant else colors.onSurface.copy(alpha = 0.38f),
+                    )
+                }
+                IconButton(
+                    onClick = onShowQrCode,
+                    enabled = shareable,
+                    modifier = Modifier.padding(end = 8.dp),
+                ) {
+                    Icon(
+                        Icons.Rounded.QrCode2,
+                        contentDescription = stringResource(R.string.show_qr_code),
                         tint = if (shareable) colors.onSurfaceVariant else colors.onSurface.copy(alpha = 0.38f),
                     )
                 }
@@ -924,45 +620,46 @@ private fun ProfileRow(
 }
 
 @Composable
-private fun BluetoothReceiveCodeDialog(
-    codeMismatch: Boolean,
+private fun ProfileQrCodeDialog(
+    profile: AppConfig,
     onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
 ) {
-    var code by remember { mutableStateOf("") }
-    LaunchedEffect(codeMismatch) {
-        if (codeMismatch) code = ""
-    }
+    val uri = remember(profile) { requireNotNull(ProfileUriCodec.encode(profile)) }
+    val bitmap = remember(uri) { generateQrCodeBitmap(uri, 768) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Rounded.Bluetooth, contentDescription = null) },
-        title = { Text(stringResource(R.string.bluetooth_enter_code)) },
+        icon = { Icon(Icons.Rounded.QrCode2, contentDescription = null) },
+        title = { Text(stringResource(R.string.profile_qr_code)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(stringResource(R.string.bluetooth_enter_code_note))
-                if (codeMismatch) {
-                    Text(
-                        stringResource(R.string.bluetooth_code_mismatch_retry),
-                        color = MaterialTheme.colorScheme.error,
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color.White,
+                ) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = stringResource(R.string.profile_qr_code_description, profile.name),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
+                            .padding(12.dp),
                     )
                 }
-                OutlinedTextField(
-                    value = code,
-                    onValueChange = { value -> code = value.filter(Char::isDigit).take(4) },
-                    label = { Text(stringResource(R.string.bluetooth_four_digit_code)) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                Text(
+                    text = profile.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         },
         confirmButton = {
-            Button(onClick = { onConfirm(code) }, enabled = code.length == 4) {
-                Text(stringResource(R.string.bluetooth_start_receiving))
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.close))
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
         },
     )
 }
@@ -2126,35 +1823,6 @@ private fun shareProfile(context: Context, profile: AppConfig) {
         Intent.createChooser(createProfileShareIntent(profile), context.getString(R.string.share_profile)),
     )
 }
-
-private const val BluetoothDiscoverableSeconds = 120
-private const val BluetoothDiscoveryRestartDelayMs = 750L
-private val BluetoothCodeRandom = SecureRandom()
-
-private sealed interface BluetoothAction {
-    data class Send(val profile: AppConfig, val code: String) : BluetoothAction
-    data object Receive : BluetoothAction
-}
-
-private fun generateBluetoothCode(): String = BluetoothCodeRandom.nextInt(10_000).toString().padStart(4, '0')
-
-private fun bluetoothRuntimePermissions(action: BluetoothAction): Array<String> =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        when (action) {
-            is BluetoothAction.Send -> arrayOf(
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT,
-            )
-            BluetoothAction.Receive -> arrayOf(
-                Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.BLUETOOTH_ADVERTISE,
-            )
-        }
-    } else if (action is BluetoothAction.Send) {
-        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-    } else {
-        emptyArray()
-    }
 
 internal fun createProfileShareIntent(profile: AppConfig): Intent {
     val uri = requireNotNull(ProfileUriCodec.encode(profile)) { "profile cannot be encoded as a URI" }

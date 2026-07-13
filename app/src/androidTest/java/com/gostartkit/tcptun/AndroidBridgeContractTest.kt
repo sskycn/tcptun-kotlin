@@ -5,6 +5,7 @@ import android.net.Uri
 import androidbridge.Androidbridge
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.king.wechat.qrcode.WeChatQRCodeDetector
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -144,6 +145,23 @@ class AndroidBridgeContractTest {
         assertEquals(expectedUri, intent.getStringExtra(Intent.EXTRA_TEXT))
         @Suppress("DEPRECATION")
         assertEquals(null, intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
+    }
+
+    @Test
+    fun weChatScannerDecodesGeneratedProfileQrCode() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val profile = AppConfig(
+            name = "wechat-qr-test",
+            serverHost = "192.0.2.1",
+            serverPort = "9443",
+            token = "wechat-qr-secret",
+            protocol = "native",
+        )
+        val expectedUri = requireNotNull(ProfileUriCodec.encode(profile))
+        val bitmap = generateQrCodeBitmap(expectedUri, 768)
+
+        WeChatQRCodeDetector.init(context)
+        assertEquals(expectedUri, WeChatQRCodeDetector.detectAndDecode(bitmap).firstOrNull())
     }
 
     @Test
