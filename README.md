@@ -197,7 +197,7 @@ For VLESS/VMess/Trojan, use the same protocol, transport, token/UUID/password, T
 3. Tap `+` to add a profile, or tap the pen icon to edit an existing profile.
 4. Tap `⇩` to import a URI share link, or enter profile name, server address, port, protocol, transport, UUID/password/token, SNI, path, TLS, REALITY, mux, upstream, and UDP settings manually.
 5. Tap a profile row to select it. The selected profile has a black bar on the left.
-6. Tap the share icon to export a versioned HTTPS profile link.
+6. Tap the share icon to export a URI link for the profile protocol.
 7. Tap the orange floating button and approve the Android VPN prompt.
 8. Open a browser and visit a site.
 9. Tap the bottom status line to view recent logs.
@@ -208,7 +208,7 @@ connections to the phone.
 
 Each row has a share action. Swipe a row to the left to delete it; the snackbar action can undo the deletion. Profiles are saved locally in `SharedPreferences`.
 
-Shared links use this envelope:
+HTTPS App Link imports use this envelope:
 
 ```text
 https://tcptun.com/x/v1#p=<BASE64URL(profile-uri)>

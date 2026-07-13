@@ -759,9 +759,7 @@ private fun ProfileQrCodeDialog(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
-    val uri = remember(profile) {
-        ProfileDeepLinkCodec.encode(requireNotNull(ProfileUriCodec.encode(profile)))
-    }
+    val uri = remember(profile) { requireNotNull(ProfileUriCodec.encode(profile)) }
     val logo = remember(context) { ContextCompat.getDrawable(context, R.mipmap.ic_launcher) }
     val bitmap = remember(uri, logo) { generateQrCodeBitmap(uri, 768, logo) }
 
@@ -1963,8 +1961,7 @@ private fun shareProfile(context: Context, profile: AppConfig) {
 }
 
 internal fun createProfileShareIntent(profile: AppConfig): Intent {
-    val profileUri = requireNotNull(ProfileUriCodec.encode(profile)) { "profile cannot be encoded as a URI" }
-    val uri = ProfileDeepLinkCodec.encode(profileUri)
+    val uri = requireNotNull(ProfileUriCodec.encode(profile)) { "profile cannot be encoded as a URI" }
     return Intent(Intent.ACTION_SEND)
         .setType("text/plain")
         .putExtra(Intent.EXTRA_TEXT, uri)

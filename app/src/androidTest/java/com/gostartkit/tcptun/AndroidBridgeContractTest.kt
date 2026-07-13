@@ -163,7 +163,7 @@ class AndroidBridgeContractTest {
             token = "share-secret",
             protocol = "native",
         )
-        val expectedUri = ProfileDeepLinkCodec.encode(requireNotNull(ProfileUriCodec.encode(profile)))
+        val expectedUri = ProfileUriCodec.encode(profile)
         val intent = createProfileShareIntent(profile)
 
         assertEquals(Intent.ACTION_SEND, intent.action)
@@ -183,7 +183,7 @@ class AndroidBridgeContractTest {
             token = "wechat-qr-secret",
             protocol = "native",
         )
-        val expectedUri = ProfileDeepLinkCodec.encode(requireNotNull(ProfileUriCodec.encode(profile)))
+        val expectedUri = requireNotNull(ProfileUriCodec.encode(profile))
         val logo = requireNotNull(ContextCompat.getDrawable(context, R.mipmap.ic_launcher))
         val bitmap = generateQrCodeBitmap(expectedUri, 768, logo)
 
