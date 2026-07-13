@@ -19,7 +19,7 @@ internal fun validateTcptunConfig(configJson: String) {
 }
 
 interface TcptunBridge {
-    fun start(configJson: String)
+    fun start(configJson: String): Long
     fun stop()
     fun close()
     fun status(): String
@@ -64,8 +64,9 @@ class ReflectionTcptunBridge : TcptunBridge {
     private var socketProtector: Any? = null
     private var appIdentityProvider: Any? = null
 
-    override fun start(configJson: String) {
-        invokeEngine("start", arrayOf(String::class.java), configJson)
+    override fun start(configJson: String): Long {
+        return (invokeEngine("startSession", arrayOf(String::class.java), configJson) as? Number)?.toLong()
+            ?: throw IllegalStateException("androidbridge.Engine.startSession returned no session ID")
     }
 
     override fun stop() {

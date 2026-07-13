@@ -40,6 +40,8 @@ class AndroidBridgeContractTest {
         try {
             assertEquals("Stopped", engine.status())
             assertEquals("stopped", JSONObject(engine.statusJSON()).getString("state"))
+            assertEquals(0L, engine.sessionID())
+            assertTrue(runCatching { engine.waitStopped(1, 1) }.isFailure)
         } finally {
             engine.close()
         }

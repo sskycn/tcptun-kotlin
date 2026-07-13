@@ -48,8 +48,11 @@ func (e *Engine) SetStatusCallback(cb StatusCallback)
 func (e *Engine) SetSocketProtector(p SocketProtector)
 func (e *Engine) SetAppIdentityProvider(provider AppIdentityProvider)
 func (e *Engine) Start(configJson string) error
+func (e *Engine) StartSession(configJson string) (int64, error)
 func (e *Engine) Stop() error
 func (e *Engine) Close() error
+func (e *Engine) SessionID() int64
+func (e *Engine) WaitStopped(sessionID int64, timeoutMillis int64) error
 func (e *Engine) Status() string
 func (e *Engine) StatusJSON() string
 ```

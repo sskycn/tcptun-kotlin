@@ -499,7 +499,7 @@ class TcptunVpnService : VpnService() {
     override fun onDestroy() {
         lifecycleGeneration.incrementAndGet()
         stopVpn(setStopped = TcptunState.status != "Error", clearSavedConfig = false)
-        runCatching { bridge.close() }
+        runCatching { synchronized(bridgeLock) { bridge.close() } }
             .onFailure { err -> TcptunState.appendLog("tcptun engine close failed: ${err.message}") }
         lifecycleExecutor.shutdownNow()
         unregisterDeviceActivityReceiver()
@@ -555,10 +555,13 @@ class TcptunVpnService : VpnService() {
         bridge.setStatusCallback { eventJson -> onBridgeStatusEvent(epoch, eventJson) }
         bridge.setSocketProtector { fd -> protect(fd) }
         TcptunState.applyBridgeStatusEvent(epoch, bridge.statusJson())
-        synchronized(bridgeLock) {
-            bridge.start(configJson)
+        val sessionId = synchronized(bridgeLock) {
+            val startedSessionId = bridge.start(configJson)
+            check(startedSessionId > 0) { "tcptun engine returned an invalid session ID" }
             bridgeConfigJson = configJson
+            startedSessionId
         }
+        TcptunState.appendLog("tcptun bridge session started: $sessionId")
         try {
             waiter.future.get(BRIDGE_READY_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         } finally {
