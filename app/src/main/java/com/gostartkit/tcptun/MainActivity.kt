@@ -104,12 +104,15 @@ import androidx.core.content.ContextCompat
 import com.tcptun.client.ui.theme.TcpTunTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.UUID
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+private const val SnackbarAutoDismissMillis = 6_000L
 
 class MainActivity : ComponentActivity() {
     private var profileIntentSequence = 0L
@@ -223,15 +226,19 @@ internal fun TcptunScreen(
             } else {
                 val (storedProfile, added) = importValidatedProfile(profile)
                 if (added) {
-                    snackbarHostState.showSnackbar(resources.getString(R.string.profile_imported, storedProfile.name))
+                    snackbarHostState.showDismissibleSnackbar(
+                        resources.getString(R.string.profile_imported, storedProfile.name),
+                    )
                 } else {
-                    snackbarHostState.showSnackbar(resources.getString(R.string.profile_already_exists, storedProfile.name))
+                    snackbarHostState.showDismissibleSnackbar(
+                        resources.getString(R.string.profile_already_exists, storedProfile.name),
+                    )
                 }
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            snackbarHostState.showSnackbar(resources.getString(R.string.invalid_profile_link))
+            snackbarHostState.showDismissibleSnackbar(resources.getString(R.string.invalid_profile_link))
         } finally {
             onProfileUriConsumed(pending.sequence)
         }
@@ -267,7 +274,7 @@ internal fun TcptunScreen(
                     } else {
                         resources.getString(R.string.profile_already_exists, storedProfile.name)
                     }
-                    snackbarHostState.showSnackbar(message)
+                    snackbarHostState.showDismissibleSnackbar(message)
                 }
                 true
             },
@@ -319,10 +326,9 @@ internal fun TcptunScreen(
         save(ProfilesState(remaining, nextSelectedId))
         screenScope.launch {
             snackbarHostState.currentSnackbarData?.dismiss()
-            val result = snackbarHostState.showSnackbar(
+            val result = snackbarHostState.showDismissibleSnackbar(
                 message = "$profileDeletedPrefix ${profile.name}",
                 actionLabel = undoLabel,
-                duration = SnackbarDuration.Short,
             )
             if (result == SnackbarResult.ActionPerformed) {
                 val current = ProfileStore.load(context)
@@ -364,7 +370,7 @@ internal fun TcptunScreen(
                     onSettings = { showSettings = true },
                 )
             },
-            snackbarHost = { SnackbarHost(snackbarHostState) },
+            snackbarHost = { AutoDismissSnackbarHost(snackbarHostState) },
             floatingActionButton = {
                 MainActionsFab(
                     onImport = ::importFromClipboard,
@@ -476,7 +482,7 @@ internal fun TcptunScreen(
                     } else {
                         resources.getString(R.string.profile_already_exists, storedProfile.name)
                     }
-                    snackbarHostState.showSnackbar(message)
+                    snackbarHostState.showDismissibleSnackbar(message)
                 }
             },
             onDismiss = { pendingDeepLinkProfile = null },
@@ -484,6 +490,28 @@ internal fun TcptunScreen(
     }
 
 }
+
+@Composable
+private fun AutoDismissSnackbarHost(hostState: SnackbarHostState) {
+    val snackbarData = hostState.currentSnackbarData
+    LaunchedEffect(snackbarData) {
+        if (snackbarData != null) {
+            delay(SnackbarAutoDismissMillis)
+            if (hostState.currentSnackbarData === snackbarData) snackbarData.dismiss()
+        }
+    }
+    SnackbarHost(hostState)
+}
+
+private suspend fun SnackbarHostState.showDismissibleSnackbar(
+    message: String,
+    actionLabel: String? = null,
+): SnackbarResult = showSnackbar(
+    message = message,
+    actionLabel = actionLabel,
+    withDismissAction = true,
+    duration = SnackbarDuration.Indefinite,
+)
 
 @Composable
 private fun ConfirmProfileImportDialog(
