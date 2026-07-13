@@ -42,6 +42,7 @@ type AppIdentityProvider interface {
 type Engine struct { /* gomobile-owned runtime */ }
 
 func NewEngine() *Engine
+func ValidateConfig(configJson string) error
 func (e *Engine) SetLogCallback(cb LogCallback)
 func (e *Engine) SetStatusCallback(cb StatusCallback)
 func (e *Engine) SetSocketProtector(p SocketProtector)
@@ -196,7 +197,7 @@ For VLESS/VMess/Trojan, use the same protocol, transport, token/UUID/password, T
 3. Tap `+` to add a profile, or tap the pen icon to edit an existing profile.
 4. Tap `⇩` to import a URI share link, or enter profile name, server address, port, protocol, transport, UUID/password/token, SNI, path, TLS, REALITY, mux, upstream, and UDP settings manually.
 5. Tap a profile row to select it. The selected profile has a black bar on the left.
-6. Tap the share icon to export a URI link for the profile protocol.
+6. Tap the share icon to export a versioned HTTPS profile link.
 7. Tap the orange floating button and approve the Android VPN prompt.
 8. Open a browser and visit a site.
 9. Tap the bottom status line to view recent logs.
@@ -207,12 +208,33 @@ connections to the phone.
 
 Each row has a share action. Swipe a row to the left to delete it; the snackbar action can undo the deletion. Profiles are saved locally in `SharedPreferences`.
 
-Supported import/export URI schemes:
+Shared links use this envelope:
+
+```text
+https://tcptun.com/x/v1#p=<BASE64URL(profile-uri)>
+```
+
+`v1` is the envelope version. `p` is the UTF-8 profile URI encoded as unpadded
+Base64URL. The fragment keeps the profile payload out of ordinary HTTP requests
+and server access logs. The current version accepts these inner profile URI
+schemes:
 
 - `native://`
+- `tcptun://` (legacy alias for `native://`)
 - `vless://`
 - `vmess://` with Base64 JSON
 - `trojan://`
+
+The app still accepts the inner schemes directly for compatibility. Opening a
+validated `https://tcptun.com/x/v1` Android App Link launches TcpTun and shows a
+Material 3 confirmation before saving it. Existing equivalent profiles are
+selected instead of duplicated; imported links never start the VPN
+automatically. The domain must publish a matching release-signing association at
+`https://tcptun.com/.well-known/assetlinks.json` for verified App Link routing.
+
+Every system-link, clipboard, and QR import must pass URI decoding, Android
+profile validation, and the Go core's non-listening runtime construction before
+it is persisted. A rejected link leaves the connection list unchanged.
 
 Example VLESS/REALITY format:
 

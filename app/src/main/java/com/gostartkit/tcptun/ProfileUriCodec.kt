@@ -13,10 +13,15 @@ object ProfileUriCodec {
         val trimmed = raw.trim()
         return runCatching {
             when {
+                ProfileDeepLinkCodec.isSupportedLink(trimmed) -> {
+                    val profileUri = ProfileDeepLinkCodec.decode(trimmed).getOrThrow()
+                    decode(profileUri).getOrThrow()
+                }
                 trimmed.startsWith("vmess://", ignoreCase = true) -> decodeVMess(trimmed)
                 trimmed.startsWith("vless://", ignoreCase = true) -> decodeAuthorityProfile("vless", trimmed)
                 trimmed.startsWith("trojan://", ignoreCase = true) -> decodeAuthorityProfile("trojan", trimmed)
                 trimmed.startsWith("native://", ignoreCase = true) -> decodeAuthorityProfile("native", trimmed)
+                trimmed.startsWith("tcptun://", ignoreCase = true) -> decodeAuthorityProfile("native", trimmed)
                 trimmed.contains("{") && trimmed.contains("}") -> decodeJsonProfile(trimmed)
                 else -> error("unsupported profile URI")
             }
@@ -36,16 +41,35 @@ object ProfileUriCodec {
 
     private fun decodeAuthorityProfile(protocol: String, raw: String): AppConfig {
         val uri = Uri.parse(raw)
-        val token = uri.userInfo?.trim().orEmpty()
+        val encodedUserInfo = uri.encodedUserInfo.orEmpty()
+        val encodedCredential = if (encodedUserInfo.contains(':')) {
+            if (protocol == "trojan") encodedUserInfo.substringAfter(':') else encodedUserInfo.substringBefore(':')
+        } else {
+            encodedUserInfo
+        }
+        val token = Uri.decode(encodedCredential).trim()
         val host = uri.host?.trim().orEmpty()
         val port = uri.port
         if (host.isBlank()) error("missing server host")
         if (port !in 1..65535) error("missing or invalid server port")
         if (protocol != "native" && token.isBlank()) error("missing $protocol credential")
 
-        val type = uri.getQueryParameter("type").orEmpty().lowercase()
+        if (protocol == "native") {
+            val version = uri.getQueryParameter("v").orEmpty().trim()
+            if (version.isNotBlank() && version != TcptunUriVersion) error("unsupported tcptun URI version: $version")
+            val legacyProtocol = uri.getQueryParameter("protocol").orEmpty().trim().lowercase()
+            if (legacyProtocol.isNotBlank() && legacyProtocol != "native") {
+                error("tcptun URI protocol must be native")
+            }
+        }
+        val type = uri.getQueryParameter("type").orEmpty()
+            .ifBlank { uri.getQueryParameter("transport").orEmpty() }
+            .lowercase()
         val security = uri.getQueryParameter("security").orEmpty().lowercase()
+        if (security !in setOf("", "none", "tls", "reality")) error("unsupported security: $security")
         val path = uri.getQueryParameter("path") ?: uri.getQueryParameter("spx") ?: "/proxy"
+        val networks = parseNetworks(uri.getQueryParameter("network"))
+        val udp = if (networks != null) "udp" in networks else uri.getBooleanParameterCompat("udp", false)
         return AppConfig(
             id = UUID.randomUUID().toString(),
             name = uri.fragment?.ifBlank { null } ?: host,
@@ -54,11 +78,13 @@ object ProfileUriCodec {
             protocol = protocol,
             transport = transportFromType(type),
             token = token,
-            sni = uri.getQueryParameter("sni").orEmpty(),
+            sni = uri.getQueryParameter("sni").orEmpty()
+                .ifBlank { uri.getQueryParameter("serverName").orEmpty() },
             path = path.ifBlank { "/" },
             tls = security == "tls",
             tlsInsecure = uri.getBooleanParameterCompat("allowInsecure", false) ||
-                uri.getBooleanParameterCompat("tlsInsecure", false),
+                uri.getBooleanParameterCompat("tlsInsecure", false) ||
+                uri.getBooleanParameterCompat("insecure", false),
             tunnelSecurity = if (security == "reality") "reality" else "",
             flow = uri.getQueryParameter("flow").orEmpty(),
             realityPublicKey = uri.getQueryParameter("pbk").orEmpty(),
@@ -66,8 +92,13 @@ object ProfileUriCodec {
                 .ifBlank { uri.getQueryParameter("reality_short_id").orEmpty() },
             realityFingerprint = uri.getQueryParameter("fp").orEmpty(),
             realitySpiderX = uri.getQueryParameter("spx").orEmpty(),
-            mux = uri.getBooleanParameterCompat("mux", true),
-            udp = uri.getBooleanParameterCompat("udp", true),
+            mux = uri.getBooleanParameterCompat("mux", false),
+            muxMode = uri.getQueryParameter("mux_mode").orEmpty().trim().lowercase(),
+            muxMaxSessions = uri.getIntParameter("mux_max_sessions"),
+            muxMaxStreamsPerSession = uri.getIntParameter("mux_max_streams_per_session"),
+            muxWarmSpare = uri.getIntParameter("mux_warm_spares"),
+            tunnelNetwork = networks?.joinToString(",").orEmpty(),
+            udp = udp,
             upstreamProtocol = uri.getQueryParameter("upstream").orEmpty()
                 .ifBlank { uri.getQueryParameter("upstream_protocol").orEmpty() }
                 .ifBlank { "socks5" },
@@ -99,8 +130,20 @@ object ProfileUriCodec {
         if (host.isBlank()) error("missing VMess server host")
         val portNumber = port.toIntOrNull()
         if (portNumber == null || portNumber !in 1..65535) error("missing or invalid VMess server port")
-        val tls = obj.optString("tls").equals("tls", ignoreCase = true)
-        val security = obj.optString("security").lowercase()
+        val tlsValue = obj.optString("tls").trim().lowercase()
+        val security = when {
+            tlsValue == "reality" -> "reality"
+            tlsValue.isBlank() || tlsValue == "none" -> {
+                if (obj.optString("security").equals("reality", ignoreCase = true)) "reality" else ""
+            }
+            else -> "tls"
+        }
+        val networks = parseNetworks(obj.optString("tcptun_network").ifBlank { obj.optString("network") })
+        val mux = when {
+            obj.has("tcptun_mux") -> obj.optBoolean("tcptun_mux", false)
+            obj.has("mux") -> obj.optBoolean("mux", false)
+            else -> false
+        }
         return AppConfig(
             id = UUID.randomUUID().toString(),
             name = obj.optString("ps", host).ifBlank { host },
@@ -111,16 +154,24 @@ object ProfileUriCodec {
             token = obj.optString("id"),
             sni = obj.optString("sni").ifBlank { obj.optString("host") },
             path = obj.optString("path", "/proxy").ifBlank { "/proxy" },
-            tls = tls,
+            tls = security == "tls",
             tlsInsecure = obj.optBoolean("allowInsecure", false) || obj.optBoolean("tlsInsecure", false),
             tunnelSecurity = if (security == "reality") "reality" else "",
-            flow = obj.optString("flow"),
+            flow = obj.optString("tcptun_flow").ifBlank { obj.optString("flow") },
             realityPublicKey = obj.optString("pbk"),
             realityShortId = obj.optString("sid").ifBlank { obj.optString("reality_short_id") },
             realityFingerprint = obj.optString("fp"),
             realitySpiderX = obj.optString("spx"),
-            mux = obj.optBoolean("mux", true),
-            udp = obj.optBoolean("udp", true),
+            mux = mux,
+            muxMode = obj.optString("tcptun_mux_mode").ifBlank { obj.optString("mux_mode") }.lowercase(),
+            muxMaxSessions = obj.optInt("tcptun_mux_max_sessions", obj.optInt("mux_max_sessions", 0)),
+            muxMaxStreamsPerSession = obj.optInt(
+                "tcptun_mux_max_streams_per_session",
+                obj.optInt("mux_max_streams_per_session", 0),
+            ),
+            muxWarmSpare = obj.optInt("tcptun_mux_warm_spares", obj.optInt("mux_warm_spares", 0)),
+            tunnelNetwork = networks?.joinToString(",").orEmpty(),
+            udp = networks?.contains("udp") ?: obj.optBoolean("udp", false),
             upstreamProtocol = obj.optString("upstream").ifBlank {
                 obj.optString("upstream_protocol", "socks5")
             },
@@ -193,6 +244,11 @@ object ProfileUriCodec {
             realityFingerprint = obj.optString("reality_fingerprint"),
             realitySpiderX = obj.optString("reality_spider_x"),
             mux = obj.optBoolean("tunnel_mux", true),
+            muxMode = obj.optString("tunnel_mux_mode").lowercase(),
+            muxMaxSessions = obj.optInt("tunnel_mux_max_sessions", 0),
+            muxMaxStreamsPerSession = obj.optInt("tunnel_mux_max_streams_per_session", 0),
+            muxWarmSpare = obj.optInt("tunnel_mux_warm_spares", 0),
+            tunnelNetwork = obj.optString("tunnel_network"),
             udp = obj.optBoolean("enable_udp", true),
             upstreamProtocol = obj.optString("upstream_protocol", "socks5").ifBlank { "socks5" },
         )
@@ -215,14 +271,18 @@ object ProfileUriCodec {
             .put("type", "none")
             .put("host", config.sni)
             .put("path", config.path)
-            .put("tls", if (config.tls) "tls" else "")
+            .put("tls", if (config.tunnelSecurity == "reality") "reality" else if (config.tls) "tls" else "")
             .put("sni", config.sni)
             .put("allowInsecure", config.tlsInsecure)
-            .put("mux", config.mux)
-            .put("udp", config.udp)
-            .put("upstream", config.upstreamProtocol)
-        if (config.tunnelSecurity == "reality") obj.put("security", "reality")
-        putJsonIfNotBlank(obj, "flow", config.flow)
+            .put("tcptun_mux", config.mux)
+            .put("tcptun_network", config.effectiveTunnelNetworks().joinToString(","))
+        putJsonIfNotBlank(obj, "tcptun_mux_mode", config.muxMode)
+        if (config.muxMaxSessions > 0) obj.put("tcptun_mux_max_sessions", config.muxMaxSessions)
+        if (config.muxMaxStreamsPerSession > 0) {
+            obj.put("tcptun_mux_max_streams_per_session", config.muxMaxStreamsPerSession)
+        }
+        if (config.muxWarmSpare > 0) obj.put("tcptun_mux_warm_spares", config.muxWarmSpare)
+        putJsonIfNotBlank(obj, "tcptun_flow", config.flow)
         putJsonIfNotBlank(obj, "pbk", config.realityPublicKey)
         putJsonIfNotBlank(obj, "sid", config.realityShortId)
         putJsonIfNotBlank(obj, "fp", config.realityFingerprint)
@@ -232,6 +292,7 @@ object ProfileUriCodec {
 
     private fun commonParams(config: AppConfig): LinkedHashMap<String, String> {
         val params = linkedMapOf<String, String>()
+        if (config.protocol == "native") params["v"] = TcptunUriVersion
         val security = when {
             config.tunnelSecurity == "reality" -> "reality"
             config.tls -> "tls"
@@ -242,18 +303,22 @@ object ProfileUriCodec {
         if (security == "reality") {
             putIfNotBlank(params, "pbk", config.realityPublicKey)
             putIfNotBlank(params, "sid", config.realityShortId)
-            params["headerType"] = "none"
             putIfNotBlank(params, "fp", config.realityFingerprint)
             putIfNotBlank(params, "spx", config.realitySpiderX.ifBlank { config.path })
         }
         params["type"] = typeFromTransport(config.transport)
         putIfNotBlank(params, "flow", config.flow)
         putIfNotBlank(params, "sni", config.sni)
-        if (config.tlsInsecure) params["allowInsecure"] = "1"
+        if (config.tlsInsecure) params["insecure"] = "true"
         if (config.transport != "raw") putIfNotBlank(params, "path", config.path)
-        params["mux"] = if (config.mux) "1" else "0"
-        params["udp"] = if (config.udp) "1" else "0"
-        if (config.upstreamProtocol != "socks5") params["upstream"] = config.upstreamProtocol
+        params["network"] = config.effectiveTunnelNetworks().joinToString(",")
+        params["mux"] = config.mux.toString()
+        putIfNotBlank(params, "mux_mode", config.muxMode)
+        if (config.muxMaxSessions > 0) params["mux_max_sessions"] = config.muxMaxSessions.toString()
+        if (config.muxMaxStreamsPerSession > 0) {
+            params["mux_max_streams_per_session"] = config.muxMaxStreamsPerSession.toString()
+        }
+        if (config.muxWarmSpare > 0) params["mux_warm_spares"] = config.muxWarmSpare.toString()
         return params
     }
 
@@ -304,27 +369,45 @@ object ProfileUriCodec {
             "ws", "websocket" -> "ws"
             "h2", "http", "httpupgrade" -> "h2"
             "h3", "quic" -> "h3"
-            else -> "raw"
+            else -> error("unsupported transport: $type")
         }
     }
 
     private fun typeFromTransport(transport: String): String {
         return when (transport) {
-            "raw" -> "tcp"
+            "raw" -> "raw"
             "ws" -> "ws"
             "h2" -> "h2"
             "h3" -> "h3"
-            else -> "tcp"
+            else -> error("unsupported transport: $transport")
+        }
+    }
+
+    private fun parseNetworks(value: String?): Set<String>? {
+        val text = value?.trim().orEmpty()
+        if (text.isBlank()) return null
+        return text.split(',').mapTo(linkedSetOf()) { network ->
+            network.trim().lowercase().also {
+                if (it !in setOf("tcp", "udp")) error("unsupported network: $it")
+            }
+        }.also {
+            if (it.isEmpty()) error("network must not be empty")
         }
     }
 
     private fun Uri.getBooleanParameterCompat(name: String, defaultValue: Boolean): Boolean {
         return when (getQueryParameter(name)?.lowercase()) {
             null, "" -> defaultValue
-            "1", "true", "yes" -> true
-            "0", "false", "no" -> false
-            else -> defaultValue
+            "1", "t", "true", "yes" -> true
+            "0", "f", "false", "no" -> false
+            else -> error("invalid boolean parameter: $name")
         }
+    }
+
+    private fun Uri.getIntParameter(name: String): Int {
+        val value = getQueryParameter(name)?.trim().orEmpty()
+        if (value.isBlank()) return 0
+        return value.toIntOrNull() ?: error("invalid integer parameter: $name")
     }
 
     private fun putIfNotBlank(params: MutableMap<String, String>, key: String, value: String) {
@@ -341,6 +424,7 @@ object ProfileUriCodec {
     }
 
     private const val AndroidVpnInboundTag = "android-vpn"
+    private const val TcptunUriVersion = "1"
 
     private fun encodeComponent(value: String): String {
         return URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")

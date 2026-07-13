@@ -29,6 +29,10 @@
     <string name="profile_deleted">已删除 %1$s</string>
     <string name="profile_deleted_prefix">已删除</string>
     <string name="profile_imported">已导入 %1$s</string>
+    <string name="profile_already_exists">%1$s 已在连接列表中</string>
+    <string name="invalid_profile_link">该链接不是有效的受支持配置。</string>
+    <string name="confirm_profile_import">添加此配置？</string>
+    <string name="profile_import_confirmation_note">请仅添加来自可信来源的配置；添加后不会自动连接。</string>
     <string name="empty_clipboard">剪切板为空</string>
     <string name="invalid_clipboard_data">剪切板中没有可导入的配置或 tcptun 配置。</string>
     <string name="empty_profiles">还没有配置项</string>

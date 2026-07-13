@@ -29,6 +29,10 @@
     <string name="profile_deleted">Deleted %1$s</string>
     <string name="profile_deleted_prefix">Deleted</string>
     <string name="profile_imported">Imported %1$s</string>
+    <string name="profile_already_exists">%1$s is already in the connection list</string>
+    <string name="invalid_profile_link">This link is not a valid supported profile.</string>
+    <string name="confirm_profile_import">Add this profile?</string>
+    <string name="profile_import_confirmation_note">Only add profiles from a source you trust. The connection will not start automatically.</string>
     <string name="empty_clipboard">Clipboard is empty</string>
     <string name="invalid_clipboard_data">The clipboard does not contain a supported profile or tcptun configuration.</string>
     <string name="empty_profiles">No profiles yet</string>

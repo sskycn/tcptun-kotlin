@@ -46,6 +46,31 @@ class AndroidBridgeContractTest {
     }
 
     @Test
+    fun currentBridgeValidatesWithoutStartingRuntime() {
+        Androidbridge.validateConfig(
+            """{
+                "inbounds":[{"tag":"local","type":"mixed","listen":"127.0.0.1","port":18080,"network":["tcp"],"outbound":"proxy"}],
+                "outbounds":[{"tag":"proxy","type":"native","server":"203.0.113.10","port":9443,"token":"secret","network":["tcp"],"transport":{"type":"raw"}}],
+                "route":{"default_outbound":"proxy"}
+            }""".trimIndent(),
+        )
+    }
+
+    @Test
+    fun currentBridgeRejectsInvalidRuntimeConfig() {
+        val result = runCatching {
+            Androidbridge.validateConfig(
+                """{
+                    "inbounds":[{"tag":"local","type":"mixed","listen":"127.0.0.1","port":18080,"network":["tcp"],"outbound":"missing"}],
+                    "outbounds":[],
+                    "route":{"default_outbound":"missing"}
+                }""".trimIndent(),
+            )
+        }
+        assertTrue(result.isFailure)
+    }
+
+    @Test
     fun stateFlowDropsStaleEngineAndSequenceEvents() {
         val firstEpoch = TcptunState.beginBridgeSession()
         val accepted = TcptunState.applyBridgeStatusEvent(
@@ -138,7 +163,7 @@ class AndroidBridgeContractTest {
             token = "share-secret",
             protocol = "native",
         )
-        val expectedUri = ProfileUriCodec.encode(profile)
+        val expectedUri = ProfileDeepLinkCodec.encode(requireNotNull(ProfileUriCodec.encode(profile)))
         val intent = createProfileShareIntent(profile)
 
         assertEquals(Intent.ACTION_SEND, intent.action)
@@ -158,7 +183,7 @@ class AndroidBridgeContractTest {
             token = "wechat-qr-secret",
             protocol = "native",
         )
-        val expectedUri = requireNotNull(ProfileUriCodec.encode(profile))
+        val expectedUri = ProfileDeepLinkCodec.encode(requireNotNull(ProfileUriCodec.encode(profile)))
         val logo = requireNotNull(ContextCompat.getDrawable(context, R.mipmap.ic_launcher))
         val bitmap = generateQrCodeBitmap(expectedUri, 768, logo)
 

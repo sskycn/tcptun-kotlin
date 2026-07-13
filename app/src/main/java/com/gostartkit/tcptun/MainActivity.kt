@@ -94,6 +94,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -101,6 +102,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.tcptun.client.ui.theme.TcpTunTheme
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import org.json.JSONObject
 import java.net.InetSocketAddress
@@ -110,26 +112,51 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+    private var profileIntentSequence = 0L
+    private var pendingProfileUri by mutableStateOf<PendingProfileUri?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         setTheme(R.style.Theme_TcpTun)
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) handleProfileIntent(intent)
         enableEdgeToEdge()
         setContent {
             TcpTunTheme(dynamicColor = true) {
-                TcptunScreen()
+                TcptunScreen(
+                    pendingProfileUri = pendingProfileUri,
+                    onProfileUriConsumed = { sequence ->
+                        if (pendingProfileUri?.sequence == sequence) pendingProfileUri = null
+                    },
+                )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleProfileIntent(intent)
+    }
+
+    private fun handleProfileIntent(intent: Intent?) {
+        val value = profileUriFromIntent(intent) ?: return
+        pendingProfileUri = PendingProfileUri(++profileIntentSequence, value)
     }
 }
 
 @Composable
-fun TcptunScreen() {
+internal fun TcptunScreen(
+    pendingProfileUri: PendingProfileUri? = null,
+    onProfileUriConsumed: (Long) -> Unit = {},
+) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val emptyClipboard = stringResource(R.string.empty_clipboard)
     val invalidClipboard = stringResource(R.string.invalid_clipboard_data)
     val profileDeletedPrefix = stringResource(R.string.profile_deleted_prefix)
     val undoLabel = stringResource(R.string.undo)
     var state by remember { mutableStateOf(ProfileStore.load(context)) }
+    var pendingDeepLinkProfile by remember { mutableStateOf<AppConfig?>(null) }
     var pendingConfig by remember { mutableStateOf<AppConfig?>(null) }
     var pendingNotificationConfig by remember { mutableStateOf<AppConfig?>(null) }
     var editingProfile by remember { mutableStateOf<AppConfig?>(null) }
@@ -171,15 +198,56 @@ fun TcptunScreen() {
         state = ProfileStore.load(context)
     }
 
+    fun importValidatedProfile(profile: AppConfig): Pair<AppConfig, Boolean> {
+        validateImportedProfile(profile)
+        val identity = requireNotNull(profileConnectionIdentity(profile))
+        val existing = state.profiles.firstOrNull { current ->
+            profileConnectionIdentity(current) == identity
+        }
+        return if (existing == null) {
+            save(ProfilesState(state.profiles + profile, profile.id))
+            profile to true
+        } else {
+            save(state.copy(selectedId = existing.id))
+            existing to false
+        }
+    }
+
+    LaunchedEffect(pendingProfileUri?.sequence) {
+        val pending = pendingProfileUri ?: return@LaunchedEffect
+        try {
+            val profile = ProfileUriCodec.decode(pending.value).getOrThrow()
+            if (ProfileDeepLinkCodec.isSupportedLink(pending.value)) {
+                validateImportedProfile(profile)
+                pendingDeepLinkProfile = profile
+            } else {
+                val (storedProfile, added) = importValidatedProfile(profile)
+                if (added) {
+                    snackbarHostState.showSnackbar(resources.getString(R.string.profile_imported, storedProfile.name))
+                } else {
+                    snackbarHostState.showSnackbar(resources.getString(R.string.profile_already_exists, storedProfile.name))
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            snackbarHostState.showSnackbar(resources.getString(R.string.invalid_profile_link))
+        } finally {
+            onProfileUriConsumed(pending.sequence)
+        }
+    }
+
     fun importFromClipboard() {
         val link = clipboardText(context).trim()
         if (link.isBlank()) {
             TcptunState.error(emptyClipboard)
             return
         }
-        ProfileUriCodec.decode(link).fold(
-            onSuccess = { profile ->
-                save(ProfilesState(state.profiles + profile, profile.id))
+        runCatching {
+            val profile = ProfileUriCodec.decode(link).getOrThrow()
+            importValidatedProfile(profile)
+        }.fold(
+            onSuccess = {
                 clearClipboardText(context, link)
             },
             onFailure = { TcptunState.error(invalidClipboard) },
@@ -187,19 +255,24 @@ fun TcptunScreen() {
     }
 
     fun importScannedProfile(link: String): Boolean {
-        var imported = false
-        ProfileUriCodec.decode(link.trim()).fold(
-            onSuccess = { profile ->
-                save(ProfilesState(state.profiles + profile, profile.id))
+        return runCatching {
+            val profile = ProfileUriCodec.decode(link.trim()).getOrThrow()
+            importValidatedProfile(profile)
+        }.fold(
+            onSuccess = { (storedProfile, added) ->
                 showQrScanner = false
-                imported = true
                 screenScope.launch {
-                    snackbarHostState.showSnackbar(context.getString(R.string.profile_imported, profile.name))
+                    val message = if (added) {
+                        resources.getString(R.string.profile_imported, storedProfile.name)
+                    } else {
+                        resources.getString(R.string.profile_already_exists, storedProfile.name)
+                    }
+                    snackbarHostState.showSnackbar(message)
                 }
+                true
             },
-            onFailure = {},
+            onFailure = { false },
         )
-        return imported
     }
 
     fun startProfile(config: AppConfig) {
@@ -391,6 +464,63 @@ fun TcptunScreen() {
         )
     }
 
+    pendingDeepLinkProfile?.let { profile ->
+        ConfirmProfileImportDialog(
+            profile = profile,
+            onConfirm = {
+                pendingDeepLinkProfile = null
+                val (storedProfile, added) = importValidatedProfile(profile)
+                screenScope.launch {
+                    val message = if (added) {
+                        resources.getString(R.string.profile_imported, storedProfile.name)
+                    } else {
+                        resources.getString(R.string.profile_already_exists, storedProfile.name)
+                    }
+                    snackbarHostState.showSnackbar(message)
+                }
+            },
+            onDismiss = { pendingDeepLinkProfile = null },
+        )
+    }
+
+}
+
+@Composable
+private fun ConfirmProfileImportDialog(
+    profile: AppConfig,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.confirm_profile_import)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(profile.name, style = MaterialTheme.typography.titleMedium)
+                Text(profile.maskedAddress(), style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    profile.label(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    stringResource(R.string.profile_import_confirmation_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = onConfirm) {
+                Text(stringResource(R.string.add_profile))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        },
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -629,7 +759,9 @@ private fun ProfileQrCodeDialog(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
-    val uri = remember(profile) { requireNotNull(ProfileUriCodec.encode(profile)) }
+    val uri = remember(profile) {
+        ProfileDeepLinkCodec.encode(requireNotNull(ProfileUriCodec.encode(profile)))
+    }
     val logo = remember(context) { ContextCompat.getDrawable(context, R.mipmap.ic_launcher) }
     val bitmap = remember(uri, logo) { generateQrCodeBitmap(uri, 768, logo) }
 
@@ -1831,7 +1963,8 @@ private fun shareProfile(context: Context, profile: AppConfig) {
 }
 
 internal fun createProfileShareIntent(profile: AppConfig): Intent {
-    val uri = requireNotNull(ProfileUriCodec.encode(profile)) { "profile cannot be encoded as a URI" }
+    val profileUri = requireNotNull(ProfileUriCodec.encode(profile)) { "profile cannot be encoded as a URI" }
+    val uri = ProfileDeepLinkCodec.encode(profileUri)
     return Intent(Intent.ACTION_SEND)
         .setType("text/plain")
         .putExtra(Intent.EXTRA_TEXT, uri)

@@ -2,6 +2,22 @@ package com.tcptun.client
 
 import java.lang.reflect.Proxy
 
+/** Validates through the gomobile core without creating or starting a service. */
+internal fun validateTcptunConfig(configJson: String) {
+    try {
+        val bridgeClass = Class.forName("androidbridge.Androidbridge")
+        bridgeClass.getMethod("validateConfig", String::class.java).invoke(null, configJson)
+    } catch (err: ReflectiveOperationException) {
+        val cause = err.cause ?: err
+        throw IllegalArgumentException(cause.message ?: cause.javaClass.name, cause)
+    } catch (err: LinkageError) {
+        throw IllegalStateException(
+            "androidbridge validation API is unavailable. Rebuild app/libs/androidbridge.aar.",
+            err,
+        )
+    }
+}
+
 interface TcptunBridge {
     fun start(configJson: String)
     fun stop()

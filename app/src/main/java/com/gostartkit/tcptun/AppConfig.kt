@@ -24,6 +24,11 @@ data class AppConfig(
     val realityFingerprint: String = "",
     val realitySpiderX: String = "",
     val mux: Boolean = true,
+    val muxMode: String = "",
+    val muxMaxSessions: Int = 0,
+    val muxMaxStreamsPerSession: Int = 0,
+    val muxWarmSpare: Int = 0,
+    val tunnelNetwork: String = "",
     val udp: Boolean = true,
     val upstreamProtocol: String = "socks5",
     val rawConfigJson: String = "",
@@ -49,6 +54,29 @@ data class AppConfig(
         if (protocol !in Protocols) return "unsupported protocol: $protocol"
         if (transport !in Transports) return "unsupported transport: $transport"
         if (upstreamProtocol !in UpstreamProtocols) return "unsupported upstream protocol: $upstreamProtocol"
+        val outboundNetworks = runCatching { effectiveTunnelNetworks() }
+            .getOrElse { return it.message ?: "invalid tunnel network" }
+        if (outboundNetworks.isEmpty()) return "tunnel network must not be empty"
+        val normalizedMuxMode = muxMode.trim().lowercase()
+        if (normalizedMuxMode !in MuxModes) return "unsupported mux mode: $muxMode"
+        if (!mux && (normalizedMuxMode.isNotBlank() || muxMaxSessions != 0 || muxMaxStreamsPerSession != 0 || muxWarmSpare != 0)) {
+            return "mux must be enabled when mux pool limits are configured"
+        }
+        if (muxMaxSessions !in 0..32) return "mux max sessions must be between 1 and 32 when set"
+        if (muxMaxStreamsPerSession !in 0..4096) return "mux max streams must be between 1 and 4096 when set"
+        val effectiveMuxSessions = muxMaxSessions.takeIf { it > 0 }
+            ?: if (normalizedMuxMode == "quic") 1 else 4
+        if (muxWarmSpare !in 0 until effectiveMuxSessions) {
+            return "mux warm spares must be between 0 and max sessions minus 1"
+        }
+        if (normalizedMuxMode == "quic") {
+            if (protocol != "native") return "QUIC mux requires native protocol"
+            if (transport != "raw") return "QUIC mux requires raw transport"
+            if (!tls) return "QUIC mux requires TLS"
+            if (tunnelSecurity.isNotBlank()) return "QUIC mux cannot be combined with tunnel security"
+            if (muxMaxSessions > 1) return "QUIC mux supports at most one session"
+            if (muxWarmSpare != 0) return "QUIC mux does not support warm spares"
+        }
         if (path.isBlank()) return "path is required"
         return null
     }
@@ -95,6 +123,7 @@ data class AppConfig(
             .put("server", serverHost.trim().removeSurrounding("[", "]"))
             .put("port", serverPort.trim().toInt())
             .put("flow", flow.trim())
+            .put("network", JSONArray().apply { effectiveTunnelNetworks().forEach(::put) })
             .put(
                 "transport",
                 JSONObject()
@@ -104,7 +133,15 @@ data class AppConfig(
                     .put("server_name", sni.trim())
                     .put("insecure", tlsInsecure),
             )
-            .put("mux", JSONObject().put("enabled", mux))
+            .put(
+                "mux",
+                JSONObject().put("enabled", mux).apply {
+                    muxMode.trim().takeIf { it.isNotBlank() }?.let { put("mode", it.lowercase()) }
+                    if (muxMaxSessions > 0) put("max_sessions", muxMaxSessions)
+                    if (muxMaxStreamsPerSession > 0) put("max_streams_per_session", muxMaxStreamsPerSession)
+                    if (muxWarmSpare > 0) put("warm_spares", muxWarmSpare)
+                },
+            )
         when (protocol) {
             "vless", "vmess" -> proxy.put("uuid", token.trim())
             "trojan" -> proxy.put("password", token.trim())
@@ -320,10 +357,22 @@ data class AppConfig(
         return if (trimmed.startsWith("/")) trimmed else "/$trimmed"
     }
 
+    internal fun effectiveTunnelNetworks(): List<String> {
+        if (tunnelNetwork.isBlank()) return if (udp) listOf("tcp", "udp") else listOf("tcp")
+        return tunnelNetwork.split(',').map { value ->
+            value.trim().lowercase().also { network ->
+                require(network in setOf("tcp", "udp")) { "unsupported tunnel network: $network" }
+            }
+        }.also { networks ->
+            require(networks.isNotEmpty() && networks.none(String::isBlank)) { "tunnel network must not be empty" }
+        }.distinct()
+    }
+
     companion object {
         val Protocols = listOf("native", "vless", "vmess", "trojan")
         val Transports = listOf("raw", "ws", "h2", "h3")
         val UpstreamProtocols = listOf("socks5", "mixed")
+        val MuxModes = listOf("", "group", "quic")
         private const val AndroidVpnInboundTag = "android-vpn"
         private val WildcardHosts = setOf("0.0.0.0", "::", "*")
         private val LoopbackHosts = setOf("127.0.0.1", "::1", "localhost")
@@ -353,6 +402,11 @@ data class AppConfig(
                 realityFingerprint = obj.optString("realityFingerprint"),
                 realitySpiderX = obj.optString("realitySpiderX"),
                 mux = obj.optBoolean("mux", true),
+                muxMode = obj.optString("muxMode"),
+                muxMaxSessions = obj.optInt("muxMaxSessions", 0),
+                muxMaxStreamsPerSession = obj.optInt("muxMaxStreamsPerSession", 0),
+                muxWarmSpare = obj.optInt("muxWarmSpare", 0),
+                tunnelNetwork = obj.optString("tunnelNetwork"),
                 udp = obj.optBoolean("udp", true),
                 upstreamProtocol = obj.optString("upstreamProtocol", "socks5"),
                 rawConfigJson = obj.optString("rawConfigJson"),
@@ -420,6 +474,11 @@ data class AppConfig(
             .put("realityFingerprint", realityFingerprint)
             .put("realitySpiderX", realitySpiderX)
             .put("mux", mux)
+            .put("muxMode", muxMode)
+            .put("muxMaxSessions", muxMaxSessions)
+            .put("muxMaxStreamsPerSession", muxMaxStreamsPerSession)
+            .put("muxWarmSpare", muxWarmSpare)
+            .put("tunnelNetwork", tunnelNetwork)
             .put("udp", udp)
             .put("upstreamProtocol", upstreamProtocol)
             .put("rawConfigJson", rawConfigJson)
