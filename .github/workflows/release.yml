@@ -1,0 +1,138 @@
+name: Release Android APK
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Read version from tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${GITHUB_REF_NAME#v}"
+          if [[ ! "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag must use semantic version format, for example v1.2.3 or v1.2.3-rc.1"
+            exit 1
+          fi
+
+          major=$((10#${BASH_REMATCH[1]}))
+          minor=$((10#${BASH_REMATCH[2]}))
+          patch=$((10#${BASH_REMATCH[3]}))
+          if (( minor > 999 || patch > 999 )); then
+            echo "::error::Minor and patch versions must be no greater than 999"
+            exit 1
+          fi
+
+          version_code=$((major * 1000000 + minor * 1000 + patch))
+          if (( version_code < 1 || version_code > 2100000000 )); then
+            echo "::error::Version produces an invalid Android versionCode: $version_code"
+            exit 1
+          fi
+
+          echo "name=$version" >> "$GITHUB_OUTPUT"
+          echo "code=$version_code" >> "$GITHUB_OUTPUT"
+
+      - name: Check signing secrets
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.TCPTUN_RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.TCPTUN_RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.TCPTUN_RELEASE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.TCPTUN_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          missing=()
+          [[ -n "$KEYSTORE_BASE64" ]] || missing+=(TCPTUN_RELEASE_KEYSTORE_BASE64)
+          [[ -n "$STORE_PASSWORD" ]] || missing+=(TCPTUN_RELEASE_STORE_PASSWORD)
+          [[ -n "$KEY_ALIAS" ]] || missing+=(TCPTUN_RELEASE_KEY_ALIAS)
+          [[ -n "$KEY_PASSWORD" ]] || missing+=(TCPTUN_RELEASE_KEY_PASSWORD)
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error::Missing GitHub Actions secrets: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Restore release keystore
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.TCPTUN_RELEASE_KEYSTORE_BASE64 }}
+        run: printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/tcptun-release.jks"
+
+      - name: Install Android NDK
+        shell: bash
+        run: sdkmanager "ndk;29.0.14206865"
+
+      - name: Build signed release APK
+        shell: bash
+        env:
+          TCPTUN_RELEASE_STORE_FILE: ${{ runner.temp }}/tcptun-release.jks
+          TCPTUN_RELEASE_STORE_PASSWORD: ${{ secrets.TCPTUN_RELEASE_STORE_PASSWORD }}
+          TCPTUN_RELEASE_KEY_ALIAS: ${{ secrets.TCPTUN_RELEASE_KEY_ALIAS }}
+          TCPTUN_RELEASE_KEY_PASSWORD: ${{ secrets.TCPTUN_RELEASE_KEY_PASSWORD }}
+        run: |
+          ./gradlew :app:assembleRelease \
+            -PreleaseVersionName=${{ steps.version.outputs.name }} \
+            -PreleaseVersionCode=${{ steps.version.outputs.code }}
+
+      - name: Prepare release files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          apk_name="tcptun-${GITHUB_REF_NAME}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "dist/$apk_name"
+          cd dist
+          sha256sum "$apk_name" > "$apk_name.sha256"
+
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+            exit 0
+          fi
+
+          prerelease=()
+          [[ "$VERSION_NAME" == *-* ]] && prerelease+=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --generate-notes \
+            --title "$GITHUB_REF_NAME" \
+            "${prerelease[@]}"

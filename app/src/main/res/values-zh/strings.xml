@@ -54,6 +54,12 @@
     <string name="socks_listen_all">监听所有网卡</string>
     <string name="route_external_sources">外部 SOCKS 客户端使用路由规则</string>
     <string name="direct_first">直连优先</string>
+    <string name="probe_timeout">探测超时</string>
+    <string name="failure_threshold">失败阈值</string>
+    <string name="positive_ttl">成功缓存时间</string>
+    <string name="negative_ttl">失败缓存时间</string>
+    <string name="duration_error">请输入 120ms、10s 或 30m 等时长。</string>
+    <string name="failure_threshold_error">请输入 1 到 100 之间的值。</string>
     <string name="direct_first_note">对生成的配置先尝试 TCP 直连，直连失败时回落到隧道。UDP 仍使用隧道；完整 JSON 配置保留自身路由。</string>
     <string name="route_management">路由管理</string>
     <string name="route_management_note">生成配置会从上到下匹配规则，离开页面时应用变更。完整 JSON 配置保留自身路由。</string>

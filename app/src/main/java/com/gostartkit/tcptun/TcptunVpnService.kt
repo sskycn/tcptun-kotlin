@@ -38,9 +38,17 @@ data class RuntimeSettings(
     val socksListenAll: Boolean = false,
     val routeExternalSources: Boolean = false,
     val directFirst: Boolean = false,
+    val probeTimeout: String = TcptunVpnService.DEFAULT_PROBE_TIMEOUT,
+    val failureThreshold: Int = TcptunVpnService.DEFAULT_FAILURE_THRESHOLD,
+    val positiveTtl: String = TcptunVpnService.DEFAULT_POSITIVE_TTL,
+    val negativeTtl: String = TcptunVpnService.DEFAULT_NEGATIVE_TTL,
     val socksUsername: String = "",
     val socksPassword: String = "",
 )
+
+private val DurationPattern = Regex("^(?:\\d+(?:\\.\\d+)?(?:ns|us|µs|μs|ms|s|m|h))+$")
+
+internal fun isValidDuration(value: String): Boolean = DurationPattern.matches(value.trim())
 
 private data class UpstreamProbeTarget(
     val label: String,
@@ -1099,6 +1107,11 @@ class TcptunVpnService : VpnService() {
         const val LOCAL_SOCKS_HOST = "127.0.0.1"
         const val DEFAULT_SOCKS_PORT = 1080
         const val DEFAULT_VPN_MTU = 1400
+        const val DEFAULT_PROBE_TIMEOUT = "120ms"
+        const val DEFAULT_FAILURE_THRESHOLD = 1
+        const val DEFAULT_POSITIVE_TTL = "30m"
+        const val DEFAULT_NEGATIVE_TTL = "10m"
+        const val MAX_FAILURE_THRESHOLD = 100
         private const val VPN_DISPLAY_NAME = "TcpTun VPN"
         private const val CHANNEL_ID = "tcptun_vpn_silent"
         private const val NOTIFICATION_ID = 1001
@@ -1133,6 +1146,10 @@ class TcptunVpnService : VpnService() {
         private const val KEY_RUNTIME_SOCKS_LISTEN_ALL = "runtimeSocksListenAll"
         private const val KEY_RUNTIME_ROUTE_EXTERNAL_SOURCES = "runtimeRouteExternalSources"
         private const val KEY_RUNTIME_DIRECT_FIRST = "runtimeDirectFirst"
+        private const val KEY_RUNTIME_PROBE_TIMEOUT = "runtimeProbeTimeout"
+        private const val KEY_RUNTIME_FAILURE_THRESHOLD = "runtimeFailureThreshold"
+        private const val KEY_RUNTIME_POSITIVE_TTL = "runtimePositiveTtl"
+        private const val KEY_RUNTIME_NEGATIVE_TTL = "runtimeNegativeTtl"
         private const val KEY_RUNTIME_SOCKS_USERNAME = "runtimeSocksUsername"
         private const val KEY_RUNTIME_SOCKS_PASSWORD = "runtimeSocksPassword"
         @Volatile private var denseHealthCheckUntilMs = 0L
@@ -1152,11 +1169,14 @@ class TcptunVpnService : VpnService() {
                     EXTRA_CONFIG,
                     effectiveConfig.toBridgeJson(
                         localListenAddr,
-                        powerSavingMode = runtimeSettings.powerSavingMode,
                         socks5Username = runtimeSettings.socksUsername,
                         socks5Password = runtimeSettings.socksPassword,
                         routeExternalSources = runtimeSettings.routeExternalSources,
                         directFirst = runtimeSettings.directFirst,
+                        probeTimeout = runtimeSettings.probeTimeout,
+                        failureThreshold = runtimeSettings.failureThreshold,
+                        positiveTtl = runtimeSettings.positiveTtl,
+                        negativeTtl = runtimeSettings.negativeTtl,
                         managedRouteRules = RouteRuleStore.load(context),
                     ),
                 )
@@ -1210,6 +1230,14 @@ class TcptunVpnService : VpnService() {
                 socksListenAll = prefs.getBoolean(KEY_RUNTIME_SOCKS_LISTEN_ALL, false),
                 routeExternalSources = prefs.getBoolean(KEY_RUNTIME_ROUTE_EXTERNAL_SOURCES, false),
                 directFirst = prefs.getBoolean(KEY_RUNTIME_DIRECT_FIRST, false),
+                probeTimeout = prefs.getString(KEY_RUNTIME_PROBE_TIMEOUT, DEFAULT_PROBE_TIMEOUT)
+                    .orEmpty().trim().takeIf(::isValidDuration).orEmpty().ifBlank { DEFAULT_PROBE_TIMEOUT },
+                failureThreshold = prefs.getInt(KEY_RUNTIME_FAILURE_THRESHOLD, DEFAULT_FAILURE_THRESHOLD)
+                    .coerceIn(1, MAX_FAILURE_THRESHOLD),
+                positiveTtl = prefs.getString(KEY_RUNTIME_POSITIVE_TTL, DEFAULT_POSITIVE_TTL)
+                    .orEmpty().trim().takeIf(::isValidDuration).orEmpty().ifBlank { DEFAULT_POSITIVE_TTL },
+                negativeTtl = prefs.getString(KEY_RUNTIME_NEGATIVE_TTL, DEFAULT_NEGATIVE_TTL)
+                    .orEmpty().trim().takeIf(::isValidDuration).orEmpty().ifBlank { DEFAULT_NEGATIVE_TTL },
                 socksUsername = prefs.getString(KEY_RUNTIME_SOCKS_USERNAME, "").orEmpty(),
                 socksPassword = prefs.getString(KEY_RUNTIME_SOCKS_PASSWORD, "").orEmpty(),
             )
@@ -1219,12 +1247,20 @@ class TcptunVpnService : VpnService() {
             val normalizedPowerSavingMode = settings.powerSavingMode
             val normalizedUdpEnabled = settings.udpEnabled && !normalizedPowerSavingMode
             val normalizedSocksPort = settings.socksPort.coerceIn(1, 65535)
+            val normalizedProbeTimeout = settings.probeTimeout.trim().takeIf(::isValidDuration) ?: DEFAULT_PROBE_TIMEOUT
+            val normalizedFailureThreshold = settings.failureThreshold.coerceIn(1, MAX_FAILURE_THRESHOLD)
+            val normalizedPositiveTtl = settings.positiveTtl.trim().takeIf(::isValidDuration) ?: DEFAULT_POSITIVE_TTL
+            val normalizedNegativeTtl = settings.negativeTtl.trim().takeIf(::isValidDuration) ?: DEFAULT_NEGATIVE_TTL
             val normalizedSettings = settings.copy(
                 udpEnabled = normalizedUdpEnabled,
                 powerSavingMode = normalizedPowerSavingMode,
                 socksPort = normalizedSocksPort,
                 routeExternalSources = settings.routeExternalSources,
                 directFirst = settings.directFirst,
+                probeTimeout = normalizedProbeTimeout,
+                failureThreshold = normalizedFailureThreshold,
+                positiveTtl = normalizedPositiveTtl,
+                negativeTtl = normalizedNegativeTtl,
                 socksUsername = settings.socksUsername,
                 socksPassword = settings.socksPassword,
             )
@@ -1237,6 +1273,10 @@ class TcptunVpnService : VpnService() {
                 .putBoolean(KEY_RUNTIME_SOCKS_LISTEN_ALL, settings.socksListenAll)
                 .putBoolean(KEY_RUNTIME_ROUTE_EXTERNAL_SOURCES, settings.routeExternalSources)
                 .putBoolean(KEY_RUNTIME_DIRECT_FIRST, settings.directFirst)
+                .putString(KEY_RUNTIME_PROBE_TIMEOUT, normalizedProbeTimeout)
+                .putInt(KEY_RUNTIME_FAILURE_THRESHOLD, normalizedFailureThreshold)
+                .putString(KEY_RUNTIME_POSITIVE_TTL, normalizedPositiveTtl)
+                .putString(KEY_RUNTIME_NEGATIVE_TTL, normalizedNegativeTtl)
                 .putString(KEY_RUNTIME_SOCKS_USERNAME, settings.socksUsername)
                 .putString(KEY_RUNTIME_SOCKS_PASSWORD, settings.socksPassword)
                 .apply()
@@ -1249,7 +1289,7 @@ class TcptunVpnService : VpnService() {
                     localProxyPort = normalizedSocksPort,
                 )
             }
-            TcptunState.appendLog("runtime settings saved: socks=${localSocksListenAddr(normalizedSettings)} mtu=${normalizedSettings.mtu} udp=${normalizedSettings.udpEnabled} direct-first=${normalizedSettings.directFirst}")
+            TcptunState.appendLog("runtime settings saved: socks=${localSocksListenAddr(normalizedSettings)} mtu=${normalizedSettings.mtu} udp=${normalizedSettings.udpEnabled} direct-first=${normalizedSettings.directFirst} probe-timeout=${normalizedSettings.probeTimeout} failure-threshold=${normalizedSettings.failureThreshold} positive-ttl=${normalizedSettings.positiveTtl} negative-ttl=${normalizedSettings.negativeTtl}")
         }
 
         fun localSocksListenAddr(settings: RuntimeSettings): String {

@@ -169,12 +169,21 @@ class AndroidBridgeContractTest {
         ).toBridgeJson(
             localListenAddr = "127.0.0.1:18080",
             directFirst = true,
+            probeTimeout = "1250ms",
+            failureThreshold = 3,
+            positiveTtl = "45m",
+            negativeTtl = "15m",
         )
 
         val root = JSONObject(config)
         assertFalse(root.has("mode"))
         assertTrue(root.has("inbounds"))
         assertTrue(root.has("outbounds"))
+        val autoOutbound = root.getJSONArray("outbounds").getJSONObject(2)
+        assertEquals("1250ms", autoOutbound.getString("probe_timeout"))
+        assertEquals(3, autoOutbound.getInt("failure_threshold"))
+        assertEquals("45m", autoOutbound.getString("positive_ttl"))
+        assertEquals("15m", autoOutbound.getString("negative_ttl"))
         val rules = root.getJSONObject("route").getJSONArray("rules")
         assertEquals("proxy", rules.getJSONObject(0).getString("outbound"))
         assertEquals("auto", rules.getJSONObject(1).getString("outbound"))

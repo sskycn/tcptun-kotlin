@@ -144,6 +144,36 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 Debug builds use `com.tcptun.client.debug`, so they can coexist with a signed
 release installation.
 
+## Publish a GitHub release
+
+The `Release Android APK` GitHub Actions workflow builds and publishes a signed
+APK whenever a semantic-version tag beginning with `v` is pushed, for example
+`v1.2.3` or `v1.2.3-rc.1`. The tag is used as the app version name, and release
+notes are generated automatically by GitHub.
+
+Configure these repository Actions secrets before pushing the first release tag:
+
+- `TCPTUN_RELEASE_KEYSTORE_BASE64`: the release keystore encoded as Base64
+- `TCPTUN_RELEASE_STORE_PASSWORD`: keystore password
+- `TCPTUN_RELEASE_KEY_ALIAS`: signing key alias
+- `TCPTUN_RELEASE_KEY_PASSWORD`: signing key password
+
+Create the Base64 value without line breaks:
+
+```bash
+base64 < /path/to/tcptun-release.jks | tr -d '\n'
+```
+
+Then publish a release:
+
+```bash
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+The resulting GitHub Release contains `tcptun-v1.2.3.apk` and its SHA-256
+checksum. Pre-release tags such as `v1.2.3-rc.1` are marked as pre-releases.
+
 ## Server example
 
 On a reachable server running the Go project:

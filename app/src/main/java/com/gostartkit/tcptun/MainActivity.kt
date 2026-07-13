@@ -1105,6 +1105,10 @@ private fun SettingsPage(onBack: () -> Unit) {
     val context = LocalContext.current
     var settings by remember { mutableStateOf(TcptunVpnService.readRuntimeSettings(context)) }
     var socksPortText by remember { mutableStateOf(settings.socksPort.toString()) }
+    var probeTimeoutText by remember { mutableStateOf(settings.probeTimeout) }
+    var failureThresholdText by remember { mutableStateOf(settings.failureThreshold.toString()) }
+    var positiveTtlText by remember { mutableStateOf(settings.positiveTtl) }
+    var negativeTtlText by remember { mutableStateOf(settings.negativeTtl) }
     var settingsDirty by remember { mutableStateOf(false) }
     val vpnState by TcptunState.state.collectAsState()
     val diagnostics = vpnState.diagnostics
@@ -1115,6 +1119,10 @@ private fun SettingsPage(onBack: () -> Unit) {
         TcptunVpnService.writeRuntimeSettings(context, next)
         settings = TcptunVpnService.readRuntimeSettings(context)
         socksPortText = settings.socksPort.toString()
+        probeTimeoutText = settings.probeTimeout
+        failureThresholdText = settings.failureThreshold.toString()
+        positiveTtlText = settings.positiveTtl
+        negativeTtlText = settings.negativeTtl
         if (settings != before) {
             settingsDirty = true
         }
@@ -1123,6 +1131,9 @@ private fun SettingsPage(onBack: () -> Unit) {
     fun leaveSettings() {
         val socksPort = socksPortText.toIntOrNull()
         if (socksPort == null || socksPort !in 1..65535) return
+        if (!isValidDuration(probeTimeoutText) || !isValidDuration(positiveTtlText) || !isValidDuration(negativeTtlText)) return
+        val failureThreshold = failureThresholdText.toIntOrNull()
+        if (failureThreshold == null || failureThreshold !in 1..TcptunVpnService.MAX_FAILURE_THRESHOLD) return
         if (settingsDirty) {
             applyRuntimeSettings(context)
             settingsDirty = false
@@ -1202,6 +1213,66 @@ private fun SettingsPage(onBack: () -> Unit) {
                         ToggleRow(stringResource(R.string.direct_first), settings.directFirst) { checked ->
                             saveSettings(settings.copy(directFirst = checked))
                         }
+                        val validProbeTimeout = isValidDuration(probeTimeoutText)
+                        OutlinedTextField(
+                            value = probeTimeoutText,
+                            onValueChange = { value ->
+                                probeTimeoutText = value.take(32)
+                                if (isValidDuration(probeTimeoutText)) {
+                                    saveSettings(settings.copy(probeTimeout = probeTimeoutText))
+                                }
+                            },
+                            label = { Text(stringResource(R.string.probe_timeout)) },
+                            singleLine = true,
+                            enabled = settings.directFirst,
+                            isError = settings.directFirst && !validProbeTimeout,
+                            supportingText = {
+                                if (settings.directFirst && !validProbeTimeout) {
+                                    Text(stringResource(R.string.duration_error))
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        val failureThreshold = failureThresholdText.toIntOrNull()
+                        OutlinedTextField(
+                            value = failureThresholdText,
+                            onValueChange = { value ->
+                                failureThresholdText = value.filter(Char::isDigit).take(3)
+                                val threshold = failureThresholdText.toIntOrNull()
+                                if (threshold != null && threshold in 1..TcptunVpnService.MAX_FAILURE_THRESHOLD) {
+                                    saveSettings(settings.copy(failureThreshold = threshold))
+                                }
+                            },
+                            label = { Text(stringResource(R.string.failure_threshold)) },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            enabled = settings.directFirst,
+                            isError = settings.directFirst && (failureThreshold == null || failureThreshold !in 1..TcptunVpnService.MAX_FAILURE_THRESHOLD),
+                            supportingText = {
+                                if (settings.directFirst && (failureThreshold == null || failureThreshold !in 1..TcptunVpnService.MAX_FAILURE_THRESHOLD)) {
+                                    Text(stringResource(R.string.failure_threshold_error))
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        DurationSettingField(
+                            value = positiveTtlText,
+                            onValueChange = { value ->
+                                positiveTtlText = value.take(32)
+                                if (isValidDuration(positiveTtlText)) saveSettings(settings.copy(positiveTtl = positiveTtlText))
+                            },
+                            label = stringResource(R.string.positive_ttl),
+                            enabled = settings.directFirst,
+                        )
+                        DurationSettingField(
+                            value = negativeTtlText,
+                            onValueChange = { value ->
+                                negativeTtlText = value.take(32)
+                                if (isValidDuration(negativeTtlText)) saveSettings(settings.copy(negativeTtl = negativeTtlText))
+                            },
+                            label = stringResource(R.string.negative_ttl),
+                            enabled = settings.directFirst,
+                        )
                         OutlinedTextField(
                             value = settings.socksUsername,
                             onValueChange = { value -> saveSettings(settings.copy(socksUsername = value.take(255))) },
@@ -1265,6 +1336,10 @@ private fun SettingsPage(onBack: () -> Unit) {
                         DiagnosticsLine(stringResource(R.string.socks_listen), TcptunVpnService.localSocksListenAddr(settings))
                         DiagnosticsLine(stringResource(R.string.route_external_sources), if (settings.routeExternalSources) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.direct_first), if (settings.directFirst) stringResource(R.string.enabled) else stringResource(R.string.disabled))
+                        DiagnosticsLine(stringResource(R.string.probe_timeout), settings.probeTimeout)
+                        DiagnosticsLine(stringResource(R.string.failure_threshold), settings.failureThreshold.toString())
+                        DiagnosticsLine(stringResource(R.string.positive_ttl), settings.positiveTtl)
+                        DiagnosticsLine(stringResource(R.string.negative_ttl), settings.negativeTtl)
                         DiagnosticsLine(stringResource(R.string.socks_auth), if (settings.socksUsername.isNotEmpty() || settings.socksPassword.isNotEmpty()) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.field_udp), if (diagnostics.udpEnabled) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.diag_power_saving), if (diagnostics.powerSavingMode) stringResource(R.string.enabled) else stringResource(R.string.disabled))
@@ -1273,6 +1348,28 @@ private fun SettingsPage(onBack: () -> Unit) {
             }
         }
     }
+}
+
+@Composable
+private fun DurationSettingField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    enabled: Boolean,
+) {
+    val valid = isValidDuration(value)
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        singleLine = true,
+        enabled = enabled,
+        isError = enabled && !valid,
+        supportingText = {
+            if (enabled && !valid) Text(stringResource(R.string.duration_error))
+        },
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

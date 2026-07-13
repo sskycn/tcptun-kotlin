@@ -54,6 +54,12 @@
     <string name="socks_listen_all">Listen on all interfaces</string>
     <string name="route_external_sources">Route external SOCKS clients</string>
     <string name="direct_first">Direct first</string>
+    <string name="probe_timeout">Probe timeout</string>
+    <string name="failure_threshold">Failure threshold</string>
+    <string name="positive_ttl">Positive TTL</string>
+    <string name="negative_ttl">Negative TTL</string>
+    <string name="duration_error">Use a duration such as 120ms, 10s, or 30m.</string>
+    <string name="failure_threshold_error">Use a value from 1 to 100.</string>
     <string name="direct_first_note">For generated profiles, try direct TCP connections first and fall back to the tunnel when direct access fails. UDP continues to use the tunnel. Full JSON profiles keep their own routing.</string>
     <string name="route_management">Route management</string>
     <string name="route_management_note">Rules are evaluated from top to bottom for generated profiles. Changes apply when you leave this page. Full JSON profiles keep their own routing.</string>

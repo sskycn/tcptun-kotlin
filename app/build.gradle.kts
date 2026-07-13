@@ -26,6 +26,14 @@ val hasReleaseSigningConfig =
         !releaseKeyAlias.isNullOrBlank() &&
         !releaseKeyPassword.isNullOrBlank()
 
+val appVersionName = providers.gradleProperty("releaseVersionName").orNull?.also {
+    require(it.isNotBlank()) { "releaseVersionName must not be blank" }
+} ?: "1.0"
+val appVersionCode = providers.gradleProperty("releaseVersionCode").orNull?.let { value ->
+    requireNotNull(value.toIntOrNull()) { "releaseVersionCode must be an integer" }
+        .also { require(it > 0) { "releaseVersionCode must be positive" } }
+} ?: 1
+
 android {
     namespace = "com.tcptun.client"
     ndkVersion = "29.0.14206865"
@@ -39,8 +47,8 @@ android {
         applicationId = "com.tcptun.client"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {

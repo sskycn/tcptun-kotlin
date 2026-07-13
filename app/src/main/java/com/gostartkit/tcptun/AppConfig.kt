@@ -56,11 +56,14 @@ data class AppConfig(
     fun toBridgeJson(
         localListenAddr: String,
         verbose: Boolean = false,
-        powerSavingMode: Boolean = false,
         socks5Username: String = "",
         socks5Password: String = "",
         routeExternalSources: Boolean = false,
         directFirst: Boolean = false,
+        probeTimeout: String = "120ms",
+        failureThreshold: Int = 1,
+        positiveTtl: String = "30m",
+        negativeTtl: String = "10m",
         managedRouteRules: List<ManagedRouteRule> = emptyList(),
     ): String {
         if (rawConfigJson.isNotBlank()) {
@@ -135,10 +138,10 @@ data class AppConfig(
                     .put("primary", "direct")
                     .put("fallback", "proxy")
                     .put("network", JSONArray().put("tcp"))
-                    .put("probe_timeout", if (powerSavingMode) "500ms" else "800ms")
-                    .put("failure_threshold", 2)
-                    .put("positive_ttl", "30m")
-                    .put("negative_ttl", if (powerSavingMode) "30m" else "10m"),
+                    .put("probe_timeout", probeTimeout.trim())
+                    .put("failure_threshold", failureThreshold.coerceIn(1, 100))
+                    .put("positive_ttl", positiveTtl.trim())
+                    .put("negative_ttl", negativeTtl.trim()),
             )
         }
 
