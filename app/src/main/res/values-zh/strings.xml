@@ -50,6 +50,13 @@
     <string name="not_connected_add_profile">未连接，添加配置后点击列表项启动</string>
     <string name="diagnostics">诊断</string>
     <string name="settings">设置</string>
+    <string name="ip_information">IP 信息</string>
+    <string name="ip_underlying_interface">底层网卡</string>
+    <string name="ip_underlying_ipv4">底层 IPv4</string>
+    <string name="ip_underlying_ipv6">底层 IPv6</string>
+    <string name="ip_vpn_ipv4">VPN IPv4</string>
+    <string name="ip_vpn_ipv6">VPN IPv6</string>
+    <string name="ip_information_note">这里显示本机接口地址，不是公网出口 IP。</string>
     <string name="battery_settings">省电设置</string>
     <string name="runtime_diagnostics">运行诊断</string>
     <string name="diag_vpn">VPN</string>

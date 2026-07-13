@@ -6,6 +6,11 @@ import android.content.Context
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -86,6 +91,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -106,6 +112,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import org.json.JSONObject
+import java.net.Inet4Address
+import java.net.Inet6Address
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.UUID
@@ -113,6 +121,104 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val SnackbarAutoDismissMillis = 6_000L
+
+private data class LocalIpInfo(
+    val underlyingInterface: String = "",
+    val underlyingIpv4: String = "",
+    val underlyingIpv6: String = "",
+    val vpnIpv4: String = "",
+    val vpnIpv6: String = "",
+)
+
+private data class NetworkLinkInfo(
+    val network: Network,
+    val capabilities: NetworkCapabilities,
+    val linkProperties: LinkProperties,
+)
+
+private fun readLocalIpInfo(connectivity: ConnectivityManager, networks: Collection<Network>): LocalIpInfo {
+    val links = networks.mapNotNull { network ->
+        val capabilities = connectivity.getNetworkCapabilities(network) ?: return@mapNotNull null
+        val linkProperties = connectivity.getLinkProperties(network) ?: return@mapNotNull null
+        NetworkLinkInfo(network, capabilities, linkProperties)
+    }
+    val underlying = links
+        .filter {
+            it.capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                it.capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+        }
+        .maxByOrNull {
+            underlyingNetworkScore(
+                validated = it.capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+                ethernet = it.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET),
+                wifi = it.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+                cellular = it.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR),
+            )
+        }
+    val activeNetwork = connectivity.activeNetwork
+    val vpn = links.firstOrNull {
+        it.network == activeNetwork && it.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+    } ?: links.firstOrNull { it.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) }
+    return LocalIpInfo(
+        underlyingInterface = underlying?.linkProperties?.interfaceName.orEmpty(),
+        underlyingIpv4 = formatIpAddresses(underlying?.linkProperties, ipv6 = false),
+        underlyingIpv6 = formatIpAddresses(underlying?.linkProperties, ipv6 = true),
+        vpnIpv4 = formatIpAddresses(vpn?.linkProperties, ipv6 = false),
+        vpnIpv6 = formatIpAddresses(vpn?.linkProperties, ipv6 = true),
+    )
+}
+
+private fun formatIpAddresses(linkProperties: LinkProperties?, ipv6: Boolean): String {
+    return linkProperties?.linkAddresses.orEmpty()
+        .asSequence()
+        .filter { linkAddress ->
+            val address = linkAddress.address
+            !address.isLoopbackAddress && if (ipv6) address is Inet6Address else address is Inet4Address
+        }
+        .map { linkAddress -> "${linkAddress.address.hostAddress}/${linkAddress.prefixLength}" }
+        .distinct()
+        .joinToString("\n")
+}
+
+@Composable
+private fun rememberLocalIpInfo(context: Context): LocalIpInfo {
+    val connectivity = remember(context) {
+        context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    }
+    val initialNetworks = listOfNotNull(connectivity.activeNetwork)
+    val info by produceState(
+        initialValue = readLocalIpInfo(connectivity, initialNetworks),
+        connectivity,
+    ) {
+        val observedNetworks = initialNetworks.toMutableSet()
+        val observedNetworksLock = Any()
+        fun refresh(network: Network, available: Boolean) {
+            val snapshot = synchronized(observedNetworksLock) {
+                if (available) observedNetworks.add(network) else observedNetworks.remove(network)
+                observedNetworks.toList()
+            }
+            launch { value = readLocalIpInfo(connectivity, snapshot) }
+        }
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = refresh(network, available = true)
+            override fun onLost(network: Network) = refresh(network, available = false)
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                refresh(network, available = true)
+            }
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                refresh(network, available = true)
+            }
+        }
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        val registered = runCatching { connectivity.registerNetworkCallback(request, callback) }.isSuccess
+        awaitDispose {
+            if (registered) runCatching { connectivity.unregisterNetworkCallback(callback) }
+        }
+    }
+    return info
+}
 
 class MainActivity : ComponentActivity() {
     private var profileIntentSequence = 0L
@@ -964,6 +1070,7 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
 @Composable
 private fun SettingsPage(onBack: () -> Unit) {
     val context = LocalContext.current
+    val ipInfo = rememberLocalIpInfo(context)
     var settings by remember { mutableStateOf(TcptunVpnService.readRuntimeSettings(context)) }
     var socksPortText by remember { mutableStateOf(settings.socksPort.toString()) }
     var probeTimeoutText by remember { mutableStateOf(settings.probeTimeout) }
@@ -1204,6 +1311,50 @@ private fun SettingsPage(onBack: () -> Unit) {
                         DiagnosticsLine(stringResource(R.string.socks_auth), if (settings.socksUsername.isNotEmpty() || settings.socksPassword.isNotEmpty()) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.field_udp), if (diagnostics.udpEnabled) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.diag_power_saving), if (diagnostics.powerSavingMode) stringResource(R.string.enabled) else stringResource(R.string.disabled))
+                    }
+                }
+            }
+            item {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        val noneLabel = stringResource(R.string.none)
+                        Text(
+                            stringResource(R.string.ip_information),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        DiagnosticsLine(
+                            stringResource(R.string.ip_underlying_interface),
+                            ipInfo.underlyingInterface.ifBlank { noneLabel },
+                        )
+                        DiagnosticsLine(
+                            stringResource(R.string.ip_underlying_ipv4),
+                            ipInfo.underlyingIpv4.ifBlank { noneLabel },
+                        )
+                        DiagnosticsLine(
+                            stringResource(R.string.ip_underlying_ipv6),
+                            ipInfo.underlyingIpv6.ifBlank { noneLabel },
+                        )
+                        DiagnosticsLine(
+                            stringResource(R.string.ip_vpn_ipv4),
+                            ipInfo.vpnIpv4.ifBlank { noneLabel },
+                        )
+                        DiagnosticsLine(
+                            stringResource(R.string.ip_vpn_ipv6),
+                            ipInfo.vpnIpv6.ifBlank { noneLabel },
+                        )
+                        Text(
+                            stringResource(R.string.ip_information_note),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }

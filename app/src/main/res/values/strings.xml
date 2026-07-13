@@ -50,6 +50,13 @@
     <string name="not_connected_add_profile">Not connected. Add a profile, then tap it to start.</string>
     <string name="diagnostics">Diagnostics</string>
     <string name="settings">Settings</string>
+    <string name="ip_information">IP information</string>
+    <string name="ip_underlying_interface">Underlying interface</string>
+    <string name="ip_underlying_ipv4">Underlying IPv4</string>
+    <string name="ip_underlying_ipv6">Underlying IPv6</string>
+    <string name="ip_vpn_ipv4">VPN IPv4</string>
+    <string name="ip_vpn_ipv6">VPN IPv6</string>
+    <string name="ip_information_note">These are local interface addresses, not the public egress IP.</string>
     <string name="battery_settings">Battery settings</string>
     <string name="runtime_diagnostics">Runtime diagnostics</string>
     <string name="diag_vpn">VPN</string>
