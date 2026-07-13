@@ -88,7 +88,7 @@ jobs:
 
       - name: Install Android NDK
         shell: bash
-        run: sdkmanager "ndk;29.0.14206865"
+        run: '"$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865"'
 
       - name: Build signed release APK
         shell: bash
