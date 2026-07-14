@@ -6,26 +6,13 @@ import org.junit.Test
 
 class TcpingReadinessTest {
     @Test
-    fun coreReadyEnablesFirstLazyUpstreamProbeAfterVpnTransactionCompletes() {
-        assertTrue(
-            hasServerConnection(
-                TcptunDiagnostics(
-                    vpnStatus = "Running",
-                    bridgeEventState = "core_ready",
-                ),
-            ),
-        )
+    fun runningVpnWithMultipleActiveProfilesEnablesTcping() {
+        assertTrue(canStartTcping(status = "Running", activeProfileCount = 2))
     }
 
     @Test
-    fun coreReadyDoesNotEnableProbeBeforeVpnTransactionCompletes() {
-        assertFalse(
-            hasServerConnection(
-                TcptunDiagnostics(
-                    vpnStatus = "Starting",
-                    bridgeEventState = "core_ready",
-                ),
-            ),
-        )
+    fun tcpingRequiresRunningVpnAndAnActiveProfile() {
+        assertFalse(canStartTcping(status = "Starting", activeProfileCount = 2))
+        assertFalse(canStartTcping(status = "Running", activeProfileCount = 0))
     }
 }

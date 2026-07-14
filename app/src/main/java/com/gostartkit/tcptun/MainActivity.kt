@@ -516,18 +516,18 @@ internal fun TcptunScreen(
                 )
             },
             bottomBar = {
-                val serverConnected = hasServerConnection(vpnState.diagnostics)
+                val tcpingEnabled = canStartTcping(vpnState.status, state.activeProfiles.size)
                 BottomStatus(
                     status = vpnState.status,
                     error = vpnState.lastError,
                     tcping = vpnState.tcping,
                     hasProfile = state.profiles.isNotEmpty(),
-                    tcpingEnabled = serverConnected,
+                    tcpingEnabled = tcpingEnabled,
                     onClick = {
                         if (isVpnTransitionStatus(vpnState.status)) return@BottomStatus
                         if (state.activeProfiles.isEmpty()) return@BottomStatus
                         if (vpnState.tcping.running) return@BottomStatus
-                        if (!serverConnected) return@BottomStatus
+                        if (!tcpingEnabled) return@BottomStatus
                         val tcpingTarget = TCPING_TARGETS[tcpingTargetIndex]
                         tcpingTargetIndex = (tcpingTargetIndex + 1) % TCPING_TARGETS.size
                         val requestId = TcptunState.beginTcping(
@@ -1088,7 +1088,7 @@ private fun BottomStatus(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 72.dp, max = 144.dp)
-            .clickable(enabled = hasProfile && tcpingEnabled && !tcping.running && !isVpnTransitionStatus(status), onClick = onClick),
+            .clickable(enabled = tcpingEnabled && !tcping.running && !isVpnTransitionStatus(status), onClick = onClick),
         containerColor = colors.surfaceContainer,
         contentColor = contentColor,
     ) {
@@ -2396,12 +2396,8 @@ private fun isVpnActiveStatus(status: String): Boolean {
     return status == "Starting" || status == "Running" || status == "Stopping"
 }
 
-internal fun hasServerConnection(diagnostics: TcptunDiagnostics): Boolean {
-    if (diagnostics.vpnStatus != "Running") return false
-    val state = diagnostics.bridgeEventState.lowercase()
-    val phase = diagnostics.bridgeEventPhase.lowercase()
-    return state in SERVER_CONNECTED_STATES || phase in SERVER_CONNECTED_PHASES
-}
+internal fun canStartTcping(status: String, activeProfileCount: Int): Boolean =
+    status == "Running" && activeProfileCount > 0
 
 private fun isVpnTransitionStatus(status: String): Boolean {
     return status == "Starting" || status == "Stopping"
@@ -2425,8 +2421,6 @@ private fun bridgeTimestampLabel(timestampMs: Long, noneLabel: String): String {
     ).format(java.util.Date(timestampMs))
 }
 
-private val SERVER_CONNECTED_STATES = setOf("core_ready", "running", "upstream_connected")
-private val SERVER_CONNECTED_PHASES = setOf("connected", "upstream_connected")
 private val TCPING_TARGETS = listOf(
     TcpingTarget("Google", "google.com"),
     TcpingTarget("GitHub", "github.com"),
