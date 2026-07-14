@@ -46,10 +46,9 @@
     <string name="tcping_average">Average %1$dms (%2$d/%3$d succeeded)</string>
     <string name="tcping_failed_summary">TCPing failed · %1$s</string>
     <string name="connected_tap_test">Connected, tap to test</string>
-    <string name="connected_waiting_server">Connected, waiting for server connection</string>
     <string name="connecting">Connecting...</string>
     <string name="stopping">Stopping...</string>
-    <string name="not_connected_tap_profile_or_test">Not connected. Tap a profile to start.</string>
+    <string name="not_connected_tap_profile">Not connected. Tap a profile to start.</string>
     <string name="not_connected_add_profile">Not connected. Add a profile, then tap it to start.</string>
     <string name="diagnostics">Diagnostics</string>
     <string name="settings">Settings</string>

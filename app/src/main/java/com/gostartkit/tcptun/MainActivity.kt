@@ -521,13 +521,10 @@ internal fun TcptunScreen(
                     status = vpnState.status,
                     error = vpnState.lastError,
                     tcping = vpnState.tcping,
-                    hasProfile = state.profiles.isNotEmpty(),
+                    hasProfiles = state.profiles.isNotEmpty(),
                     tcpingEnabled = tcpingEnabled,
                     onClick = {
-                        if (isVpnTransitionStatus(vpnState.status)) return@BottomStatus
-                        if (state.activeProfiles.isEmpty()) return@BottomStatus
-                        if (vpnState.tcping.running) return@BottomStatus
-                        if (!tcpingEnabled) return@BottomStatus
+                        if (!tcpingEnabled || vpnState.tcping.running) return@BottomStatus
                         val tcpingTarget = TCPING_TARGETS[tcpingTargetIndex]
                         tcpingTargetIndex = (tcpingTargetIndex + 1) % TCPING_TARGETS.size
                         val requestId = TcptunState.beginTcping(
@@ -1060,7 +1057,7 @@ private fun BottomStatus(
     status: String,
     error: String,
     tcping: TcpingProgress,
-    hasProfile: Boolean,
+    hasProfiles: Boolean,
     tcpingEnabled: Boolean,
     onClick: () -> Unit,
 ) {
@@ -1069,11 +1066,10 @@ private fun BottomStatus(
     val text = when {
         error.isNotBlank() -> stringResource(R.string.error_prefix, error)
         tcpingMessage.isNotBlank() -> tcpingMessage
-        status == "Running" && !tcpingEnabled -> stringResource(R.string.connected_waiting_server)
-        status == "Running" -> stringResource(R.string.connected_tap_test)
+        status == "Running" && tcpingEnabled -> stringResource(R.string.connected_tap_test)
         status == "Starting" -> stringResource(R.string.connecting)
         status == "Stopping" -> stringResource(R.string.stopping)
-        hasProfile -> stringResource(R.string.not_connected_tap_profile_or_test)
+        hasProfiles -> stringResource(R.string.not_connected_tap_profile)
         else -> stringResource(R.string.not_connected_add_profile)
     }
     val contentColor = when {
@@ -1088,7 +1084,7 @@ private fun BottomStatus(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 72.dp, max = 144.dp)
-            .clickable(enabled = tcpingEnabled && !tcping.running && !isVpnTransitionStatus(status), onClick = onClick),
+            .clickable(enabled = tcpingEnabled && !tcping.running, onClick = onClick),
         containerColor = colors.surfaceContainer,
         contentColor = contentColor,
     ) {

@@ -46,10 +46,9 @@
     <string name="tcping_average">平均 %1$dms（成功 %2$d/%3$d）</string>
     <string name="tcping_failed_summary">TCPing 失败 · %1$s</string>
     <string name="connected_tap_test">已连接，点击测试连接</string>
-    <string name="connected_waiting_server">已连接，等待服务器连接</string>
     <string name="connecting">正在连接...</string>
     <string name="stopping">正在停止...</string>
-    <string name="not_connected_tap_profile_or_test">未连接，点击列表项启动</string>
+    <string name="not_connected_tap_profile">未连接，点击列表项启动</string>
     <string name="not_connected_add_profile">未连接，添加配置后点击列表项启动</string>
     <string name="diagnostics">诊断</string>
     <string name="settings">设置</string>
