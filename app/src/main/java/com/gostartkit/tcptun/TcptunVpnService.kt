@@ -105,6 +105,7 @@ class TcptunVpnService : VpnService() {
     private val bridgeReadyWaiter = AtomicReference<BridgeReadyWaiter?>(null)
     private var tun: android.os.ParcelFileDescriptor? = null
     @Volatile private var bridgeConfigJson: String? = null
+    @Volatile private var bridgeAutomatic = false
     @Volatile private var monitorThread: Thread? = null
     private val connectivity by lazy { getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager }
     private var underlyingNetworkCallback: ConnectivityManager.NetworkCallback? = null
@@ -144,9 +145,16 @@ class TcptunVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
+                TcptunState.beginProfileMode()
                 TcptunState.setStatus("Starting")
                 startVpnForeground("Starting")
                 startFromIntent(intent)
+            }
+            ACTION_START_AUTOMATIC -> {
+                TcptunState.beginAutomaticMode()
+                TcptunState.setStatus("Starting")
+                startVpnForeground("Searching for upstream")
+                startAutomatic()
             }
             ACTION_STOP -> requestStopVpn()
             ACTION_APPLY_RUNTIME_SETTINGS -> requestRuntimeSettingsRestart("runtime settings changed")
@@ -163,8 +171,16 @@ class TcptunVpnService : VpnService() {
         }
     }
 
+    private fun startAutomatic() {
+        val generation = lifecycleGeneration.incrementAndGet()
+        lifecycleExecutor.execute {
+            if (generation != lifecycleGeneration.get()) return@execute
+            startAutomaticNow(generation)
+        }
+    }
+
     private fun startFromIntentNow(intent: Intent, generation: Int) {
-        if (tun != null || bridgeConfigJson != null) {
+        if (tun != null || bridgeConfigJson != null || bridgeAutomatic) {
             TcptunState.appendLog("restarting VPN with selected profile")
             stopVpn(setStopped = false, clearSavedConfig = false, stopSelfService = false)
         }
@@ -250,6 +266,73 @@ class TcptunVpnService : VpnService() {
         } catch (err: Exception) {
             if (generation != lifecycleGeneration.get()) {
                 TcptunState.appendLog("VPN start cancelled")
+                stopVpn()
+                return
+            }
+            TcptunState.error(err.message ?: err.javaClass.simpleName)
+            stopVpn(setStopped = false, clearSavedConfig = true)
+        }
+    }
+
+    private fun startAutomaticNow(generation: Int) {
+        if (tun != null || bridgeConfigJson != null || bridgeAutomatic) {
+            TcptunState.appendLog("restarting VPN in automatic LAN mode")
+            stopVpn(setStopped = false, clearSavedConfig = true, stopSelfService = false)
+        }
+        stopping = false
+        lastUpstreamProbeAtMs = 0L
+        try {
+            if (generation != lifecycleGeneration.get()) return
+            TcptunState.beginAutomaticMode()
+            TcptunState.setStatus("Starting")
+            startVpnForeground("Searching for upstream")
+            clearDesiredRunningConfig(this)
+            val runtimeSettings = readRuntimeSettings(this)
+            activeSocksPort = DEFAULT_SOCKS_PORT
+            activeSocksUsername = ""
+            activeSocksPassword = ""
+            TcptunState.updateDiagnostics {
+                it.copy(
+                    bridgeStatus = "Starting",
+                    localProxyReachable = false,
+                    mtu = runtimeSettings.mtu,
+                    udpEnabled = true,
+                    powerSavingMode = false,
+                    localProxyAddress = defaultLocalSocksConnectAddr(),
+                    localProxyPort = DEFAULT_SOCKS_PORT,
+                    socketProtectEnabled = true,
+                )
+            }
+            startAutomaticBridge(generation)
+            if (generation != lifecycleGeneration.get()) {
+                stopVpn(setStopped = false, clearSavedConfig = true, stopSelfService = false)
+                return
+            }
+            val vpnTun = buildTun(runtimeSettings.mtu)
+            if (generation != lifecycleGeneration.get()) {
+                runCatching { vpnTun.close() }
+                stopVpn(setStopped = false, clearSavedConfig = true, stopSelfService = false)
+                return
+            }
+            startTunnel(
+                vpnTun = vpnTun,
+                mtu = runtimeSettings.mtu,
+                udpEnabled = true,
+                socksPort = DEFAULT_SOCKS_PORT,
+                socksUsername = "",
+                socksPassword = "",
+            )
+            if (generation != lifecycleGeneration.get()) {
+                stopVpn(setStopped = false, clearSavedConfig = true, stopSelfService = false)
+                return
+            }
+            startBridgeMonitor()
+            TcptunState.setStatus("Running")
+            updateBridgeDiagnostics()
+            updateNotification("Automatic upstream connected")
+        } catch (err: Exception) {
+            if (generation != lifecycleGeneration.get()) {
+                TcptunState.appendLog("automatic VPN start cancelled")
                 stopVpn()
                 return
             }
@@ -437,6 +520,16 @@ class TcptunVpnService : VpnService() {
     private fun requestStopVpn() {
         clearDesiredRunningConfig(this)
         lifecycleGeneration.incrementAndGet()
+        if (TcptunState.state.value.automaticMode && tun == null) {
+            Thread {
+                runCatching { synchronized(bridgeLock) { bridge.stop() } }
+                    .onFailure { err -> TcptunState.appendLog("automatic discovery cancellation failed: ${err.message}") }
+            }.apply {
+                name = "TcptunAutomaticCancel"
+                isDaemon = true
+                start()
+            }
+        }
         lifecycleExecutor.execute { stopVpn() }
     }
 
@@ -484,6 +577,7 @@ class TcptunVpnService : VpnService() {
         }
         if (setStopped) {
             TcptunState.setStatus("Stopped")
+            TcptunState.finishAutomaticMode()
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -546,6 +640,30 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun startBridge(configJson: String) {
+        startBridgeSession(
+            configJson = configJson,
+            automatic = false,
+            readyTimeoutMs = BRIDGE_READY_TIMEOUT_MS,
+            expectedGeneration = null,
+        )
+    }
+
+    private fun startAutomaticBridge(expectedGeneration: Int? = null) {
+        TcptunState.clearAutomaticUpstream()
+        startBridgeSession(
+            configJson = null,
+            automatic = true,
+            readyTimeoutMs = AUTOMATIC_BRIDGE_READY_TIMEOUT_MS,
+            expectedGeneration = expectedGeneration,
+        )
+    }
+
+    private fun startBridgeSession(
+        configJson: String?,
+        automatic: Boolean,
+        readyTimeoutMs: Long,
+        expectedGeneration: Int?,
+    ) {
         val epoch = TcptunState.beginBridgeSession()
         val waiter = BridgeReadyWaiter(epoch)
         bridgeReadyWaiter.getAndSet(waiter)?.future?.completeExceptionally(
@@ -556,14 +674,22 @@ class TcptunVpnService : VpnService() {
         bridge.setSocketProtector { fd -> protect(fd) }
         TcptunState.applyBridgeStatusEvent(epoch, bridge.statusJson())
         val sessionId = synchronized(bridgeLock) {
-            val startedSessionId = bridge.start(configJson)
+            check(expectedGeneration == null || expectedGeneration == lifecycleGeneration.get()) {
+                "automatic VPN start cancelled"
+            }
+            val startedSessionId = if (automatic) {
+                bridge.startAutomatic()
+            } else {
+                bridge.start(requireNotNull(configJson))
+            }
             check(startedSessionId > 0) { "tcptun engine returned an invalid session ID" }
             bridgeConfigJson = configJson
+            bridgeAutomatic = automatic
             startedSessionId
         }
         TcptunState.appendLog("tcptun bridge session started: $sessionId")
         try {
-            waiter.future.get(BRIDGE_READY_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            waiter.future.get(readyTimeoutMs, TimeUnit.MILLISECONDS)
         } finally {
             bridgeReadyWaiter.compareAndSet(waiter, null)
         }
@@ -576,13 +702,16 @@ class TcptunVpnService : VpnService() {
         )
         synchronized(bridgeLock) {
             bridgeConfigJson = null
+            bridgeAutomatic = false
             runCatching { bridge.stop() }
                 .onFailure { err -> TcptunState.appendLog("tcptun engine stop failed: ${err.message}") }
         }
     }
 
     private fun restartBridge(reason: String) {
-        val configJson = bridgeConfigJson ?: return
+        val automatic = bridgeAutomatic
+        val configJson = bridgeConfigJson
+        if (!automatic && configJson == null) return
         val vpnTun = tun ?: return
         if (stopping) return
         val now = System.currentTimeMillis()
@@ -600,7 +729,11 @@ class TcptunVpnService : VpnService() {
             synchronized(tunnelLock) { HevSocks5Tunnel.stop() }
             stopBridge()
             Thread.sleep(BRIDGE_RESTART_DELAY_MS)
-            startBridge(configJson)
+            if (automatic) {
+                startAutomaticBridge()
+            } else {
+                startBridge(requireNotNull(configJson))
+            }
             synchronized(tunnelLock) {
                 val hevConfig = writeHevConfig(
                     tunnelMtu,
@@ -1136,6 +1269,7 @@ class TcptunVpnService : VpnService() {
 
     companion object {
         const val ACTION_START = "com.tcptun.client.START"
+        const val ACTION_START_AUTOMATIC = "com.tcptun.client.START_AUTOMATIC"
         const val ACTION_STOP = "com.tcptun.client.STOP"
         const val ACTION_APPLY_RUNTIME_SETTINGS = "com.tcptun.client.APPLY_RUNTIME_SETTINGS"
         const val EXTRA_CONFIG = "config"
@@ -1161,6 +1295,7 @@ class TcptunVpnService : VpnService() {
         private const val BRIDGE_RESTART_DELAY_MS = 300L
         private const val BRIDGE_RESTART_MIN_INTERVAL_MS = 30_000L
         private const val BRIDGE_READY_TIMEOUT_MS = 15_000L
+        private const val AUTOMATIC_BRIDGE_READY_TIMEOUT_MS = 120_000L
         private const val TUNNEL_RESTART_DELAY_MS = 300L
         private const val TUNNEL_RESTART_MIN_INTERVAL_MS = 30_000L
         private const val RUNTIME_SETTINGS_RESTART_DEBOUNCE_MS = 800L
@@ -1235,6 +1370,10 @@ class TcptunVpnService : VpnService() {
                 .putExtra("udp", config.udp)
                 .putExtra("upstreamProtocol", effectiveConfig.upstreamProtocol)
                 .putExtra(EXTRA_PROFILE_CONFIG, config.toJson().toString())
+        }
+
+        fun startAutomaticIntent(context: Context): Intent {
+            return Intent(context, TcptunVpnService::class.java).setAction(ACTION_START_AUTOMATIC)
         }
 
         fun stopIntent(context: Context): Intent {

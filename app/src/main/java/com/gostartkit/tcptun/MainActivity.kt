@@ -105,6 +105,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.tcptun.client.ui.theme.TcpTunTheme
@@ -178,6 +179,21 @@ private fun formatIpAddresses(linkProperties: LinkProperties?, ipv6: Boolean): S
         .map { linkAddress -> "${linkAddress.address.hostAddress}/${linkAddress.prefixLength}" }
         .distinct()
         .joinToString("\n")
+}
+
+internal fun automaticUpstreamIpv4(remote: String): String {
+    val endpoint = remote.trim()
+    val host = if (endpoint.count { it == ':' } == 1) endpoint.substringBeforeLast(':') else endpoint
+    val octets = host.split('.')
+    if (octets.size != 4 || octets.any { octet ->
+            octet.isEmpty() ||
+                (octet.length > 1 && octet.startsWith('0')) ||
+                (octet.toIntOrNull() ?: -1) !in 0..255
+        }
+    ) {
+        return ""
+    }
+    return host
 }
 
 @Composable
@@ -302,6 +318,20 @@ internal fun TcptunScreen(
             }
         }
     }
+    val automaticVpnLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        startAutomaticVpn(context)
+    }
+    val automaticNotificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) {
+            TcptunState.appendLog("notification permission denied; foreground notification may be hidden")
+        }
+        val prepare = VpnService.prepare(context)
+        if (prepare != null) {
+            automaticVpnLauncher.launch(prepare)
+        } else {
+            startAutomaticVpn(context)
+        }
+    }
     fun save(next: ProfilesState) {
         ProfileStore.save(context, next)
         state = ProfileStore.load(context)
@@ -412,11 +442,35 @@ internal fun TcptunScreen(
         }
     }
 
+    fun startAutomaticMode() {
+        tcpingMessage = ""
+        TcptunState.clearLogs()
+        if (needsNotificationPermission(context)) {
+            automaticNotificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        val prepare = VpnService.prepare(context)
+        if (prepare != null) {
+            automaticVpnLauncher.launch(prepare)
+        } else {
+            startAutomaticVpn(context)
+        }
+    }
+
+    fun toggleAutomaticMode() {
+        if (vpnState.status == "Stopping") return
+        if (vpnState.automaticMode && isVpnActiveStatus(vpnState.status)) {
+            stopVpn(context)
+        } else {
+            startAutomaticMode()
+        }
+    }
+
     fun toggleProfile(profile: AppConfig) {
         val status = vpnState.status
         val active = isVpnActiveStatus(status)
         if (isVpnTransitionStatus(status)) return
-        if (active && profile.id == state.selected?.id) {
+        if (active && !vpnState.automaticMode && profile.id == state.selected?.id) {
             stopVpn(context)
             return
         }
@@ -468,6 +522,13 @@ internal fun TcptunScreen(
         )
     } else if (editing == null) {
         val listIpInfo = rememberLocalIpInfo(context)
+        val automaticUpstreamAddress = if (
+            vpnState.automaticMode && isVpnActiveStatus(vpnState.status)
+        ) {
+            automaticUpstreamIpv4(vpnState.automaticUpstreamRemote)
+        } else {
+            ""
+        }
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             topBar = {
@@ -485,7 +546,7 @@ internal fun TcptunScreen(
                 )
             },
             bottomBar = {
-                val serverConnected = hasServerConnection(vpnState.diagnostics)
+                val serverConnected = !vpnState.automaticMode && hasServerConnection(vpnState.diagnostics)
                 BottomStatus(
                     status = vpnState.status,
                     error = vpnState.lastError,
@@ -525,9 +586,15 @@ internal fun TcptunScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    if (listIpInfo.underlyingIpv4.isNotBlank()) {
+                    if (listIpInfo.underlyingIpv4.isNotBlank() || automaticUpstreamAddress.isNotBlank()) {
                         item(key = "underlying-ipv4-header") {
-                            ProfileListHeader(underlyingIpv4 = listIpInfo.underlyingIpv4)
+                            ProfileListHeader(
+                                localIpv4 = listIpInfo.underlyingIpv4,
+                                upstreamIpv4 = automaticUpstreamAddress,
+                                active = vpnState.automaticMode && isVpnActiveStatus(vpnState.status),
+                                enabled = vpnState.status != "Stopping",
+                                onClick = ::toggleAutomaticMode,
+                            )
                         }
                     }
                     items(state.profiles, key = { it.id }) { profile ->
@@ -535,7 +602,9 @@ internal fun TcptunScreen(
                             profile = profile,
                             selected = profile.id == state.selected?.id,
                             status = vpnState.status.takeIf {
-                                profile.id == state.selected?.id && isVpnActiveStatus(it)
+                                !vpnState.automaticMode &&
+                                    profile.id == state.selected?.id &&
+                                    isVpnActiveStatus(it)
                             },
                             enabled = !isVpnTransitionStatus(vpnState.status),
                             onClick = { toggleProfile(profile) },
@@ -604,21 +673,43 @@ internal fun TcptunScreen(
 }
 
 @Composable
-private fun ProfileListHeader(underlyingIpv4: String) {
+private fun ProfileListHeader(
+    localIpv4: String,
+    upstreamIpv4: String,
+    active: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
     val colors = MaterialTheme.colorScheme
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick),
         shape = RoundedCornerShape(8.dp),
-        color = colors.surfaceContainerHigh,
-        tonalElevation = 1.dp,
+        color = if (active) colors.secondaryContainer else colors.surfaceContainerHigh,
+        tonalElevation = if (active) 2.dp else 1.dp,
     ) {
-        Text(
-            text = underlyingIpv4,
+        Row(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            style = MaterialTheme.typography.bodyLarge,
-            color = colors.onSurface,
-            fontFamily = FontFamily.Monospace,
-        )
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = localIpv4,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (active) colors.onSecondaryContainer else colors.onSurface,
+                fontFamily = FontFamily.Monospace,
+            )
+            Text(
+                text = upstreamIpv4,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (active) colors.onSecondaryContainer else colors.onSurface,
+                fontFamily = FontFamily.Monospace,
+                textAlign = TextAlign.End,
+            )
+        }
     }
 }
 
@@ -2331,10 +2422,27 @@ private fun needsNotificationPermission(context: Context): Boolean {
 }
 
 private fun startVpn(context: Context, config: AppConfig) {
+    TcptunState.beginProfileMode()
     TcptunState.setStatus("Starting")
     TcptunState.appendLog("start requested")
     runCatching {
         val intent = TcptunVpnService.startIntent(context, config)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ContextCompat.startForegroundService(context, intent)
+        } else {
+            context.startService(intent)
+        }
+    }.onFailure { err ->
+        TcptunState.error(err.message ?: context.getString(R.string.start_failed))
+    }
+}
+
+private fun startAutomaticVpn(context: Context) {
+    TcptunState.beginAutomaticMode()
+    TcptunState.setStatus("Starting")
+    TcptunState.appendLog("automatic LAN VPN start requested")
+    runCatching {
+        val intent = TcptunVpnService.startAutomaticIntent(context)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             ContextCompat.startForegroundService(context, intent)
         } else {

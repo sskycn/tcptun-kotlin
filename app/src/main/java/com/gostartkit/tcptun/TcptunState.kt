@@ -38,6 +38,8 @@ data class TcptunDiagnostics(
 data class TcptunRuntimeState(
     val status: String = "Stopped",
     val lastError: String = "",
+    val automaticMode: Boolean = false,
+    val automaticUpstreamRemote: String = "",
     val diagnostics: TcptunDiagnostics = TcptunDiagnostics(),
     val logs: List<String> = emptyList(),
 )
@@ -91,6 +93,43 @@ object TcptunState {
     val lastError: String get() = state.value.lastError
     val diagnostics: TcptunDiagnostics get() = state.value.diagnostics
     val logs: List<String> get() = state.value.logs
+
+    @Synchronized
+    fun beginAutomaticMode() {
+        val current = _state.value
+        _state.value = current.copy(
+            automaticMode = true,
+            automaticUpstreamRemote = "",
+            diagnostics = current.diagnostics.copy(bridgeRemote = ""),
+        )
+    }
+
+    @Synchronized
+    fun beginProfileMode() {
+        _state.value = _state.value.copy(
+            automaticMode = false,
+            automaticUpstreamRemote = "",
+        )
+    }
+
+    @Synchronized
+    fun clearAutomaticUpstream() {
+        val current = _state.value
+        _state.value = current.copy(
+            automaticUpstreamRemote = "",
+            diagnostics = current.diagnostics.copy(bridgeRemote = ""),
+        )
+    }
+
+    @Synchronized
+    fun finishAutomaticMode() {
+        val current = _state.value
+        _state.value = current.copy(
+            automaticMode = false,
+            automaticUpstreamRemote = "",
+            diagnostics = current.diagnostics.copy(bridgeRemote = ""),
+        )
+    }
 
     private var bridgeEpoch = 0L
     private var bridgeSessionId = -1L
@@ -187,6 +226,13 @@ object TcptunState {
             lastError = event.lastError.takeIf {
                 event.state.equals("error", ignoreCase = true) && it.isNotBlank()
             } ?: current.lastError,
+            automaticUpstreamRemote = if (
+                current.automaticMode && event.reason == "AUTOMATIC_UPSTREAM_DISCOVERED"
+            ) {
+                event.remote
+            } else {
+                current.automaticUpstreamRemote
+            },
             diagnostics = current.diagnostics.copy(
                 bridgeStatus = bridgeSimpleStatus(event.state),
                 bridgeEventState = event.state.ifBlank { "Unknown" },

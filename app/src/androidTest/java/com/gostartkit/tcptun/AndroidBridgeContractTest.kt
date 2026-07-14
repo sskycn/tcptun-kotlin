@@ -41,6 +41,7 @@ class AndroidBridgeContractTest {
             assertEquals("Stopped", engine.status())
             assertEquals("stopped", JSONObject(engine.statusJSON()).getString("state"))
             assertEquals(0L, engine.sessionID())
+            assertEquals(Long::class.javaPrimitiveType, engine.javaClass.getMethod("startAutomaticSession").returnType)
             assertTrue(runCatching { engine.waitStopped(1, 1) }.isFailure)
         } finally {
             engine.close()
