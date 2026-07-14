@@ -467,6 +467,7 @@ internal fun TcptunScreen(
             onBack = { showRouteManagement = false },
         )
     } else if (editing == null) {
+        val listIpInfo = rememberLocalIpInfo(context)
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             topBar = {
@@ -524,6 +525,11 @@ internal fun TcptunScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                    if (listIpInfo.underlyingIpv4.isNotBlank()) {
+                        item(key = "underlying-ipv4-header") {
+                            ProfileListHeader(underlyingIpv4 = listIpInfo.underlyingIpv4)
+                        }
+                    }
                     items(state.profiles, key = { it.id }) { profile ->
                         ProfileRow(
                             profile = profile,
@@ -595,6 +601,25 @@ internal fun TcptunScreen(
         )
     }
 
+}
+
+@Composable
+private fun ProfileListHeader(underlyingIpv4: String) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = colors.surfaceContainerHigh,
+        tonalElevation = 1.dp,
+    ) {
+        Text(
+            text = underlyingIpv4,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            style = MaterialTheme.typography.bodyLarge,
+            color = colors.onSurface,
+            fontFamily = FontFamily.Monospace,
+        )
+    }
 }
 
 @Composable
