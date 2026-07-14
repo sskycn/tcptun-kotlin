@@ -423,7 +423,7 @@ data class AppConfig(
         } else {
             profiles.add(this)
         }
-        ProfileStore.save(context, ProfilesState(profiles, id))
+        ProfileStore.save(context, current.copy(profiles = profiles))
     }
 
     fun label(): String {
@@ -491,16 +491,28 @@ data class AppConfig(
 
 data class ProfilesState(
     val profiles: List<AppConfig>,
-    val selectedId: String?,
+    val activeIds: Set<String> = emptySet(),
 ) {
-    val selected: AppConfig?
-        get() = profiles.firstOrNull { it.id == selectedId } ?: profiles.firstOrNull()
+    val activeProfiles: List<AppConfig>
+        get() = profiles.filter { it.id in activeIds }
+
+    fun runPlan(): ProfileRunPlan {
+        val activeRawProfile = activeProfiles.firstOrNull { it.rawConfigJson.isNotBlank() }
+        val configuredProfiles = if (activeRawProfile != null) {
+            listOf(activeRawProfile)
+        } else {
+            profiles.filter { it.rawConfigJson.isBlank() }
+        }
+        return ProfileRunPlan(configuredProfiles, activeIds).normalized()
+    }
 }
 
 object ProfileStore {
     private const val PREFS = "tcptun"
     private const val KEY_PROFILES = "profiles"
     private const val KEY_SELECTED = "selectedProfileId"
+    private const val KEY_ENABLED = "enabledProfileIds"
+    private const val KEY_ACTIVE = "activeProfileIds"
 
     fun load(context: Context): ProfilesState {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -515,8 +527,18 @@ object ProfileStore {
                     }
                 }
             }
-            val state = ProfilesState(profiles, prefs.getString(KEY_SELECTED, profiles.firstOrNull()?.id))
-            if (profiles.size != arr.length()) {
+            val storedActive = (prefs.getString(KEY_ACTIVE, null) ?: prefs.getString(KEY_ENABLED, null))?.let { encoded ->
+                runCatching {
+                    val active = JSONArray(encoded)
+                    buildSet {
+                        for (index in 0 until active.length()) add(active.getString(index))
+                    }
+                }.getOrNull()
+            }
+            val knownIds = profiles.mapTo(mutableSetOf(), AppConfig::id)
+            val activeIds = storedActive.orEmpty().filterTo(linkedSetOf()) { it in knownIds }
+            val state = ProfilesState(profiles, activeIds)
+            if (profiles.size != arr.length() || !prefs.contains(KEY_ACTIVE)) {
                 save(context, state)
             }
             return state
@@ -527,20 +549,30 @@ object ProfileStore {
     }
 
     fun save(context: Context, state: ProfilesState) {
-        val selectedId = state.selected?.id
+        val knownIds = state.profiles.mapTo(mutableSetOf(), AppConfig::id)
+        val normalizedActiveIds = state.activeIds.filterTo(linkedSetOf()) { it in knownIds }
         val arr = JSONArray()
         state.profiles.forEach { arr.put(it.toJson()) }
+        val active = JSONArray()
+        state.profiles.filter { it.id in normalizedActiveIds }.forEach { active.put(it.id) }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(KEY_PROFILES, arr.toString())
-            .putString(KEY_SELECTED, selectedId)
+            .putString(KEY_ACTIVE, active.toString())
+            .remove(KEY_SELECTED)
+            .remove(KEY_ENABLED)
             .apply()
+    }
+
+    fun clearActive(context: Context) {
+        val state = load(context)
+        if (state.activeIds.isNotEmpty()) save(context, state.copy(activeIds = emptySet()))
     }
 
     private fun migrateSingleProfile(context: Context): ProfilesState {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val oldHost = prefs.getString("serverHost", "") ?: ""
         if (oldHost.isBlank()) {
-            return ProfilesState(emptyList(), null)
+            return ProfilesState(emptyList())
         }
         val profile = AppConfig(
             name = if (oldHost.isBlank()) "proxy" else "proxy",
@@ -555,6 +587,6 @@ object ProfileStore {
             mux = prefs.getBoolean("mux", true),
             udp = prefs.getBoolean("udp", true),
         )
-        return ProfilesState(listOf(profile), profile.id)
+        return ProfilesState(listOf(profile))
     }
 }

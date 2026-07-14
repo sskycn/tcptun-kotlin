@@ -49,6 +49,9 @@ func (e *Engine) SetSocketProtector(p SocketProtector)
 func (e *Engine) SetAppIdentityProvider(provider AppIdentityProvider)
 func (e *Engine) Start(configJson string) error
 func (e *Engine) StartSession(configJson string) (int64, error)
+func (e *Engine) StartOutbound(tag string) error
+func (e *Engine) StopOutbound(tag string, force bool, timeoutMillis int64) error
+func (e *Engine) OutboundsStatusJSON() string
 func (e *Engine) Stop() error
 func (e *Engine) Close() error
 func (e *Engine) SessionID() int64
@@ -61,28 +64,40 @@ Each `TcptunVpnService` instance owns one `Engine`; runtime control is available
 only through that instance.
 
 `Start` receives the current strict `tcptun-go` file configuration. The Android
-app builds a local mixed/SOCKS5 inbound, the selected tunnel outbound, a direct
-outbound, and a TCP-only `direct-first` outbound. UDP continues through the
-tunnel. Custom routing is stored per profile in the strict JSON `route.rules`:
+app builds a local mixed/SOCKS5 inbound, every configured structured profile as
+an equal tagged tunnel outbound, a dynamic `balance` pool, a direct outbound, and
+an optional TCP-only `direct-first` outbound. Ordered route rules are evaluated
+first and may select a specific configured profile by its stable tag; unmatched sessions enter the
+pool, whose effective weights follow active load, observed connection latency,
+and failures while destination affinity keeps related sessions on one link.
+After startup the service stops every inactive profile outbound; later profile
+row taps call `StartOutbound` or `StopOutbound` without recreating the Android
+VPN interface or local listener. A rule bound to a stopped profile remains
+authoritative and becomes usable again as soon as that profile is started.
+Custom routing is stored in the strict JSON `route.rules`:
 
 ```json
 {
   "log": {"level": "info"},
   "inbounds": [
-    {"tag": "local", "type": "mixed", "listen": "127.0.0.1", "port": 1080,
-     "network": ["tcp", "udp"], "outbound": "proxy"}
+    {"tag": "local", "type": "socks5", "listen": "127.0.0.1", "port": 1080,
+     "network": ["tcp", "udp"], "outbound": "profile-pool"}
   ],
   "outbounds": [
-    {"tag": "proxy", "type": "native", "server": "203.0.113.10", "port": 9443,
+    {"tag": "profile-a", "type": "native", "server": "203.0.113.10", "port": 9443,
+     "token": "secret", "transport": {"type": "raw"}, "mux": {"enabled": true}},
+    {"tag": "profile-b", "type": "native", "server": "203.0.113.20", "port": 9443,
      "token": "secret", "transport": {"type": "raw"}, "mux": {"enabled": true}},
     {"tag": "direct", "type": "direct"},
-    {"tag": "auto", "type": "direct-first", "primary": "direct", "fallback": "proxy",
-     "network": ["tcp"], "probe_timeout": "800ms", "failure_threshold": 2,
-     "positive_ttl": "30m", "negative_ttl": "10m"}
+    {"tag": "profile-pool", "type": "balance", "affinity_ttl": "10m",
+     "members": [
+       {"outbound": "profile-a", "weight": 100},
+       {"outbound": "profile-b", "weight": 100}
+     ]}
   ],
   "route": {
-    "default_outbound": "proxy",
-    "rules": [{"network": ["tcp"], "outbound": "auto"}]
+    "default_outbound": "profile-pool",
+    "rules": [{"domain_suffixes": ["example.com"], "outbound": "profile-a"}]
   },
   "dns": {},
   "discovery": {}
@@ -90,7 +105,7 @@ tunnel. Custom routing is stored per profile in the strict JSON `route.rules`:
 ```
 
 `StatusCallback.OnStatus(eventJson)` includes `session_id`, `sequence`, `state`,
-`reason`, `phase`, `listen`, `remote`, `active_connections`, `mux_sources`,
+`reason`, `phase`, `listen`, `remote`, `outbound_tag`, `active_connections`, `mux_sources`,
 `mux_sessions`, `mux_streams`, `recoverable`, `last_error`, and `timestamp_ms`. The app drops events from an older engine/session
 or with a non-increasing sequence and folds accepted events into one immutable
 `StateFlow` snapshot consumed by Compose.
@@ -110,7 +125,7 @@ IPv6 default routes and sends all captured traffic to tcptun-go.
 Profiles can also store a complete strict tcptun-go JSON document. The app
 preserves all supported `log`, `inbounds`, `outbounds`, `route`, `dns`, and
 `discovery` fields, then injects/replaces one `android-vpn` SOCKS5 inbound at
-runtime so the TUN adapter uses the selected local port, UDP mode, and auth.
+runtime so the TUN adapter uses the configured local port, UDP mode, and auth.
 
 Build the AAR through this Kotlin project wrapper:
 
@@ -199,9 +214,9 @@ For VLESS/VMess/Trojan, use the same protocol, transport, token/UUID/password, T
 2. Open the app. The first screen is the profile list.
 3. Tap `+` to add a profile, or tap the pen icon to edit an existing profile.
 4. Tap `⇩` to import a URI share link, or enter profile name, server address, port, protocol, transport, UUID/password/token, SNI, path, TLS, REALITY, mux, upstream, and UDP settings manually.
-5. Tap a profile row to select it. The selected profile has a black bar on the left.
+5. Tap a profile row to start or stop only that connection. Every running structured profile joins the same dynamic pool; while the VPN is running, the row action hot-starts or hot-stops only that outbound.
 6. Tap the share icon to export a URI link for the profile protocol.
-7. Tap the orange floating button and approve the Android VPN prompt.
+7. Approve the Android VPN prompt when starting the first connection.
 8. Open a browser and visit a site.
 9. Tap the bottom status line to view recent logs.
 
@@ -231,7 +246,7 @@ schemes:
 The app still accepts the inner schemes directly for compatibility. Opening a
 validated `https://tcptun.com/x/v1` Android App Link launches TcpTun and shows a
 Material 3 confirmation before saving it. Existing equivalent profiles are
-selected instead of duplicated; imported links never start the VPN
+reused instead of duplicated; imported links never start the VPN
 automatically. The domain must publish a matching release-signing association at
 `https://tcptun.com/.well-known/assetlinks.json` for verified App Link routing.
 
@@ -250,11 +265,11 @@ vless://00000000-0000-4000-8000-000000000000@203.0.113.10:443?security=reality&e
 - Kotlin + Jetpack Compose Android app.
 - `VpnService` with foreground service notification.
 - Config persistence with `SharedPreferences`.
-- Multiple local profiles with select, add, edit, delete, and share actions.
+- Independently started local profiles with add, edit, delete, and share actions; active structured profiles form one dynamically weighted, session-affine pool.
 - URI import/export for native, VLESS, VMess, and Trojan profiles, including REALITY `pbk`, `sid`, `fp`, `spx`, `flow`, and `sni`.
 - Protocol and transport selection UI.
 - Optional token, SNI, path, TLS, TLS insecure, REALITY short ID, mux, upstream protocol, and UDP UI.
-- IPv4/IPv6 default routes send all VPN traffic into tcptun-go; Go routing selects direct, proxy, chain, direct-first, or blackhole outbounds.
+- IPv4/IPv6 default routes send all VPN traffic into tcptun-go; explicit rules run first and unmatched traffic uses the balanced active-profile pool.
 - Status display: `Stopped`, `Starting`, `Running`, `Error`.
 - Recent log display.
 - Native `hev-socks5-tunnel` forwarding from TUN to local SOCKS5/mixed proxy.

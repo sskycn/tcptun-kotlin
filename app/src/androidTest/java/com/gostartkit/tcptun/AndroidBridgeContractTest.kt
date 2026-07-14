@@ -38,10 +38,17 @@ class AndroidBridgeContractTest {
     fun currentBridgeExposesPerServiceEngineLifecycle() {
         val engine = Androidbridge.newEngine()
         try {
+            engine.javaClass.getMethod("startOutbound", String::class.java)
+            engine.javaClass.getMethod(
+                "stopOutbound",
+                String::class.java,
+                Boolean::class.javaPrimitiveType,
+                Long::class.javaPrimitiveType,
+            )
+            engine.javaClass.getMethod("outboundsStatusJSON")
             assertEquals("Stopped", engine.status())
             assertEquals("stopped", JSONObject(engine.statusJSON()).getString("state"))
             assertEquals(0L, engine.sessionID())
-            assertEquals(Long::class.javaPrimitiveType, engine.javaClass.getMethod("startAutomaticSession").returnType)
             assertTrue(runCatching { engine.waitStopped(1, 1) }.isFailure)
         } finally {
             engine.close()
@@ -71,6 +78,18 @@ class AndroidBridgeContractTest {
             )
         }
         assertTrue(result.isFailure)
+    }
+
+    @Test
+    fun profileRunPlanJsonPreservesActiveSubsetAndMigratesLegacyPlans() {
+        val first = AppConfig(id = "first", name = "first", serverHost = "192.0.2.10", token = "one")
+        val second = AppConfig(id = "second", name = "second", serverHost = "192.0.2.20", token = "two")
+        val plan = ProfileRunPlan(listOf(first, second), setOf(second.id))
+
+        assertEquals(setOf(second.id), ProfileRunPlan.fromJson(plan.toJson()).activeIds)
+
+        val legacy = plan.toJson().apply { remove("activeIds") }
+        assertEquals(setOf(first.id, second.id), ProfileRunPlan.fromJson(legacy).activeIds)
     }
 
     @Test
@@ -155,6 +174,69 @@ class AndroidBridgeContractTest {
         assertEquals(2, rules.length())
 
         assertEngineStarts(config.toString())
+    }
+
+    @Test
+    fun generatedMultiProfileConfigRoutesToStableOutboundTags() {
+        val primary = AppConfig(
+            id = "00000000-0000-4000-8000-000000000001",
+            name = "primary",
+            serverHost = "192.0.2.10",
+            serverPort = "443",
+            token = "primary-token",
+            protocol = "native",
+        )
+        val secondary = AppConfig(
+            id = "00000000-0000-4000-8000-000000000002",
+            name = "secondary",
+            serverHost = "192.0.2.20",
+            serverPort = "443",
+            token = "secondary-token",
+            protocol = "native",
+            udp = false,
+        )
+        val config = JSONObject(
+            ProfileRunPlan(listOf(primary, secondary), activeIds = setOf(primary.id)).toBridgeJson(
+                localListenAddr = "127.0.0.1:18083",
+                managedRouteRules = listOf(
+                    ManagedRouteRule(
+                        type = ManagedRouteRuleType.DomainSuffix,
+                        value = "example.com",
+                        outboundProfileId = secondary.id,
+                    ),
+                    ManagedRouteRule(
+                        type = ManagedRouteRuleType.DomainSuffix,
+                        value = "pool.example",
+                    ),
+                    ManagedRouteRule(
+                        type = ManagedRouteRuleType.IPCidr,
+                        value = "198.51.100.0/24",
+                        outbound = ManagedRouteOutbound.Direct,
+                    ),
+                ),
+            ),
+        )
+
+        val primaryTag = profileOutboundTag(primary.id)
+        val secondaryTag = profileOutboundTag(secondary.id)
+        val outbounds = config.getJSONArray("outbounds")
+        assertEquals(primaryTag, outbounds.getJSONObject(0).getString("tag"))
+        assertEquals(secondaryTag, outbounds.getJSONObject(1).getString("tag"))
+        assertEquals("direct", outbounds.getJSONObject(2).getString("tag"))
+        assertEquals("profile-pool", outbounds.getJSONObject(3).getString("tag"))
+        assertEquals("balance", outbounds.getJSONObject(3).getString("type"))
+        assertEquals(primaryTag, outbounds.getJSONObject(3).getJSONArray("members").getJSONObject(0).getString("outbound"))
+        assertEquals(secondaryTag, outbounds.getJSONObject(3).getJSONArray("members").getJSONObject(1).getString("outbound"))
+        assertEquals("profile-pool", config.getJSONObject("route").getString("default_outbound"))
+        val rules = config.getJSONObject("route").getJSONArray("rules")
+        assertEquals("profile-pool", rules.getJSONObject(0).getString("outbound"))
+        assertEquals(secondaryTag, rules.getJSONObject(1).getString("outbound"))
+        assertEquals("tcp", rules.getJSONObject(1).getJSONArray("network").getString(0))
+        assertEquals("profile-pool", rules.getJSONObject(2).getString("outbound"))
+        assertEquals("direct", rules.getJSONObject(3).getString("outbound"))
+
+        assertEngineStarts(config.toString())
+        assertEngineHotSwitchesOutbound(config.toString(), secondaryTag)
     }
 
     @Test
@@ -368,6 +450,28 @@ class AndroidBridgeContractTest {
         try {
             engine.start(withAvailableInboundPorts(config))
             assertTrue(engine.status() in setOf("Starting", "Running"))
+        } finally {
+            engine.close()
+        }
+    }
+
+    private fun assertEngineHotSwitchesOutbound(config: String, tag: String) {
+        val engine = Androidbridge.newEngine()
+        try {
+            engine.start(withAvailableInboundPorts(config))
+            engine.stopOutbound(tag, true, 1_000)
+            val stopped = org.json.JSONArray(engine.outboundsStatusJSON())
+            val stoppedStatus = (0 until stopped.length())
+                .map(stopped::getJSONObject)
+                .first { it.getString("tag") == tag }
+            assertFalse(stoppedStatus.getBoolean("running"))
+
+            engine.startOutbound(tag)
+            val started = org.json.JSONArray(engine.outboundsStatusJSON())
+            val startedStatus = (0 until started.length())
+                .map(started::getJSONObject)
+                .first { it.getString("tag") == tag }
+            assertTrue(startedStatus.getBoolean("running"))
         } finally {
             engine.close()
         }

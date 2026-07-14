@@ -25,6 +25,7 @@ data class ManagedRouteRule(
     val type: ManagedRouteRuleType = ManagedRouteRuleType.DomainSuffix,
     val value: String = "",
     val outbound: ManagedRouteOutbound = ManagedRouteOutbound.Proxy,
+    val outboundProfileId: String = "",
     val enabled: Boolean = true,
 ) {
     fun normalized(): ManagedRouteRule {
@@ -33,7 +34,10 @@ data class ManagedRouteRule(
             ManagedRouteRuleType.DomainSuffix -> value.trim().trimStart('.').trimEnd('.').lowercase()
             else -> value.trim()
         }
-        return copy(value = normalizedValue)
+        return copy(
+            value = normalizedValue,
+            outboundProfileId = if (outbound == ManagedRouteOutbound.Direct) "" else outboundProfileId.trim(),
+        )
     }
 
     fun isValid(): Boolean {
@@ -70,6 +74,7 @@ object RouteRuleStore {
                         value = json.optString("value"),
                         outbound = runCatching { ManagedRouteOutbound.valueOf(json.optString("outbound")) }
                             .getOrDefault(ManagedRouteOutbound.Proxy),
+                        outboundProfileId = json.optString("outboundProfileId"),
                         enabled = json.optBoolean("enabled", true),
                     ).normalized()
                     if (rule.isValid()) add(rule)
@@ -90,6 +95,7 @@ object RouteRuleStore {
                         .put("type", rule.type.name)
                         .put("value", rule.value)
                         .put("outbound", rule.outbound.name)
+                        .put("outboundProfileId", rule.outboundProfileId)
                         .put("enabled", rule.enabled),
                 )
             }

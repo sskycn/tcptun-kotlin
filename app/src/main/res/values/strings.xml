@@ -36,6 +36,8 @@
     <string name="empty_clipboard">Clipboard is empty</string>
     <string name="invalid_clipboard_data">The clipboard does not contain a supported profile or tcptun configuration.</string>
     <string name="empty_profiles">No profiles yet</string>
+    <string name="connection_running">Running independently</string>
+    <string name="connection_stopped">Stopped</string>
     <string name="error_prefix">Error: %1$s</string>
     <string name="tcping_running">TCPing...</string>
     <string name="tcping_success">TCPing OK · %1$s %2$dms</string>
@@ -87,7 +89,7 @@
     <string name="failure_threshold_error">Use a value from 1 to 100.</string>
     <string name="direct_first_note">For generated profiles, try direct TCP connections first and fall back to the tunnel when direct access fails. UDP continues to use the tunnel. Full JSON profiles keep their own routing.</string>
     <string name="route_management">Route management</string>
-    <string name="route_management_note">Rules are evaluated from top to bottom for generated profiles. Changes apply when you leave this page. Full JSON profiles keep their own routing.</string>
+    <string name="route_management_note">Rules are evaluated first from top to bottom and can target any connection. Unmatched traffic uses the active dynamic pool. Changes apply when you leave this page.</string>
     <string name="route_rules_count">%1$d enabled rules</string>
     <string name="empty_route_rules">No route rules yet</string>
     <string name="add_route_rule">Add route rule</string>
@@ -106,7 +108,7 @@
     <string name="route_type_ip">Exact IP address</string>
     <string name="route_type_ip_cidr">IP CIDR</string>
     <string name="route_type_ip_range">IP range</string>
-    <string name="route_outbound_proxy">Proxy tunnel</string>
+    <string name="route_outbound_proxy">Dynamic connection pool</string>
     <string name="route_outbound_direct">Direct connection</string>
     <string name="route_example_domain">Example: api.example.com</string>
     <string name="route_example_domain_suffix">Example: example.com</string>

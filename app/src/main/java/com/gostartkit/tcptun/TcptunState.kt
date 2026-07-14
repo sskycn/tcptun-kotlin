@@ -38,10 +38,9 @@ data class TcptunDiagnostics(
 data class TcptunRuntimeState(
     val status: String = "Stopped",
     val lastError: String = "",
-    val automaticMode: Boolean = false,
-    val automaticUpstreamRemote: String = "",
     val diagnostics: TcptunDiagnostics = TcptunDiagnostics(),
     val logs: List<String> = emptyList(),
+    val profileStateRevision: Long = 0,
 )
 
 internal data class BridgeStatusEvent(
@@ -93,43 +92,6 @@ object TcptunState {
     val lastError: String get() = state.value.lastError
     val diagnostics: TcptunDiagnostics get() = state.value.diagnostics
     val logs: List<String> get() = state.value.logs
-
-    @Synchronized
-    fun beginAutomaticMode() {
-        val current = _state.value
-        _state.value = current.copy(
-            automaticMode = true,
-            automaticUpstreamRemote = "",
-            diagnostics = current.diagnostics.copy(bridgeRemote = ""),
-        )
-    }
-
-    @Synchronized
-    fun beginProfileMode() {
-        _state.value = _state.value.copy(
-            automaticMode = false,
-            automaticUpstreamRemote = "",
-        )
-    }
-
-    @Synchronized
-    fun clearAutomaticUpstream() {
-        val current = _state.value
-        _state.value = current.copy(
-            automaticUpstreamRemote = "",
-            diagnostics = current.diagnostics.copy(bridgeRemote = ""),
-        )
-    }
-
-    @Synchronized
-    fun finishAutomaticMode() {
-        val current = _state.value
-        _state.value = current.copy(
-            automaticMode = false,
-            automaticUpstreamRemote = "",
-            diagnostics = current.diagnostics.copy(bridgeRemote = ""),
-        )
-    }
 
     private var bridgeEpoch = 0L
     private var bridgeSessionId = -1L
@@ -226,13 +188,6 @@ object TcptunState {
             lastError = event.lastError.takeIf {
                 event.state.equals("error", ignoreCase = true) && it.isNotBlank()
             } ?: current.lastError,
-            automaticUpstreamRemote = if (
-                current.automaticMode && event.reason == "AUTOMATIC_UPSTREAM_DISCOVERED"
-            ) {
-                event.remote
-            } else {
-                current.automaticUpstreamRemote
-            },
             diagnostics = current.diagnostics.copy(
                 bridgeStatus = bridgeSimpleStatus(event.state),
                 bridgeEventState = event.state.ifBlank { "Unknown" },
@@ -270,13 +225,20 @@ object TcptunState {
         _state.value = _state.value.copy(logs = emptyList())
     }
 
+    @Synchronized
+    fun notifyProfileStateChanged() {
+        val current = _state.value
+        _state.value = current.copy(profileStateRevision = current.profileStateRevision + 1)
+    }
+
     private fun bridgeSimpleStatus(state: String): String {
         return when (state.lowercase()) {
             "starting" -> "Starting"
             "stopping" -> "Stopping"
             "stopped" -> "Stopped"
             "error" -> "Error"
-            "core_ready", "running", "upstream_connecting", "upstream_connected", "degraded", "reconnecting" -> "Running"
+            "core_ready", "running", "upstream_connecting", "upstream_connected", "degraded", "reconnecting",
+            "outbound_running", "outbound_stopping", "outbound_stopped", "outbound_error" -> "Running"
             else -> "Unknown"
         }
     }

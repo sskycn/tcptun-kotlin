@@ -106,6 +106,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.tcptun.client.ui.theme.TcpTunTheme
@@ -126,6 +127,7 @@ private const val SnackbarAutoDismissMillis = 6_000L
 private data class LocalIpInfo(
     val underlyingInterface: String = "",
     val underlyingIpv4: String = "",
+    val underlyingGatewayIpv4: String = "",
     val underlyingIpv6: String = "",
     val vpnIpv4: String = "",
     val vpnIpv6: String = "",
@@ -163,10 +165,20 @@ private fun readLocalIpInfo(connectivity: ConnectivityManager, networks: Collect
     return LocalIpInfo(
         underlyingInterface = underlying?.linkProperties?.interfaceName.orEmpty(),
         underlyingIpv4 = formatIpAddresses(underlying?.linkProperties, ipv6 = false),
+        underlyingGatewayIpv4 = formatDefaultGatewayIpv4(underlying?.linkProperties),
         underlyingIpv6 = formatIpAddresses(underlying?.linkProperties, ipv6 = true),
         vpnIpv4 = formatIpAddresses(vpn?.linkProperties, ipv6 = false),
         vpnIpv6 = formatIpAddresses(vpn?.linkProperties, ipv6 = true),
     )
+}
+
+private fun formatDefaultGatewayIpv4(linkProperties: LinkProperties?): String {
+    return linkProperties?.routes.orEmpty()
+        .asSequence()
+        .filter { it.isDefaultRoute }
+        .mapNotNull { route -> route.gateway?.takeIf { it is Inet4Address }?.hostAddress }
+        .distinct()
+        .joinToString("\n")
 }
 
 private fun formatIpAddresses(linkProperties: LinkProperties?, ipv6: Boolean): String {
@@ -179,21 +191,6 @@ private fun formatIpAddresses(linkProperties: LinkProperties?, ipv6: Boolean): S
         .map { linkAddress -> "${linkAddress.address.hostAddress}/${linkAddress.prefixLength}" }
         .distinct()
         .joinToString("\n")
-}
-
-internal fun automaticUpstreamIpv4(remote: String): String {
-    val endpoint = remote.trim()
-    val host = if (endpoint.count { it == ':' } == 1) endpoint.substringBeforeLast(':') else endpoint
-    val octets = host.split('.')
-    if (octets.size != 4 || octets.any { octet ->
-            octet.isEmpty() ||
-                (octet.length > 1 && octet.startsWith('0')) ||
-                (octet.toIntOrNull() ?: -1) !in 0..255
-        }
-    ) {
-        return ""
-    }
-    return host
 }
 
 @Composable
@@ -282,8 +279,8 @@ internal fun TcptunScreen(
     val undoLabel = stringResource(R.string.undo)
     var state by remember { mutableStateOf(ProfileStore.load(context)) }
     var pendingDeepLinkProfile by remember { mutableStateOf<AppConfig?>(null) }
-    var pendingConfig by remember { mutableStateOf<AppConfig?>(null) }
-    var pendingNotificationConfig by remember { mutableStateOf<AppConfig?>(null) }
+    var pendingConfig by remember { mutableStateOf<ProfileRunPlan?>(null) }
+    var pendingNotificationConfig by remember { mutableStateOf<ProfileRunPlan?>(null) }
     var editingProfile by remember { mutableStateOf<AppConfig?>(null) }
     var showDiagnostics by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
@@ -297,6 +294,15 @@ internal fun TcptunScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val screenScope = rememberCoroutineScope()
     val vpnState by TcptunState.state.collectAsState()
+    LaunchedEffect(vpnState.status) {
+        if (vpnState.status == "Stopped" || vpnState.status == "Error") {
+            delay(100)
+            state = ProfileStore.load(context)
+        }
+    }
+    LaunchedEffect(vpnState.profileStateRevision) {
+        if (vpnState.profileStateRevision > 0) state = ProfileStore.load(context)
+    }
     val vpnLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         pendingConfig?.let {
             startVpn(context, it)
@@ -304,32 +310,18 @@ internal fun TcptunScreen(
         }
     }
     val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        pendingNotificationConfig?.let { config ->
+        pendingNotificationConfig?.let { plan ->
             pendingNotificationConfig = null
             if (!granted) {
                 TcptunState.appendLog("notification permission denied; foreground notification may be hidden")
             }
             val prepare = VpnService.prepare(context)
             if (prepare != null) {
-                pendingConfig = config
+                pendingConfig = plan
                 vpnLauncher.launch(prepare)
             } else {
-                startVpn(context, config)
+                startVpn(context, plan)
             }
-        }
-    }
-    val automaticVpnLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        startAutomaticVpn(context)
-    }
-    val automaticNotificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (!granted) {
-            TcptunState.appendLog("notification permission denied; foreground notification may be hidden")
-        }
-        val prepare = VpnService.prepare(context)
-        if (prepare != null) {
-            automaticVpnLauncher.launch(prepare)
-        } else {
-            startAutomaticVpn(context)
         }
     }
     fun save(next: ProfilesState) {
@@ -344,10 +336,9 @@ internal fun TcptunScreen(
             profileConnectionIdentity(current) == identity
         }
         return if (existing == null) {
-            save(ProfilesState(state.profiles + profile, profile.id))
+            save(state.copy(profiles = state.profiles + profile))
             profile to true
         } else {
-            save(state.copy(selectedId = existing.id))
             existing to false
         }
     }
@@ -418,72 +409,60 @@ internal fun TcptunScreen(
         )
     }
 
-    fun startProfile(config: AppConfig) {
-        val error = config.validate()
-        if (error != null) {
-            TcptunState.error(error)
-            showLogs = true
-            return
-        }
-        tcpingMessage = ""
-        save(state.copy(selectedId = config.id))
+    fun launchPlan(plan: ProfileRunPlan) {
         TcptunState.clearLogs()
         if (needsNotificationPermission(context)) {
-            pendingNotificationConfig = config
+            pendingNotificationConfig = plan
             notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             return
         }
         val prepare = VpnService.prepare(context)
         if (prepare != null) {
-            pendingConfig = config
+            pendingConfig = plan
             vpnLauncher.launch(prepare)
         } else {
-            startVpn(context, config)
+            startVpn(context, plan)
         }
     }
 
-    fun startAutomaticMode() {
-        tcpingMessage = ""
-        TcptunState.clearLogs()
-        if (needsNotificationPermission(context)) {
-            automaticNotificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    fun applyRunningState(nextState: ProfilesState) {
+        if (nextState.activeIds.isEmpty()) {
+            save(nextState)
+            stopVpn(context)
             return
         }
-        val prepare = VpnService.prepare(context)
-        if (prepare != null) {
-            automaticVpnLauncher.launch(prepare)
-        } else {
-            startAutomaticVpn(context)
+        val plan = runCatching { nextState.runPlan() }.getOrElse { err ->
+            TcptunState.error(err.message ?: resources.getString(R.string.start_failed))
+            showLogs = true
+            return
         }
-    }
-
-    fun toggleAutomaticMode() {
-        if (vpnState.status == "Stopping") return
-        if (vpnState.automaticMode && isVpnActiveStatus(vpnState.status)) {
-            stopVpn(context)
+        tcpingMessage = ""
+        val canUpdateOutbounds = vpnState.status == "Running" && state.activeIds.isNotEmpty()
+        save(nextState)
+        if (canUpdateOutbounds) {
+            updateVpnOutbounds(context, plan)
         } else {
-            startAutomaticMode()
+            launchPlan(plan)
         }
     }
 
     fun toggleProfile(profile: AppConfig) {
-        val status = vpnState.status
-        val active = isVpnActiveStatus(status)
-        if (isVpnTransitionStatus(status)) return
-        if (active && !vpnState.automaticMode && profile.id == state.selected?.id) {
-            stopVpn(context)
-            return
+        if (isVpnTransitionStatus(vpnState.status)) return
+        val nextActiveIds = if (profile.id in state.activeIds) {
+            state.activeIds - profile.id
+        } else {
+            state.activeIds + profile.id
         }
-        startProfile(profile)
+        applyRunningState(state.copy(activeIds = nextActiveIds))
     }
 
     fun deleteProfile(profile: AppConfig) {
         val profileIndex = state.profiles.indexOfFirst { it.id == profile.id }
         if (profileIndex < 0) return
-        val wasSelected = state.selectedId == profile.id
         val remaining = state.profiles.toMutableList().also { it.removeAt(profileIndex) }
-        val nextSelectedId = if (wasSelected) remaining.firstOrNull()?.id else state.selectedId
-        save(ProfilesState(remaining, nextSelectedId))
+        val wasActive = profile.id in state.activeIds
+        val nextState = state.copy(profiles = remaining, activeIds = state.activeIds - profile.id)
+        if (wasActive) applyRunningState(nextState) else save(nextState)
         screenScope.launch {
             snackbarHostState.currentSnackbarData?.dismiss()
             val result = snackbarHostState.showDismissibleSnackbar(
@@ -495,7 +474,11 @@ internal fun TcptunScreen(
                 if (current.profiles.none { it.id == profile.id }) {
                     val restored = current.profiles.toMutableList()
                     restored.add(profileIndex.coerceAtMost(restored.size), profile)
-                    save(ProfilesState(restored, if (wasSelected) profile.id else current.selectedId))
+                    val restoredState = current.copy(
+                        profiles = restored,
+                        activeIds = if (wasActive) current.activeIds + profile.id else current.activeIds,
+                    )
+                    if (wasActive) applyRunningState(restoredState) else save(restoredState)
                 }
             }
         }
@@ -522,13 +505,6 @@ internal fun TcptunScreen(
         )
     } else if (editing == null) {
         val listIpInfo = rememberLocalIpInfo(context)
-        val automaticUpstreamAddress = if (
-            vpnState.automaticMode && isVpnActiveStatus(vpnState.status)
-        ) {
-            automaticUpstreamIpv4(vpnState.automaticUpstreamRemote)
-        } else {
-            ""
-        }
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             topBar = {
@@ -546,17 +522,17 @@ internal fun TcptunScreen(
                 )
             },
             bottomBar = {
-                val serverConnected = !vpnState.automaticMode && hasServerConnection(vpnState.diagnostics)
+                val serverConnected = hasServerConnection(vpnState.diagnostics)
                 BottomStatus(
                     status = vpnState.status,
                     error = vpnState.lastError,
                     tcpingMessage = tcpingMessage,
                     tcpingInProgress = tcpingInProgress,
-                    hasProfile = state.selected != null,
+                    hasProfile = state.profiles.isNotEmpty(),
                     tcpingEnabled = serverConnected,
                     onClick = {
                         if (isVpnTransitionStatus(vpnState.status)) return@BottomStatus
-                        if (state.selected == null) return@BottomStatus
+                        if (state.profiles.isEmpty()) return@BottomStatus
                         if (tcpingInProgress) return@BottomStatus
                         if (!serverConnected) return@BottomStatus
                         val tcpingTarget = TCPING_TARGETS[tcpingTargetIndex]
@@ -586,26 +562,19 @@ internal fun TcptunScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    if (listIpInfo.underlyingIpv4.isNotBlank() || automaticUpstreamAddress.isNotBlank()) {
+                    if (listIpInfo.underlyingIpv4.isNotBlank() || listIpInfo.underlyingGatewayIpv4.isNotBlank()) {
                         item(key = "underlying-ipv4-header") {
                             ProfileListHeader(
-                                localIpv4 = listIpInfo.underlyingIpv4,
-                                upstreamIpv4 = automaticUpstreamAddress,
-                                active = vpnState.automaticMode && isVpnActiveStatus(vpnState.status),
-                                enabled = vpnState.status != "Stopping",
-                                onClick = ::toggleAutomaticMode,
+                                localIpv4 = listIpInfo.underlyingIpv4.substringBefore('/').substringBefore('\n'),
+                                gatewayIpv4 = listIpInfo.underlyingGatewayIpv4.substringBefore('\n'),
                             )
                         }
                     }
                     items(state.profiles, key = { it.id }) { profile ->
                         ProfileRow(
                             profile = profile,
-                            selected = profile.id == state.selected?.id,
-                            status = vpnState.status.takeIf {
-                                !vpnState.automaticMode &&
-                                    profile.id == state.selected?.id &&
-                                    isVpnActiveStatus(it)
-                            },
+                            running = profile.id in state.activeIds && isVpnActiveStatus(vpnState.status),
+                            status = vpnState.status.takeIf { profile.id in state.activeIds },
                             enabled = !isVpnTransitionStatus(vpnState.status),
                             onClick = { toggleProfile(profile) },
                             shareable = ProfileUriCodec.encode(profile) != null,
@@ -634,7 +603,12 @@ internal fun TcptunScreen(
                 } else {
                     profiles.add(updated)
                 }
-                save(ProfilesState(profiles, updated.id))
+                val nextState = state.copy(profiles = profiles)
+                if (updated.id in state.activeIds && vpnState.status == "Running") {
+                    applyRunningState(nextState)
+                } else {
+                    save(nextState)
+                }
                 editingProfile = null
             },
         )
@@ -675,19 +649,14 @@ internal fun TcptunScreen(
 @Composable
 private fun ProfileListHeader(
     localIpv4: String,
-    upstreamIpv4: String,
-    active: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
+    gatewayIpv4: String,
 ) {
     val colors = MaterialTheme.colorScheme
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(enabled = enabled, onClick = onClick),
+        modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
-        color = if (active) colors.secondaryContainer else colors.surfaceContainerHigh,
-        tonalElevation = if (active) 2.dp else 1.dp,
+        color = colors.surfaceContainerHigh,
+        tonalElevation = 1.dp,
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
@@ -698,16 +667,20 @@ private fun ProfileListHeader(
                 text = localIpv4,
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodyLarge,
-                color = if (active) colors.onSecondaryContainer else colors.onSurface,
+                color = colors.onSurface,
                 fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = upstreamIpv4,
+                text = gatewayIpv4,
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodyLarge,
-                color = if (active) colors.onSecondaryContainer else colors.onSurface,
+                color = colors.onSurface,
                 fontFamily = FontFamily.Monospace,
                 textAlign = TextAlign.End,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -893,7 +866,7 @@ private fun MainActionsFab(
 @Composable
 private fun ProfileRow(
     profile: AppConfig,
-    selected: Boolean,
+    running: Boolean,
     status: String?,
     enabled: Boolean,
     shareable: Boolean,
@@ -903,8 +876,8 @@ private fun ProfileRow(
     onDeleteRequest: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
-    val rowColor = if (selected) colors.secondaryContainer else colors.surfaceContainerLow
-    val statusColor = if (status == "Running") colors.primary else colors.tertiary
+    val rowColor = if (running) colors.secondaryContainer else colors.surfaceContainerLow
+    val statusColor = if (running) colors.primary else colors.onSurfaceVariant
     val dismissState = rememberSwipeToDismissBoxState()
 
     LaunchedEffect(dismissState.currentValue) {
@@ -941,7 +914,7 @@ private fun ProfileRow(
                 .heightIn(min = 108.dp),
             shape = RoundedCornerShape(8.dp),
             color = rowColor,
-            tonalElevation = if (selected) 2.dp else 0.dp,
+            tonalElevation = if (running) 2.dp else 0.dp,
         ) {
             Row(
                 modifier = Modifier
@@ -953,7 +926,7 @@ private fun ProfileRow(
                     modifier = Modifier
                         .width(5.dp)
                         .height(72.dp)
-                        .background(if (selected) statusColor else Color.Transparent, RoundedCornerShape(8.dp)),
+                        .background(if (running) statusColor else Color.Transparent, RoundedCornerShape(8.dp)),
                 )
                 Column(
                     modifier = Modifier
@@ -975,6 +948,11 @@ private fun ProfileRow(
                         text = status?.let { "${profile.label()} · ${vpnStatusLabel(it)}" } ?: profile.label(),
                         style = MaterialTheme.typography.titleMedium,
                         color = statusColor,
+                    )
+                    Text(
+                        text = stringResource(if (running) R.string.connection_running else R.string.connection_stopped),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = colors.onSurfaceVariant,
                     )
                 }
                 IconButton(
@@ -1504,6 +1482,8 @@ private fun DurationSettingField(
 @Composable
 private fun RouteManagementPage(onBack: () -> Unit) {
     val context = LocalContext.current
+    val profileState = remember { ProfileStore.load(context) }
+    val routeProfiles = profileState.profiles.filter { it.rawConfigJson.isBlank() }
     var rules by remember { mutableStateOf(RouteRuleStore.load(context)) }
     var editingRule by remember { mutableStateOf<ManagedRouteRule?>(null) }
     var deleteCandidate by remember { mutableStateOf<ManagedRouteRule?>(null) }
@@ -1593,6 +1573,7 @@ private fun RouteManagementPage(onBack: () -> Unit) {
             itemsIndexed(rules, key = { _, rule -> rule.id }) { index, rule ->
                 ManagedRouteRuleRow(
                     rule = rule,
+                    profiles = routeProfiles,
                     onClick = { editingRule = rule },
                     onEnabledChange = { enabled ->
                         persist(rules.toMutableList().also { it[index] = rule.copy(enabled = enabled) })
@@ -1626,6 +1607,7 @@ private fun RouteManagementPage(onBack: () -> Unit) {
     editingRule?.let { rule ->
         ManagedRouteRuleDialog(
             rule = rule,
+            profiles = routeProfiles,
             isNew = rules.none { it.id == rule.id },
             onDismiss = { editingRule = null },
             onSave = { updated ->
@@ -1668,6 +1650,7 @@ private fun RouteManagementPage(onBack: () -> Unit) {
 @Composable
 private fun ManagedRouteRuleRow(
     rule: ManagedRouteRule,
+    profiles: List<AppConfig>,
     onClick: () -> Unit,
     onEnabledChange: (Boolean) -> Unit,
     onMoveUp: () -> Unit,
@@ -1728,7 +1711,7 @@ private fun ManagedRouteRuleRow(
                     )
                     Text(rule.value, style = MaterialTheme.typography.bodyLarge, color = colors.onSurface)
                     Text(
-                        routeOutboundLabel(rule.outbound),
+                        routeOutboundLabel(rule, profiles),
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.onSurfaceVariant,
                     )
@@ -1775,6 +1758,7 @@ private fun RouteRulesEmptyState(onAdd: () -> Unit) {
 @Composable
 private fun ManagedRouteRuleDialog(
     rule: ManagedRouteRule,
+    profiles: List<AppConfig>,
     isNew: Boolean,
     onDismiss: () -> Unit,
     onSave: (ManagedRouteRule) -> Unit,
@@ -1783,12 +1767,22 @@ private fun ManagedRouteRuleDialog(
     var type by remember(rule.id) { mutableStateOf(rule.type) }
     var value by remember(rule.id) { mutableStateOf(rule.value) }
     var outbound by remember(rule.id) { mutableStateOf(rule.outbound) }
+    var outboundProfileId by remember(rule.id) { mutableStateOf(rule.outboundProfileId) }
     var enabled by remember(rule.id) { mutableStateOf(rule.enabled) }
     var invalid by remember(rule.id) { mutableStateOf(false) }
     val types = ManagedRouteRuleType.entries
     val typeLabels = types.map { routeRuleTypeLabel(it) }
-    val outbounds = ManagedRouteOutbound.entries
-    val outboundLabels = outbounds.map { routeOutboundLabel(it) }
+    val directLabel = stringResource(R.string.route_outbound_direct)
+    val poolLabel = stringResource(R.string.route_outbound_proxy)
+    val proxyChoices = listOf("" to poolLabel) + profiles.map { profile ->
+        profile.id to "${profile.name} · ${profile.maskedAddress()} · ${profile.id.take(8)}"
+    }
+    val outboundChoices = proxyChoices + ("__direct__" to directLabel)
+    val selectedOutboundLabel = if (outbound == ManagedRouteOutbound.Direct) {
+        directLabel
+    } else {
+        outboundChoices.firstOrNull { it.first == outboundProfileId }?.second ?: poolLabel
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1818,10 +1812,17 @@ private fun ManagedRouteRuleDialog(
                 )
                 ChoiceRow(
                     stringResource(R.string.route_rule_outbound),
-                    outboundLabels[outbound.ordinal],
-                    outboundLabels,
+                    selectedOutboundLabel,
+                    outboundChoices.map { it.second },
                 ) { selected ->
-                    outbound = outbounds[outboundLabels.indexOf(selected).coerceAtLeast(0)]
+                    val choice = outboundChoices.firstOrNull { it.second == selected } ?: return@ChoiceRow
+                    if (choice.first == "__direct__") {
+                        outbound = ManagedRouteOutbound.Direct
+                        outboundProfileId = ""
+                    } else {
+                        outbound = ManagedRouteOutbound.Proxy
+                        outboundProfileId = choice.first
+                    }
                 }
                 ToggleRow(stringResource(R.string.enabled), enabled) { enabled = it }
             }
@@ -1829,7 +1830,13 @@ private fun ManagedRouteRuleDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    val updated = rule.copy(type = type, value = value, outbound = outbound, enabled = enabled).normalized()
+                    val updated = rule.copy(
+                        type = type,
+                        value = value,
+                        outbound = outbound,
+                        outboundProfileId = outboundProfileId,
+                        enabled = enabled,
+                    ).normalized()
                     if (updated.isValid()) onSave(updated) else invalid = true
                 },
             ) {
@@ -1862,9 +1869,14 @@ private fun routeRuleTypeLabel(type: ManagedRouteRuleType): String = when (type)
 }
 
 @Composable
-private fun routeOutboundLabel(outbound: ManagedRouteOutbound): String = when (outbound) {
-    ManagedRouteOutbound.Proxy -> stringResource(R.string.route_outbound_proxy)
-    ManagedRouteOutbound.Direct -> stringResource(R.string.route_outbound_direct)
+private fun routeOutboundLabel(
+    rule: ManagedRouteRule,
+    profiles: List<AppConfig>,
+): String {
+    if (rule.outbound == ManagedRouteOutbound.Direct) return stringResource(R.string.route_outbound_direct)
+    if (rule.outboundProfileId.isBlank()) return stringResource(R.string.route_outbound_proxy)
+    return profiles.firstOrNull { it.id == rule.outboundProfileId }?.let { "${it.name} · ${it.maskedAddress()}" }
+        ?: stringResource(R.string.route_outbound_proxy)
 }
 
 @Composable
@@ -2421,28 +2433,11 @@ private fun needsNotificationPermission(context: Context): Boolean {
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
 }
 
-private fun startVpn(context: Context, config: AppConfig) {
-    TcptunState.beginProfileMode()
+private fun startVpn(context: Context, plan: ProfileRunPlan) {
     TcptunState.setStatus("Starting")
     TcptunState.appendLog("start requested")
     runCatching {
-        val intent = TcptunVpnService.startIntent(context, config)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            ContextCompat.startForegroundService(context, intent)
-        } else {
-            context.startService(intent)
-        }
-    }.onFailure { err ->
-        TcptunState.error(err.message ?: context.getString(R.string.start_failed))
-    }
-}
-
-private fun startAutomaticVpn(context: Context) {
-    TcptunState.beginAutomaticMode()
-    TcptunState.setStatus("Starting")
-    TcptunState.appendLog("automatic LAN VPN start requested")
-    runCatching {
-        val intent = TcptunVpnService.startAutomaticIntent(context)
+        val intent = TcptunVpnService.startIntent(context, plan)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             ContextCompat.startForegroundService(context, intent)
         } else {
@@ -2460,6 +2455,15 @@ private fun stopVpn(context: Context) {
         context.startService(TcptunVpnService.stopIntent(context))
     }.onFailure { err ->
         TcptunState.error(err.message ?: context.getString(R.string.stop_failed))
+    }
+}
+
+private fun updateVpnOutbounds(context: Context, plan: ProfileRunPlan) {
+    TcptunState.appendLog("connection update requested")
+    runCatching {
+        context.startService(TcptunVpnService.updateOutboundsIntent(context, plan))
+    }.onFailure { err ->
+        TcptunState.error(err.message ?: context.getString(R.string.start_failed))
     }
 }
 

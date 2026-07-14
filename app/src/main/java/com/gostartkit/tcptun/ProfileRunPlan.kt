@@ -1,0 +1,200 @@
+package com.tcptun.client
+
+import org.json.JSONArray
+import org.json.JSONObject
+import java.security.MessageDigest
+
+data class ProfileRunPlan(
+    val profiles: List<AppConfig>,
+    val activeIds: Set<String> = profiles.mapTo(linkedSetOf(), AppConfig::id),
+) {
+    val activeProfiles: List<AppConfig>
+        get() = profiles.filter { it.id in activeIds }
+
+    fun normalized(): ProfileRunPlan {
+        require(profiles.isNotEmpty()) { "at least one profile must be configured" }
+        require(profiles.map(AppConfig::id).distinct().size == profiles.size) { "configured profiles must be unique" }
+        require(activeIds.isNotEmpty()) { "at least one profile must be running" }
+        require(activeIds.all { activeId -> profiles.any { it.id == activeId } }) { "running profile is not configured" }
+        if (profiles.size > 1) {
+            require(profiles.none { it.rawConfigJson.isNotBlank() }) {
+                "full JSON profiles cannot run with other profiles"
+            }
+        }
+        profiles.forEach { profile ->
+            profile.validate()?.let { throw IllegalArgumentException("${profile.name}: $it") }
+        }
+        return this
+    }
+
+    fun toJson(): JSONObject = JSONObject()
+        .put("profiles", JSONArray().apply { profiles.forEach { put(it.toJson()) } })
+        .put("activeIds", JSONArray().apply { profiles.filter { it.id in activeIds }.forEach { put(it.id) } })
+
+    companion object {
+        fun fromJson(json: JSONObject): ProfileRunPlan {
+            val values = json.getJSONArray("profiles")
+            val profiles = buildList {
+                for (index in 0 until values.length()) add(AppConfig.fromJson(values.getJSONObject(index)))
+            }
+            val activeIds = json.optJSONArray("activeIds")?.let { valuesArray ->
+                buildSet {
+                    for (index in 0 until valuesArray.length()) add(valuesArray.getString(index))
+                }
+            } ?: profiles.mapTo(linkedSetOf(), AppConfig::id)
+            return ProfileRunPlan(profiles, activeIds).normalized()
+        }
+    }
+}
+
+internal fun profileOutboundTag(profileId: String): String {
+    val digest = MessageDigest.getInstance("SHA-256").digest(profileId.encodeToByteArray())
+    return "profile-" + digest.take(12).joinToString("") { byte -> "%02x".format(byte) }
+}
+
+private const val BalancedOutboundTag = "profile-pool"
+
+internal fun ProfileRunPlan.toBridgeJson(
+    localListenAddr: String,
+    verbose: Boolean = false,
+    socks5Username: String = "",
+    socks5Password: String = "",
+    routeExternalSources: Boolean = false,
+    directFirst: Boolean = false,
+    probeTimeout: String = "120ms",
+    failureThreshold: Int = 1,
+    positiveTtl: String = "30m",
+    negativeTtl: String = "10m",
+    managedRouteRules: List<ManagedRouteRule> = emptyList(),
+): String {
+    val plan = normalized()
+    if (plan.profiles.size == 1) {
+        val profile = plan.profiles.single()
+        val applicableRules = managedRouteRules.filter { rule ->
+            rule.outbound == ManagedRouteOutbound.Direct ||
+                rule.outboundProfileId.isBlank() ||
+                rule.outboundProfileId == profile.id
+        }
+        return profile.toBridgeJson(
+            localListenAddr = localListenAddr,
+            verbose = verbose,
+            socks5Username = socks5Username,
+            socks5Password = socks5Password,
+            routeExternalSources = routeExternalSources,
+            directFirst = directFirst,
+            probeTimeout = probeTimeout,
+            failureThreshold = failureThreshold,
+            positiveTtl = positiveTtl,
+            negativeTtl = negativeTtl,
+            managedRouteRules = applicableRules,
+        )
+    }
+
+    val tags = plan.profiles.associate { it.id to profileOutboundTag(it.id) }
+    require(tags.values.distinct().size == tags.size) { "running profiles generated duplicate outbound tags" }
+    val singleProfileRoots = plan.profiles.associate { profile ->
+        profile.id to JSONObject(
+            profile.toBridgeJson(
+                localListenAddr = localListenAddr,
+                verbose = verbose,
+                socks5Username = socks5Username,
+                socks5Password = socks5Password,
+            ),
+        )
+    }
+    val acceptsUdp = plan.profiles.any(AppConfig::udp)
+    val inbound = JSONObject(
+        singleProfileRoots.getValue(plan.profiles.first().id).getJSONArray("inbounds").getJSONObject(0).toString(),
+    )
+        .put("outbound", BalancedOutboundTag)
+        .put("network", JSONArray().put("tcp").apply { if (acceptsUdp) put("udp") })
+    val outbounds = JSONArray()
+    plan.profiles.forEach { profile ->
+        val outbound = JSONObject(
+            singleProfileRoots.getValue(profile.id).getJSONArray("outbounds").getJSONObject(0).toString(),
+        ).put("tag", tags.getValue(profile.id))
+        outbounds.put(outbound)
+    }
+    outbounds.put(JSONObject().put("tag", "direct").put("type", "direct"))
+    outbounds.put(
+        JSONObject()
+            .put("tag", BalancedOutboundTag)
+            .put("type", "balance")
+            .put("network", JSONArray().put("tcp").apply { if (acceptsUdp) put("udp") })
+            .put("affinity_ttl", "10m")
+            .put(
+                "members",
+                JSONArray().apply {
+                    plan.profiles.forEach { profile ->
+                        put(JSONObject().put("outbound", tags.getValue(profile.id)).put("weight", 100))
+                    }
+                },
+            ),
+    )
+
+    val listenHost = localListenAddr.substringBeforeLast(':').removeSurrounding("[", "]")
+    val allowDirectFirst = directFirst &&
+        (listenHost in setOf("127.0.0.1", "::1", "localhost") || routeExternalSources)
+    if (allowDirectFirst) {
+        outbounds.put(
+            JSONObject()
+                .put("tag", "auto")
+                .put("type", "direct-first")
+                .put("primary", "direct")
+                .put("fallback", BalancedOutboundTag)
+                .put("network", JSONArray().put("tcp"))
+                .put("probe_timeout", probeTimeout.trim())
+                .put("failure_threshold", failureThreshold.coerceIn(1, 100))
+                .put("positive_ttl", positiveTtl.trim())
+                .put("negative_ttl", negativeTtl.trim()),
+        )
+    }
+
+    val activeRules = managedRouteRules.map(ManagedRouteRule::normalized)
+        .filter { it.enabled && it.isValid() }
+    val rules = JSONArray()
+    if (allowDirectFirst || activeRules.any { it.outbound == ManagedRouteOutbound.Direct }) {
+        rules.put(
+            JSONObject()
+                .put("inbound", JSONArray().put("local"))
+                .put("network", JSONArray().put("tcp"))
+                .put("domains", JSONArray().put("connectivitycheck.gstatic.com").put("cp.cloudflare.com"))
+                .put("outbound", BalancedOutboundTag),
+        )
+    }
+    activeRules.forEach { rule ->
+        val targetProfile = rule.outboundProfileId.takeIf(String::isNotBlank)
+            ?.let { profileId -> plan.profiles.firstOrNull { it.id == profileId } }
+        val targetTag = when {
+            rule.outbound == ManagedRouteOutbound.Direct -> "direct"
+            rule.outboundProfileId.isBlank() -> BalancedOutboundTag
+            targetProfile != null -> tags.getValue(targetProfile.id)
+            else -> return@forEach
+        }
+        val route = JSONObject()
+            .put("inbound", JSONArray().put("local"))
+            .put(rule.type.jsonKey, JSONArray().put(rule.value))
+            .put("outbound", targetTag)
+        if (targetProfile != null) {
+            route.put("network", JSONArray().apply { targetProfile.effectiveTunnelNetworks().forEach(::put) })
+        }
+        rules.put(route)
+    }
+    if (allowDirectFirst) {
+        rules.put(
+            JSONObject()
+                .put("inbound", JSONArray().put("local"))
+                .put("network", JSONArray().put("tcp"))
+                .put("outbound", "auto"),
+        )
+    }
+
+    return JSONObject()
+        .put("log", JSONObject().put("level", if (verbose) "debug" else "info"))
+        .put("inbounds", JSONArray().put(inbound))
+        .put("outbounds", outbounds)
+        .put("route", JSONObject().put("default_outbound", BalancedOutboundTag).put("rules", rules))
+        .put("dns", JSONObject())
+        .put("discovery", JSONObject())
+        .toString()
+}

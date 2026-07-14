@@ -36,6 +36,8 @@
     <string name="empty_clipboard">剪切板为空</string>
     <string name="invalid_clipboard_data">剪切板中没有可导入的配置或 tcptun 配置。</string>
     <string name="empty_profiles">还没有配置项</string>
+    <string name="connection_running">独立运行中</string>
+    <string name="connection_stopped">已停止</string>
     <string name="error_prefix">错误：%1$s</string>
     <string name="tcping_running">正在 TCPing...</string>
     <string name="tcping_success">TCPing 成功 · %1$s %2$dms</string>
@@ -87,7 +89,7 @@
     <string name="failure_threshold_error">请输入 1 到 100 之间的值。</string>
     <string name="direct_first_note">对生成的配置先尝试 TCP 直连，直连失败时回落到隧道。UDP 仍使用隧道；完整 JSON 配置保留自身路由。</string>
     <string name="route_management">路由管理</string>
-    <string name="route_management_note">生成配置会从上到下匹配规则，离开页面时应用变更。完整 JSON 配置保留自身路由。</string>
+    <string name="route_management_note">规则优先从上到下匹配，并可指定任意连接；未命中流量使用活动连接动态池。离开页面时应用变更。</string>
     <string name="route_rules_count">已启用 %1$d 条规则</string>
     <string name="empty_route_rules">还没有路由规则</string>
     <string name="add_route_rule">添加路由规则</string>
@@ -106,7 +108,7 @@
     <string name="route_type_ip">精确 IP 地址</string>
     <string name="route_type_ip_cidr">IP CIDR</string>
     <string name="route_type_ip_range">IP 范围</string>
-    <string name="route_outbound_proxy">代理隧道</string>
+    <string name="route_outbound_proxy">动态连接池</string>
     <string name="route_outbound_direct">直接连接</string>
     <string name="route_example_domain">示例：api.example.com</string>
     <string name="route_example_domain_suffix">示例：example.com</string>
