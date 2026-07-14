@@ -27,7 +27,6 @@
     <string name="delete">删除</string>
     <string name="undo">撤销</string>
     <string name="profile_deleted">已删除 %1$s</string>
-    <string name="profile_deleted_prefix">已删除</string>
     <string name="profile_imported">已导入 %1$s</string>
     <string name="profile_already_exists">%1$s 已在连接列表中</string>
     <string name="invalid_profile_link">该链接不是有效的受支持配置。</string>
@@ -36,7 +35,6 @@
     <string name="empty_clipboard">剪切板为空</string>
     <string name="invalid_clipboard_data">剪切板中没有可导入的配置或 tcptun 配置。</string>
     <string name="empty_profiles">还没有配置项</string>
-    <string name="connection_stopped">已停止</string>
     <string name="error_prefix">错误：%1$s</string>
     <string name="tcping_failed_fallback">失败</string>
     <string name="tcping_step">TCPing %1$s · %2$d/%3$d · %4$s…</string>

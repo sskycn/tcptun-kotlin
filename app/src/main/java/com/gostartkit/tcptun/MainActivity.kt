@@ -111,12 +111,14 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.tcptun.client.ui.theme.TcpTunTheme
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.util.UUID
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val SnackbarAutoDismissMillis = 6_000L
 
@@ -271,7 +273,6 @@ internal fun TcptunScreen(
     val resources = LocalResources.current
     val emptyClipboard = stringResource(R.string.empty_clipboard)
     val invalidClipboard = stringResource(R.string.invalid_clipboard_data)
-    val profileDeletedPrefix = stringResource(R.string.profile_deleted_prefix)
     val undoLabel = stringResource(R.string.undo)
     var state by remember { mutableStateOf(ProfileStore.load(context)) }
     var pendingDeepLinkProfile by remember { mutableStateOf<AppConfig?>(null) }
@@ -460,7 +461,7 @@ internal fun TcptunScreen(
         screenScope.launch {
             snackbarHostState.currentSnackbarData?.dismiss()
             val result = snackbarHostState.showDismissibleSnackbar(
-                message = "$profileDeletedPrefix ${profile.name}",
+                message = resources.getString(R.string.profile_deleted, profile.name),
                 actionLabel = undoLabel,
             )
             if (result == SnackbarResult.ActionPerformed) {
@@ -686,7 +687,7 @@ private fun ProfileListHeader(
 private fun AutoDismissSnackbarHost(hostState: SnackbarHostState) {
     val snackbarData = hostState.currentSnackbarData
     LaunchedEffect(snackbarData) {
-        if (snackbarData != null) {
+        if (snackbarData != null && snackbarData.visuals.actionLabel == null) {
             delay(SnackbarAutoDismissMillis)
             if (hostState.currentSnackbarData === snackbarData) snackbarData.dismiss()
         }
@@ -878,8 +879,13 @@ private fun ProfileRow(
 
     LaunchedEffect(dismissState.currentValue) {
         if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart) {
-            onDeleteRequest()
-            dismissState.reset()
+            try {
+                onDeleteRequest()
+            } finally {
+                withContext(NonCancellable) {
+                    dismissState.snapTo(SwipeToDismissBoxValue.Settled)
+                }
+            }
         }
     }
 
@@ -945,13 +951,6 @@ private fun ProfileRow(
                         style = MaterialTheme.typography.titleMedium,
                         color = statusColor,
                     )
-                    if (!running) {
-                        Text(
-                            text = stringResource(R.string.connection_stopped),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = colors.onSurfaceVariant,
-                        )
-                    }
                 }
                 IconButton(
                     onClick = onShare,
