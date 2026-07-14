@@ -111,16 +111,12 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.tcptun.client.ui.theme.TcpTunTheme
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.net.Inet4Address
 import java.net.Inet6Address
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.util.UUID
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 private const val SnackbarAutoDismissMillis = 6_000L
 
@@ -288,8 +284,6 @@ internal fun TcptunScreen(
     var showQrScanner by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
     var profileQrCode by remember { mutableStateOf<AppConfig?>(null) }
-    var tcpingMessage by remember { mutableStateOf("") }
-    var tcpingInProgress by remember { mutableStateOf(false) }
     var tcpingTargetIndex by remember { mutableStateOf(0) }
     val snackbarHostState = remember { SnackbarHostState() }
     val screenScope = rememberCoroutineScope()
@@ -436,7 +430,7 @@ internal fun TcptunScreen(
             showLogs = true
             return
         }
-        tcpingMessage = ""
+        TcptunState.clearTcping()
         val canUpdateOutbounds = vpnState.status == "Running" && state.activeIds.isNotEmpty()
         save(nextState)
         if (canUpdateOutbounds) {
@@ -526,27 +520,32 @@ internal fun TcptunScreen(
                 BottomStatus(
                     status = vpnState.status,
                     error = vpnState.lastError,
-                    tcpingMessage = tcpingMessage,
-                    tcpingInProgress = tcpingInProgress,
+                    tcping = vpnState.tcping,
                     hasProfile = state.profiles.isNotEmpty(),
                     tcpingEnabled = serverConnected,
                     onClick = {
                         if (isVpnTransitionStatus(vpnState.status)) return@BottomStatus
-                        if (state.profiles.isEmpty()) return@BottomStatus
-                        if (tcpingInProgress) return@BottomStatus
+                        if (state.activeProfiles.isEmpty()) return@BottomStatus
+                        if (vpnState.tcping.running) return@BottomStatus
                         if (!serverConnected) return@BottomStatus
                         val tcpingTarget = TCPING_TARGETS[tcpingTargetIndex]
-                        val tcpingSettings = TcptunVpnService.readRuntimeSettings(context)
                         tcpingTargetIndex = (tcpingTargetIndex + 1) % TCPING_TARGETS.size
-                        tcpingInProgress = true
-                        tcpingMessage = ""
-                        screenScope.launch {
-                            val result = tcping(context, tcpingTarget, tcpingSettings)
-                            tcpingMessage = result.message
-                            if (!result.success) {
-                                TcptunVpnService.requestDenseHealthCheck("tcping failed: ${tcpingTarget.label}")
-                            }
-                            tcpingInProgress = false
+                        val requestId = TcptunState.beginTcping(
+                            targetLabel = tcpingTarget.label,
+                            total = state.activeProfiles.size,
+                        )
+                        runCatching {
+                            context.startService(
+                                TcptunVpnService.tcpingOutboundsIntent(
+                                    context = context,
+                                    requestId = requestId,
+                                    targetLabel = tcpingTarget.label,
+                                    host = tcpingTarget.host,
+                                    port = tcpingTarget.port,
+                                ),
+                            )
+                        }.onFailure { err ->
+                            TcptunState.failTcping(requestId, err.message ?: resources.getString(R.string.tcping_failed_fallback))
                         }
                     },
                 )
@@ -949,11 +948,13 @@ private fun ProfileRow(
                         style = MaterialTheme.typography.titleMedium,
                         color = statusColor,
                     )
-                    Text(
-                        text = stringResource(if (running) R.string.connection_running else R.string.connection_stopped),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = colors.onSurfaceVariant,
-                    )
+                    if (!running) {
+                        Text(
+                            text = stringResource(R.string.connection_stopped),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colors.onSurfaceVariant,
+                        )
+                    }
                 }
                 IconButton(
                     onClick = onShare,
@@ -1058,16 +1059,15 @@ private fun EmptyState(onAdd: () -> Unit) {
 private fun BottomStatus(
     status: String,
     error: String,
-    tcpingMessage: String,
-    tcpingInProgress: Boolean,
+    tcping: TcpingProgress,
     hasProfile: Boolean,
     tcpingEnabled: Boolean,
     onClick: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
+    val tcpingMessage = tcpingStatusText(tcping)
     val text = when {
         error.isNotBlank() -> stringResource(R.string.error_prefix, error)
-        tcpingInProgress -> stringResource(R.string.tcping_running)
         tcpingMessage.isNotBlank() -> tcpingMessage
         status == "Running" && !tcpingEnabled -> stringResource(R.string.connected_waiting_server)
         status == "Running" -> stringResource(R.string.connected_tap_test)
@@ -1078,15 +1078,17 @@ private fun BottomStatus(
     }
     val contentColor = when {
         error.isNotBlank() -> colors.error
-        tcpingMessage.startsWith(stringResource(R.string.tcping_success_prefix)) || status == "Running" -> colors.primary
-        status == "Starting" || status == "Stopping" || tcpingInProgress -> colors.tertiary
+        tcping.running -> colors.tertiary
+        tcping.error.isNotBlank() && tcping.results.isEmpty() -> colors.error
+        tcping.results.any { it.elapsedMs != null } || status == "Running" -> colors.primary
+        status == "Starting" || status == "Stopping" -> colors.tertiary
         else -> colors.onSurfaceVariant
     }
     BottomAppBar(
         modifier = Modifier
             .fillMaxWidth()
-            .height(72.dp)
-            .clickable(enabled = hasProfile && tcpingEnabled && !tcpingInProgress && !isVpnTransitionStatus(status), onClick = onClick),
+            .heightIn(min = 72.dp, max = 144.dp)
+            .clickable(enabled = hasProfile && tcpingEnabled && !tcping.running && !isVpnTransitionStatus(status), onClick = onClick),
         containerColor = colors.surfaceContainer,
         contentColor = contentColor,
     ) {
@@ -1094,9 +1096,46 @@ private fun BottomStatus(
             text,
             style = MaterialTheme.typography.titleMedium,
             color = contentColor,
-            modifier = Modifier.padding(horizontal = 16.dp),
+            maxLines = 4,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
         )
     }
+}
+
+@Composable
+private fun tcpingStatusText(progress: TcpingProgress): String {
+    if (progress.requestId == 0L) return ""
+    if (progress.error.isNotBlank() && progress.results.isEmpty()) {
+        return stringResource(R.string.tcping_failed_summary, progress.error)
+    }
+    val completed = progress.results.map { result ->
+        result.elapsedMs?.let { elapsed ->
+            stringResource(R.string.tcping_link_success, result.profileName, elapsed)
+        } ?: stringResource(R.string.tcping_link_failed, result.profileName)
+    }
+    val parts = mutableListOf<String>()
+    if (progress.running) {
+        parts += stringResource(
+            R.string.tcping_step,
+            progress.targetLabel,
+            progress.currentIndex,
+            progress.total,
+            progress.currentProfileName,
+        )
+    } else {
+        parts += stringResource(R.string.tcping_complete, progress.targetLabel)
+    }
+    parts += completed
+    progress.averageMs?.let { average ->
+        parts += stringResource(
+            R.string.tcping_average,
+            average,
+            progress.results.count { it.elapsedMs != null },
+            progress.total,
+        )
+    }
+    return parts.joinToString(" · ")
 }
 
 @Composable
@@ -2280,130 +2319,6 @@ private data class TcpingTarget(
     val port: Int = 443,
 )
 
-private data class TcpingResult(
-    val target: TcpingTarget,
-    val elapsedMs: Long?,
-    val error: String?,
-)
-
-private data class TcpingCheck(
-    val message: String,
-    val success: Boolean,
-)
-
-private suspend fun tcping(context: Context, target: TcpingTarget, settings: RuntimeSettings): TcpingCheck = withContext(Dispatchers.IO) {
-    val result = tcpingTarget(target, settings)
-    val elapsedMs = result.elapsedMs
-    if (elapsedMs != null) {
-        TcpingCheck(context.getString(R.string.tcping_success, target.label, elapsedMs), true)
-    } else {
-        TcpingCheck(
-            context.getString(R.string.tcping_failed, target.label, result.error ?: context.getString(R.string.tcping_failed_fallback)),
-            false,
-        )
-    }
-}
-
-private fun tcpingTarget(target: TcpingTarget, settings: RuntimeSettings): TcpingResult {
-    val start = System.nanoTime()
-    return runCatching {
-        Socket().use { socket ->
-            socket.connect(
-                InetSocketAddress(TcptunVpnService.LOCAL_SOCKS_HOST, settings.socksPort),
-                TCPING_TIMEOUT_MS,
-            )
-            socket.soTimeout = TCPING_TIMEOUT_MS
-            socks5Connect(socket, target.host, target.port, settings.socksUsername, settings.socksPassword)
-            completeTlsHandshake(socket, target.host, target.port, TCPING_TIMEOUT_MS)
-        }
-    }.fold(
-        onSuccess = {
-            TcpingResult(target, (System.nanoTime() - start) / 1_000_000, null)
-        },
-        onFailure = { err ->
-            TcpingResult(target, null, err.message ?: err.javaClass.simpleName)
-        },
-    )
-}
-
-private fun socks5Connect(socket: Socket, host: String, port: Int, username: String, password: String) {
-    val input = socket.getInputStream()
-    val output = socket.getOutputStream()
-    val authEnabled = username.isNotEmpty() || password.isNotEmpty()
-    output.write(if (authEnabled) byteArrayOf(0x05, 0x02, 0x00, 0x02) else byteArrayOf(0x05, 0x01, 0x00))
-    output.flush()
-    val methodReply = input.readExact(2)
-    require(methodReply[0] == 0x05.toByte()) { "invalid SOCKS5 method reply" }
-    when (methodReply[1].toInt() and 0xff) {
-        0x00 -> Unit
-        0x02 -> socks5Authenticate(input, output, username, password)
-        else -> error("SOCKS5 method rejected")
-    }
-
-    val hostBytes = host.encodeToByteArray()
-    require(hostBytes.size <= 255) { "host is too long" }
-    val request = ByteArray(7 + hostBytes.size)
-    request[0] = 0x05
-    request[1] = 0x01
-    request[2] = 0x00
-    request[3] = 0x03
-    request[4] = hostBytes.size.toByte()
-    hostBytes.copyInto(request, destinationOffset = 5)
-    request[request.lastIndex - 1] = ((port ushr 8) and 0xff).toByte()
-    request[request.lastIndex] = (port and 0xff).toByte()
-    output.write(request)
-    output.flush()
-
-    val replyHead = input.readExact(4)
-    require(replyHead[0] == 0x05.toByte()) { "invalid SOCKS5 reply" }
-    require(replyHead[1] == 0x00.toByte()) { "SOCKS5 connect failed: ${replyHead[1].toInt() and 0xff}" }
-    val addressLength = when (replyHead[3].toInt() and 0xff) {
-        0x01 -> 4
-        0x03 -> input.read()
-        0x04 -> 16
-        else -> error("invalid SOCKS5 address type")
-    }
-    require(addressLength >= 0) { "SOCKS5 reply ended early" }
-    input.readExact(addressLength + 2)
-}
-
-private fun socks5Authenticate(
-    input: java.io.InputStream,
-    output: java.io.OutputStream,
-    username: String,
-    password: String,
-) {
-    val usernameBytes = username.encodeToByteArray()
-    val passwordBytes = password.encodeToByteArray()
-    require(usernameBytes.size <= 255) { "SOCKS5 username is too long" }
-    require(passwordBytes.size <= 255) { "SOCKS5 password is too long" }
-    val request = ByteArray(3 + usernameBytes.size + passwordBytes.size)
-    request[0] = 0x01
-    request[1] = usernameBytes.size.toByte()
-    usernameBytes.copyInto(request, destinationOffset = 2)
-    request[2 + usernameBytes.size] = passwordBytes.size.toByte()
-    passwordBytes.copyInto(request, destinationOffset = 3 + usernameBytes.size)
-    output.write(request)
-    output.flush()
-    val reply = input.readExact(2)
-    require(reply[0] == 0x01.toByte() && reply[1] == 0x00.toByte()) {
-        "SOCKS5 username/password auth failed"
-    }
-}
-
-private fun java.io.InputStream.readExact(length: Int): ByteArray {
-    val data = ByteArray(length)
-    var offset = 0
-    while (offset < length) {
-        val read = read(data, offset, length - offset)
-        if (read < 0) {
-            error("connection closed")
-        }
-        offset += read
-    }
-    return data
-}
-
 private fun clipboardText(context: Context): String {
     val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return ""
     val clip = clipboard.primaryClip ?: return ""
@@ -2510,7 +2425,6 @@ private fun bridgeTimestampLabel(timestampMs: Long, noneLabel: String): String {
     ).format(java.util.Date(timestampMs))
 }
 
-private const val TCPING_TIMEOUT_MS = 3_000
 private val SERVER_CONNECTED_STATES = setOf("core_ready", "running", "upstream_connected")
 private val SERVER_CONNECTED_PHASES = setOf("connected", "upstream_connected")
 private val TCPING_TARGETS = listOf(

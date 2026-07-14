@@ -47,8 +47,8 @@ func (e *Engine) SetLogCallback(cb LogCallback)
 func (e *Engine) SetStatusCallback(cb StatusCallback)
 func (e *Engine) SetSocketProtector(p SocketProtector)
 func (e *Engine) SetAppIdentityProvider(provider AppIdentityProvider)
-func (e *Engine) Start(configJson string) error
-func (e *Engine) StartSession(configJson string) (int64, error)
+func (e *Engine) Configure(configJson string) error
+func (e *Engine) StartConfiguredSessionWithDisabledOutbounds(disabledTagsJson string) (int64, error)
 func (e *Engine) StartOutbound(tag string) error
 func (e *Engine) StopOutbound(tag string, force bool, timeoutMillis int64) error
 func (e *Engine) OutboundsStatusJSON() string
@@ -70,8 +70,9 @@ an optional TCP-only `direct-first` outbound. Ordered route rules are evaluated
 first and may select a specific configured profile by its stable tag; unmatched sessions enter the
 pool, whose effective weights follow active load, observed connection latency,
 and failures while destination affinity keeps related sessions on one link.
-After startup the service stops every inactive profile outbound; later profile
-row taps call `StartOutbound` or `StopOutbound` without recreating the Android
+The service first calls `Configure`, which has no runtime side effects, and then
+starts the configured session with every inactive profile tag disabled from its
+first state. Later profile row taps call `StartOutbound` or `StopOutbound` without recreating the Android
 VPN interface or local listener. A rule bound to a stopped profile remains
 authoritative and becomes usable again as soon as that profile is started.
 Custom routing is stored in the strict JSON `route.rules`:

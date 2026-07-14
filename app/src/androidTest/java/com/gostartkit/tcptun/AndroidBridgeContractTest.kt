@@ -7,14 +7,19 @@ import androidx.core.content.ContextCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.king.wechat.qrcode.WeChatQRCodeDetector
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 @RunWith(AndroidJUnit4::class)
 class AndroidBridgeContractTest {
@@ -39,10 +44,22 @@ class AndroidBridgeContractTest {
         val engine = Androidbridge.newEngine()
         try {
             engine.javaClass.getMethod("startOutbound", String::class.java)
+            engine.javaClass.getMethod("configure", String::class.java)
+            engine.javaClass.getMethod(
+                "startConfiguredSessionWithDisabledOutbounds",
+                String::class.java,
+            )
             engine.javaClass.getMethod(
                 "stopOutbound",
                 String::class.java,
                 Boolean::class.javaPrimitiveType,
+                Long::class.javaPrimitiveType,
+            )
+            engine.javaClass.getMethod(
+                "probeOutbound",
+                String::class.java,
+                String::class.java,
+                Long::class.javaPrimitiveType,
                 Long::class.javaPrimitiveType,
             )
             engine.javaClass.getMethod("outboundsStatusJSON")
@@ -90,6 +107,33 @@ class AndroidBridgeContractTest {
 
         val legacy = plan.toJson().apply { remove("activeIds") }
         assertEquals(setOf(first.id, second.id), ProfileRunPlan.fromJson(legacy).activeIds)
+    }
+
+    @Test
+    fun legacyCheckboxSelectionIsNotMigratedAsRunningConnections() {
+        val context = InstrumentationRegistry.getInstrumentation().context
+        val prefs = context.getSharedPreferences("tcptun", 0)
+        val first = AppConfig(id = "legacy-first", name = "first", serverHost = "192.0.2.10", token = "one")
+        val second = AppConfig(id = "legacy-second", name = "second", serverHost = "192.0.2.20", token = "two")
+        prefs.edit().clear().commit()
+        try {
+            prefs.edit()
+                .putString("profiles", JSONArray().put(first.toJson()).put(second.toJson()).toString())
+                .putString("enabledProfileIds", JSONArray().put(first.id).put(second.id).toString())
+                .putString("activeProfileIds", JSONArray().put(first.id).put(second.id).toString())
+                .commit()
+
+            val migrated = ProfileStore.load(context)
+
+            assertEquals(emptySet<String>(), migrated.activeIds)
+            assertFalse(prefs.contains("enabledProfileIds"))
+            assertEquals(0, JSONArray(prefs.getString("activeProfileIds", "[]")).length())
+
+            ProfileStore.save(context, migrated.copy(activeIds = setOf(second.id)))
+            assertEquals(setOf(second.id), ProfileStore.load(context).activeIds)
+        } finally {
+            prefs.edit().clear().commit()
+        }
     }
 
     @Test
@@ -237,6 +281,126 @@ class AndroidBridgeContractTest {
 
         assertEngineStarts(config.toString())
         assertEngineHotSwitchesOutbound(config.toString(), secondaryTag)
+    }
+
+    @Test
+    fun singleProfileUsesTheSameStablePoolStructure() {
+        val profile = AppConfig(
+            id = "00000000-0000-4000-8000-000000000010",
+            name = "single",
+            serverHost = "192.0.2.10",
+            serverPort = "443",
+            token = "single-token",
+        )
+
+        val config = JSONObject(
+            ProfileRunPlan(listOf(profile), activeIds = setOf(profile.id)).toBridgeJson("127.0.0.1:18084"),
+        )
+        val outbounds = config.getJSONArray("outbounds")
+        assertEquals(profileOutboundTag(profile.id), outbounds.getJSONObject(0).getString("tag"))
+        assertEquals("direct", outbounds.getJSONObject(1).getString("tag"))
+        assertEquals("profile-pool", outbounds.getJSONObject(2).getString("tag"))
+        assertEquals("profile-pool", config.getJSONObject("route").getString("default_outbound"))
+    }
+
+    @Test
+    fun twoProfilesStartAndStopIndependentlyWithoutReplacingSession() {
+        val first = AppConfig(
+            id = "00000000-0000-4000-8000-000000000021",
+            name = "first",
+            serverHost = "192.0.2.10",
+            serverPort = "443",
+            token = "first-token",
+        )
+        val second = AppConfig(
+            id = "00000000-0000-4000-8000-000000000022",
+            name = "second",
+            serverHost = "192.0.2.20",
+            serverPort = "443",
+            token = "second-token",
+        )
+        val firstTag = profileOutboundTag(first.id)
+        val secondTag = profileOutboundTag(second.id)
+        val config = ProfileRunPlan(listOf(first, second), activeIds = setOf(first.id))
+            .toBridgeJson("127.0.0.1:18085")
+        val engine = Androidbridge.newEngine()
+        try {
+            engine.configure(withAvailableInboundPorts(config))
+            val sessionId = engine.startConfiguredSessionWithDisabledOutbounds(
+                org.json.JSONArray().put(firstTag).put(secondTag).toString(),
+            )
+            assertNotEquals(0L, sessionId)
+            assertOutboundStates(engine.outboundsStatusJSON(), firstTag to false, secondTag to false, "profile-pool" to true)
+
+            engine.startOutbound(firstTag)
+            assertEquals(sessionId, engine.sessionID())
+            assertOutboundStates(engine.outboundsStatusJSON(), firstTag to true, secondTag to false, "profile-pool" to true)
+
+            engine.startOutbound(secondTag)
+            assertEquals(sessionId, engine.sessionID())
+            assertOutboundStates(engine.outboundsStatusJSON(), firstTag to true, secondTag to true, "profile-pool" to true)
+
+            engine.stopOutbound(firstTag, true, 1_000)
+            assertEquals(sessionId, engine.sessionID())
+            assertOutboundStates(engine.outboundsStatusJSON(), firstTag to false, secondTag to true, "profile-pool" to true)
+
+            engine.stopOutbound(secondTag, true, 1_000)
+            assertEquals(sessionId, engine.sessionID())
+            assertOutboundStates(engine.outboundsStatusJSON(), firstTag to false, secondTag to false, "profile-pool" to true)
+
+            engine.startOutbound(firstTag)
+            assertEquals(sessionId, engine.sessionID())
+            assertOutboundStates(engine.outboundsStatusJSON(), firstTag to true, secondTag to false, "profile-pool" to true)
+        } finally {
+            engine.close()
+        }
+    }
+
+    @Test
+    fun probeOutboundMeasuresEachExactRunningLinkWithoutChangingSession() {
+        ServerSocket(0, 2, InetAddress.getByName("127.0.0.1")).use { target ->
+            val accepted = CompletableFuture<Unit>()
+            thread(name = "tcping-contract-listener", isDaemon = true) {
+                runCatching {
+                    repeat(2) { target.accept().use { } }
+                }.fold(accepted::complete, accepted::completeExceptionally)
+            }
+            val config = """{
+                "inbounds":[{"tag":"local","type":"mixed","listen":"127.0.0.1","port":18086,"network":["tcp"],"outbound":"profile-pool"}],
+                "outbounds":[
+                    {"tag":"profile-a","type":"direct","network":["tcp"]},
+                    {"tag":"profile-b","type":"direct","network":["tcp"]},
+                    {"tag":"profile-pool","type":"balance","network":["tcp"],"members":[{"outbound":"profile-a"},{"outbound":"profile-b"}]}
+                ],
+                "route":{"default_outbound":"profile-pool"}
+            }""".trimIndent()
+            val engine = Androidbridge.newEngine()
+            try {
+                engine.configure(withAvailableInboundPorts(config))
+                val sessionId = engine.startConfiguredSessionWithDisabledOutbounds("[\"profile-b\"]")
+
+                assertTrue(engine.probeOutbound("profile-a", "127.0.0.1", target.localPort.toLong(), 1_000) >= 0)
+                assertTrue(runCatching {
+                    engine.probeOutbound("profile-b", "127.0.0.1", target.localPort.toLong(), 1_000)
+                }.exceptionOrNull()?.message.orEmpty().contains("stopped", ignoreCase = true))
+                assertTrue(runCatching {
+                    engine.probeOutbound("profile-pool", "127.0.0.1", target.localPort.toLong(), 1_000)
+                }.exceptionOrNull()?.message.orEmpty().contains("selector", ignoreCase = true))
+
+                engine.startOutbound("profile-b")
+                assertTrue(engine.probeOutbound("profile-b", "127.0.0.1", target.localPort.toLong(), 1_000) >= 0)
+                accepted.get(3, TimeUnit.SECONDS)
+                assertEquals(sessionId, engine.sessionID())
+                assertOutboundStates(
+                    engine.outboundsStatusJSON(),
+                    "profile-a" to true,
+                    "profile-b" to true,
+                    "profile-pool" to true,
+                )
+            } finally {
+                engine.close()
+            }
+        }
     }
 
     @Test
@@ -448,7 +612,8 @@ class AndroidBridgeContractTest {
     private fun assertEngineStarts(config: String) {
         val engine = Androidbridge.newEngine()
         try {
-            engine.start(withAvailableInboundPorts(config))
+            engine.configure(withAvailableInboundPorts(config))
+            engine.startConfiguredSessionWithDisabledOutbounds("[]")
             assertTrue(engine.status() in setOf("Starting", "Running"))
         } finally {
             engine.close()
@@ -458,8 +623,17 @@ class AndroidBridgeContractTest {
     private fun assertEngineHotSwitchesOutbound(config: String, tag: String) {
         val engine = Androidbridge.newEngine()
         try {
-            engine.start(withAvailableInboundPorts(config))
-            engine.stopOutbound(tag, true, 1_000)
+            engine.configure(withAvailableInboundPorts(config))
+            assertEquals("Stopped", engine.status())
+            assertEquals(0L, engine.sessionID())
+            val configured = org.json.JSONArray(engine.outboundsStatusJSON())
+            assertTrue(configured.length() > 0)
+            assertTrue(
+                (0 until configured.length())
+                    .map(configured::getJSONObject)
+                    .all { !it.getBoolean("running") },
+            )
+            engine.startConfiguredSessionWithDisabledOutbounds(org.json.JSONArray().put(tag).toString())
             val stopped = org.json.JSONArray(engine.outboundsStatusJSON())
             val stoppedStatus = (0 until stopped.length())
                 .map(stopped::getJSONObject)
@@ -475,6 +649,14 @@ class AndroidBridgeContractTest {
         } finally {
             engine.close()
         }
+    }
+
+    private fun assertOutboundStates(statusJson: String, vararg expected: Pair<String, Boolean>) {
+        val statuses = org.json.JSONArray(statusJson)
+        val runningByTag = (0 until statuses.length())
+            .map(statuses::getJSONObject)
+            .associate { it.getString("tag") to it.getBoolean("running") }
+        expected.forEach { (tag, running) -> assertEquals("outbound $tag", running, runningByTag[tag]) }
     }
 
     private fun withAvailableInboundPorts(config: String): String {

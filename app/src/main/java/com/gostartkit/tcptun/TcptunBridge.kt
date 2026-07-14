@@ -1,6 +1,7 @@
 package com.tcptun.client
 
 import java.lang.reflect.Proxy
+import org.json.JSONArray
 
 /** Validates through the gomobile core without creating or starting a service. */
 internal fun validateTcptunConfig(configJson: String) {
@@ -19,9 +20,11 @@ internal fun validateTcptunConfig(configJson: String) {
 }
 
 interface TcptunBridge {
-    fun start(configJson: String): Long
+    fun configure(configJson: String)
+    fun start(disabledOutboundTags: List<String>): Long
     fun startOutbound(tag: String)
     fun stopOutbound(tag: String, force: Boolean, timeoutMillis: Long)
+    fun probeOutbound(tag: String, host: String, port: Int, timeoutMillis: Long): Long
     fun outboundsStatusJson(): String
     fun stop()
     fun close()
@@ -67,9 +70,22 @@ class ReflectionTcptunBridge : TcptunBridge {
     private var socketProtector: Any? = null
     private var appIdentityProvider: Any? = null
 
-    override fun start(configJson: String): Long {
-        return (invokeEngine("startSession", arrayOf(String::class.java), configJson) as? Number)?.toLong()
-            ?: throw IllegalStateException("androidbridge.Engine.startSession returned no session ID")
+    override fun configure(configJson: String) {
+        invokeEngine("configure", arrayOf(String::class.java), configJson)
+    }
+
+    override fun start(disabledOutboundTags: List<String>): Long {
+        val disabledTagsJson = JSONArray().apply { disabledOutboundTags.forEach(::put) }.toString()
+        return (
+            invokeEngine(
+                "startConfiguredSessionWithDisabledOutbounds",
+                arrayOf(String::class.java),
+                disabledTagsJson,
+            ) as? Number
+        )?.toLong()
+            ?: throw IllegalStateException(
+                "androidbridge.Engine.startConfiguredSessionWithDisabledOutbounds returned no session ID",
+            )
     }
 
     override fun startOutbound(tag: String) {
@@ -84,6 +100,29 @@ class ReflectionTcptunBridge : TcptunBridge {
             force,
             timeoutMillis,
         )
+    }
+
+    override fun probeOutbound(tag: String, host: String, port: Int, timeoutMillis: Long): Long {
+        val method = engine.javaClass.methods.singleOrNull {
+            it.name == "probeOutbound" && it.parameterTypes.size == 4
+        } ?: throw IllegalStateException(
+            "androidbridge.Engine.probeOutbound is unavailable. Rebuild app/libs/androidbridge.aar.",
+        )
+        val portArgument: Any = when (method.parameterTypes[2]) {
+            Int::class.javaPrimitiveType, Int::class.javaObjectType -> port
+            else -> port.toLong()
+        }
+        val timeoutArgument: Any = when (method.parameterTypes[3]) {
+            Int::class.javaPrimitiveType, Int::class.javaObjectType -> timeoutMillis.toInt()
+            else -> timeoutMillis
+        }
+        return try {
+            (method.invoke(engine, tag, host, portArgument, timeoutArgument) as? Number)?.toLong()
+                ?: throw IllegalStateException("androidbridge.Engine.probeOutbound returned no elapsed time")
+        } catch (err: ReflectiveOperationException) {
+            val cause = err.cause ?: err
+            throw IllegalStateException(cause.message ?: cause.javaClass.name, cause)
+        }
     }
 
     override fun outboundsStatusJson(): String = (invokeEngine("outboundsStatusJSON") as? String).orEmpty()

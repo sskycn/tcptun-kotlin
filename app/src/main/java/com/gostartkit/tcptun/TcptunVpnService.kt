@@ -20,6 +20,7 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.InetSocketAddress
@@ -101,6 +102,9 @@ class TcptunVpnService : VpnService() {
     private val lifecycleExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "TcptunLifecycle").apply { isDaemon = true }
     }
+    private val tcpingExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "TcptunTcping").apply { isDaemon = true }
+    }
     private val lifecycleGeneration = AtomicInteger()
     private val bridgeReadyWaiter = AtomicReference<BridgeReadyWaiter?>(null)
     private var tun: android.os.ParcelFileDescriptor? = null
@@ -154,6 +158,7 @@ class TcptunVpnService : VpnService() {
                 startVpnForeground("Running")
                 requestOutboundUpdate(intent)
             }
+            ACTION_TCPING_OUTBOUNDS -> requestOutboundTcping(intent)
             ACTION_APPLY_RUNTIME_SETTINGS -> requestRuntimeSettingsRestart("runtime settings changed")
             else -> requestRestoreLastRunningConfig()
         }
@@ -229,8 +234,7 @@ class TcptunVpnService : VpnService() {
                         socketProtectEnabled = true,
                     )
                 }
-                startBridge(json)
-                applyInactiveOutbounds(plan)
+                startBridge(json, plan)
                 if (generation != lifecycleGeneration.get()) {
                     stopVpn(setStopped = false, clearSavedConfig = false, stopSelfService = false)
                     return
@@ -348,7 +352,7 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun setOutboundRunning(profile: AppConfig, shouldRun: Boolean) {
-        val tag = profileOutboundTag(profile.id)
+        val tag = profile.runtimeOutboundTag()
         synchronized(bridgeLock) {
             if (shouldRun) {
                 bridge.startOutbound(tag)
@@ -359,17 +363,50 @@ class TcptunVpnService : VpnService() {
         TcptunState.appendLog("connection ${profile.name}: ${if (shouldRun) "started" else "stopped"}")
     }
 
-    private fun applyInactiveOutbounds(plan: ProfileRunPlan) {
-        if (plan.profiles.size <= 1) return
-        plan.profiles.filterNot { it.id in plan.activeIds }.forEach { profile ->
-            synchronized(bridgeLock) {
-                bridge.stopOutbound(
-                    profileOutboundTag(profile.id),
-                    force = true,
-                    timeoutMillis = OUTBOUND_STOP_TIMEOUT_MS,
-                )
+    private fun requestOutboundTcping(intent: Intent) {
+        val requestId = intent.getLongExtra(EXTRA_TCPING_REQUEST_ID, 0)
+        val targetLabel = intent.getStringExtra(EXTRA_TCPING_TARGET_LABEL).orEmpty()
+        val host = intent.getStringExtra(EXTRA_TCPING_HOST).orEmpty().trim()
+        val port = intent.getIntExtra(EXTRA_TCPING_PORT, 0)
+        if (requestId <= 0 || targetLabel.isBlank() || host.isBlank() || port !in 1..65535) {
+            if (requestId > 0) TcptunState.failTcping(requestId, "invalid TCPing request")
+            return
+        }
+        tcpingExecutor.execute {
+            val profiles = runningPlan?.activeProfiles.orEmpty()
+            if (tun == null || stopping || profiles.isEmpty()) {
+                TcptunState.failTcping(requestId, "no running connections")
+                return@execute
             }
-            TcptunState.appendLog("connection ${profile.name}: stopped")
+            val results = mutableListOf<TcpingLinkResult>()
+            profiles.forEachIndexed { index, profile ->
+                if (!TcptunState.isCurrentTcping(requestId)) return@execute
+                TcptunState.beginTcpingStep(requestId, index + 1, profiles.size, profile.name)
+                val result = runCatching {
+                    bridge.probeOutbound(
+                        tag = profile.runtimeOutboundTag(),
+                        host = host,
+                        port = port,
+                        timeoutMillis = TCPING_OUTBOUND_TIMEOUT_MS,
+                    )
+                }.fold(
+                    onSuccess = { elapsedMs -> TcpingLinkResult(profile.name, elapsedMs = elapsedMs) },
+                    onFailure = { err ->
+                        TcpingLinkResult(
+                            profileName = profile.name,
+                            error = err.message ?: err.javaClass.simpleName,
+                        )
+                    },
+                )
+                results += result
+                TcptunState.completeTcpingStep(requestId, result)
+                val detail = result.elapsedMs?.let { "${it}ms" } ?: "failed: ${result.error}"
+                TcptunState.appendLog("TCPing $targetLabel via ${profile.name}: $detail")
+            }
+            TcptunState.finishTcping(requestId)
+            if (results.any { it.elapsedMs == null }) {
+                requestDenseHealthCheck("TCPing failed on ${results.count { it.elapsedMs == null }} connection(s)")
+            }
         }
     }
 
@@ -536,6 +573,7 @@ class TcptunVpnService : VpnService() {
     private fun requestStopVpn() {
         clearDesiredRunningConfig(this)
         ProfileStore.clearActive(this)
+        TcptunState.clearTcping()
         lifecycleGeneration.incrementAndGet()
         lifecycleExecutor.execute { stopVpn() }
     }
@@ -599,6 +637,7 @@ class TcptunVpnService : VpnService() {
 
     override fun onDestroy() {
         lifecycleGeneration.incrementAndGet()
+        tcpingExecutor.shutdownNow()
         stopVpn(setStopped = TcptunState.status != "Error", clearSavedConfig = false)
         runCatching { synchronized(bridgeLock) { bridge.close() } }
             .onFailure { err -> TcptunState.appendLog("tcptun engine close failed: ${err.message}") }
@@ -646,15 +685,23 @@ class TcptunVpnService : VpnService() {
         requestDenseHealthCheck("device active: ${action.substringAfterLast('.')}")
     }
 
-    private fun startBridge(configJson: String) {
+    private fun startBridge(configJson: String, plan: ProfileRunPlan) {
         startBridgeSession(
             configJson = configJson,
+            disabledOutboundTags = initiallyDisabledOutboundTags(plan),
             readyTimeoutMs = BRIDGE_READY_TIMEOUT_MS,
         )
     }
 
+    private fun initiallyDisabledOutboundTags(plan: ProfileRunPlan): List<String> {
+        return plan.profiles
+            .filterNot { it.id in plan.activeIds }
+            .map(AppConfig::runtimeOutboundTag)
+    }
+
     private fun startBridgeSession(
         configJson: String,
+        disabledOutboundTags: List<String>,
         readyTimeoutMs: Long,
     ) {
         val epoch = TcptunState.beginBridgeSession()
@@ -667,7 +714,8 @@ class TcptunVpnService : VpnService() {
         bridge.setSocketProtector { fd -> protect(fd) }
         TcptunState.applyBridgeStatusEvent(epoch, bridge.statusJson())
         val sessionId = synchronized(bridgeLock) {
-            val startedSessionId = bridge.start(configJson)
+            bridge.configure(configJson)
+            val startedSessionId = bridge.start(disabledOutboundTags)
             check(startedSessionId > 0) { "tcptun engine returned an invalid session ID" }
             bridgeConfigJson = configJson
             startedSessionId
@@ -711,8 +759,7 @@ class TcptunVpnService : VpnService() {
             synchronized(tunnelLock) { HevSocks5Tunnel.stop() }
             stopBridge()
             Thread.sleep(BRIDGE_RESTART_DELAY_MS)
-            startBridge(configJson)
-            runningPlan?.let(::applyInactiveOutbounds)
+            startBridge(configJson, runningPlan ?: error("running profile plan is unavailable"))
             synchronized(tunnelLock) {
                 val hevConfig = writeHevConfig(
                     tunnelMtu,
@@ -1250,10 +1297,15 @@ class TcptunVpnService : VpnService() {
         const val ACTION_START = "com.tcptun.client.START"
         const val ACTION_STOP = "com.tcptun.client.STOP"
         const val ACTION_UPDATE_OUTBOUNDS = "com.tcptun.client.UPDATE_OUTBOUNDS"
+        const val ACTION_TCPING_OUTBOUNDS = "com.tcptun.client.TCPING_OUTBOUNDS"
         const val ACTION_APPLY_RUNTIME_SETTINGS = "com.tcptun.client.APPLY_RUNTIME_SETTINGS"
         const val EXTRA_CONFIG = "config"
         private const val EXTRA_PROFILE_CONFIG = "profileConfig"
         private const val EXTRA_PROFILE_PLAN = "profilePlan"
+        private const val EXTRA_TCPING_REQUEST_ID = "tcpingRequestId"
+        private const val EXTRA_TCPING_TARGET_LABEL = "tcpingTargetLabel"
+        private const val EXTRA_TCPING_HOST = "tcpingHost"
+        private const val EXTRA_TCPING_PORT = "tcpingPort"
         const val LOCAL_SOCKS_HOST = "127.0.0.1"
         const val DEFAULT_SOCKS_PORT = 1080
         const val DEFAULT_VPN_MTU = 1400
@@ -1276,6 +1328,7 @@ class TcptunVpnService : VpnService() {
         private const val BRIDGE_RESTART_MIN_INTERVAL_MS = 30_000L
         private const val BRIDGE_READY_TIMEOUT_MS = 15_000L
         private const val OUTBOUND_STOP_TIMEOUT_MS = 15_000L
+        private const val TCPING_OUTBOUND_TIMEOUT_MS = 3_000L
         private const val TUNNEL_RESTART_DELAY_MS = 300L
         private const val TUNNEL_RESTART_MIN_INTERVAL_MS = 30_000L
         private const val RUNTIME_SETTINGS_RESTART_DEBOUNCE_MS = 800L
@@ -1375,6 +1428,21 @@ class TcptunVpnService : VpnService() {
 
         fun applyRuntimeSettingsIntent(context: Context): Intent {
             return Intent(context, TcptunVpnService::class.java).setAction(ACTION_APPLY_RUNTIME_SETTINGS)
+        }
+
+        fun tcpingOutboundsIntent(
+            context: Context,
+            requestId: Long,
+            targetLabel: String,
+            host: String,
+            port: Int,
+        ): Intent {
+            return Intent(context, TcptunVpnService::class.java)
+                .setAction(ACTION_TCPING_OUTBOUNDS)
+                .putExtra(EXTRA_TCPING_REQUEST_ID, requestId)
+                .putExtra(EXTRA_TCPING_TARGET_LABEL, targetLabel)
+                .putExtra(EXTRA_TCPING_HOST, host)
+                .putExtra(EXTRA_TCPING_PORT, port)
         }
 
         fun requestDenseHealthCheck(reason: String) {

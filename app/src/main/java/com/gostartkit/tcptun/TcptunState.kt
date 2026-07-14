@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
+import kotlin.math.roundToLong
 
 data class TcptunDiagnostics(
     val vpnStatus: String = "Stopped",
@@ -39,9 +40,33 @@ data class TcptunRuntimeState(
     val status: String = "Stopped",
     val lastError: String = "",
     val diagnostics: TcptunDiagnostics = TcptunDiagnostics(),
+    val tcping: TcpingProgress = TcpingProgress(),
     val logs: List<String> = emptyList(),
     val profileStateRevision: Long = 0,
 )
+
+data class TcpingLinkResult(
+    val profileName: String,
+    val elapsedMs: Long? = null,
+    val error: String = "",
+)
+
+data class TcpingProgress(
+    val requestId: Long = 0,
+    val targetLabel: String = "",
+    val running: Boolean = false,
+    val currentIndex: Int = 0,
+    val total: Int = 0,
+    val currentProfileName: String = "",
+    val results: List<TcpingLinkResult> = emptyList(),
+    val error: String = "",
+) {
+    val averageMs: Long?
+        get() {
+            val successes = results.mapNotNull(TcpingLinkResult::elapsedMs)
+            return successes.takeIf { it.isNotEmpty() }?.average()?.roundToLong()
+        }
+}
 
 internal data class BridgeStatusEvent(
     val sessionId: Long,
@@ -96,6 +121,7 @@ object TcptunState {
     private var bridgeEpoch = 0L
     private var bridgeSessionId = -1L
     private var bridgeSequence = -1L
+    private var tcpingRequestId = 0L
 
     @Synchronized
     fun beginBridgeSession(): Long {
@@ -129,6 +155,7 @@ object TcptunState {
             status = value,
             lastError = if (value == "Error") current.lastError else "",
             diagnostics = current.diagnostics.copy(vpnStatus = value),
+            tcping = if (value == "Stopped" || value == "Error") TcpingProgress() else current.tcping,
         )
     }
 
@@ -139,6 +166,7 @@ object TcptunState {
             status = "Error",
             lastError = message,
             diagnostics = current.diagnostics.copy(vpnStatus = "Error"),
+            tcping = TcpingProgress(),
         )
         appendLog("error: $message")
     }
@@ -229,6 +257,78 @@ object TcptunState {
     fun notifyProfileStateChanged() {
         val current = _state.value
         _state.value = current.copy(profileStateRevision = current.profileStateRevision + 1)
+    }
+
+    @Synchronized
+    fun beginTcping(targetLabel: String, total: Int): Long {
+        tcpingRequestId += 1
+        val current = _state.value
+        _state.value = current.copy(
+            tcping = TcpingProgress(
+                requestId = tcpingRequestId,
+                targetLabel = targetLabel,
+                running = true,
+                total = total.coerceAtLeast(0),
+            ),
+        )
+        return tcpingRequestId
+    }
+
+    @Synchronized
+    fun beginTcpingStep(requestId: Long, index: Int, total: Int, profileName: String) {
+        val current = _state.value
+        if (current.tcping.requestId != requestId) return
+        _state.value = current.copy(
+            tcping = current.tcping.copy(
+                running = true,
+                currentIndex = index,
+                total = total,
+                currentProfileName = profileName,
+                error = "",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun completeTcpingStep(requestId: Long, result: TcpingLinkResult) {
+        val current = _state.value
+        if (current.tcping.requestId != requestId) return
+        _state.value = current.copy(
+            tcping = current.tcping.copy(results = current.tcping.results + result),
+        )
+    }
+
+    @Synchronized
+    fun finishTcping(requestId: Long) {
+        val current = _state.value
+        if (current.tcping.requestId != requestId) return
+        _state.value = current.copy(
+            tcping = current.tcping.copy(running = false, currentProfileName = ""),
+        )
+    }
+
+    @Synchronized
+    fun failTcping(requestId: Long, error: String) {
+        val current = _state.value
+        if (current.tcping.requestId != requestId) return
+        _state.value = current.copy(
+            tcping = current.tcping.copy(
+                running = false,
+                currentProfileName = "",
+                error = error.trim(),
+            ),
+        )
+    }
+
+    @Synchronized
+    fun clearTcping() {
+        tcpingRequestId += 1
+        _state.value = _state.value.copy(tcping = TcpingProgress())
+    }
+
+    @Synchronized
+    fun isCurrentTcping(requestId: Long): Boolean {
+        return _state.value.tcping.requestId == requestId && _state.value.tcping.running
     }
 
     private fun bridgeSimpleStatus(state: String): String {

@@ -54,6 +54,31 @@ internal fun profileOutboundTag(profileId: String): String {
 
 private const val BalancedOutboundTag = "profile-pool"
 
+internal fun AppConfig.runtimeOutboundTag(): String {
+    if (rawConfigJson.isBlank()) return profileOutboundTag(id)
+
+    val root = JSONObject(rawConfigJson)
+    val configuredDefault = root.optJSONObject("route")
+        ?.optString("default_outbound")
+        ?.trim()
+        .orEmpty()
+    if (configuredDefault.isNotBlank()) return configuredDefault
+
+    root.optJSONArray("inbounds")?.let { inbounds ->
+        for (index in 0 until inbounds.length()) {
+            val outbound = inbounds.optJSONObject(index)?.optString("outbound")?.trim().orEmpty()
+            if (outbound.isNotBlank()) return outbound
+        }
+    }
+    val firstOutbound = root.optJSONArray("outbounds")
+        ?.optJSONObject(0)
+        ?.optString("tag")
+        ?.trim()
+        .orEmpty()
+    require(firstOutbound.isNotBlank()) { "raw profile has no controllable outbound tag" }
+    return firstOutbound
+}
+
 internal fun ProfileRunPlan.toBridgeJson(
     localListenAddr: String,
     verbose: Boolean = false,
@@ -68,14 +93,9 @@ internal fun ProfileRunPlan.toBridgeJson(
     managedRouteRules: List<ManagedRouteRule> = emptyList(),
 ): String {
     val plan = normalized()
-    if (plan.profiles.size == 1) {
-        val profile = plan.profiles.single()
-        val applicableRules = managedRouteRules.filter { rule ->
-            rule.outbound == ManagedRouteOutbound.Direct ||
-                rule.outboundProfileId.isBlank() ||
-                rule.outboundProfileId == profile.id
-        }
-        return profile.toBridgeJson(
+    val rawProfile = plan.profiles.singleOrNull()?.takeIf { it.rawConfigJson.isNotBlank() }
+    if (rawProfile != null) {
+        return rawProfile.toBridgeJson(
             localListenAddr = localListenAddr,
             verbose = verbose,
             socks5Username = socks5Username,
@@ -86,7 +106,7 @@ internal fun ProfileRunPlan.toBridgeJson(
             failureThreshold = failureThreshold,
             positiveTtl = positiveTtl,
             negativeTtl = negativeTtl,
-            managedRouteRules = applicableRules,
+            managedRouteRules = managedRouteRules,
         )
     }
 

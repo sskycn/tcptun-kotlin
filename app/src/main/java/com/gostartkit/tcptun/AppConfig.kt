@@ -509,10 +509,12 @@ data class ProfilesState(
 
 object ProfileStore {
     private const val PREFS = "tcptun"
+    private const val KEY_STATE_VERSION = "profileStateVersion"
     private const val KEY_PROFILES = "profiles"
     private const val KEY_SELECTED = "selectedProfileId"
     private const val KEY_ENABLED = "enabledProfileIds"
     private const val KEY_ACTIVE = "activeProfileIds"
+    private const val STATE_VERSION_INDEPENDENT_OUTBOUNDS = 2
 
     fun load(context: Context): ProfilesState {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -527,18 +529,25 @@ object ProfileStore {
                     }
                 }
             }
-            val storedActive = (prefs.getString(KEY_ACTIVE, null) ?: prefs.getString(KEY_ENABLED, null))?.let { encoded ->
-                runCatching {
-                    val active = JSONArray(encoded)
-                    buildSet {
-                        for (index in 0 until active.length()) add(active.getString(index))
-                    }
-                }.getOrNull()
-            }
+            val stateVersion = prefs.getInt(KEY_STATE_VERSION, 0)
+            val storedActive = prefs.getString(KEY_ACTIVE, null)
+                ?.takeIf { stateVersion >= STATE_VERSION_INDEPENDENT_OUTBOUNDS }
+                ?.let { encoded ->
+                    runCatching {
+                        val active = JSONArray(encoded)
+                        buildSet {
+                            for (index in 0 until active.length()) add(active.getString(index))
+                        }
+                    }.getOrNull()
+                }
             val knownIds = profiles.mapTo(mutableSetOf(), AppConfig::id)
             val activeIds = storedActive.orEmpty().filterTo(linkedSetOf()) { it in knownIds }
             val state = ProfilesState(profiles, activeIds)
-            if (profiles.size != arr.length() || !prefs.contains(KEY_ACTIVE)) {
+            if (
+                profiles.size != arr.length() ||
+                stateVersion < STATE_VERSION_INDEPENDENT_OUTBOUNDS ||
+                !prefs.contains(KEY_ACTIVE)
+            ) {
                 save(context, state)
             }
             return state
@@ -556,6 +565,7 @@ object ProfileStore {
         val active = JSONArray()
         state.profiles.filter { it.id in normalizedActiveIds }.forEach { active.put(it.id) }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putInt(KEY_STATE_VERSION, STATE_VERSION_INDEPENDENT_OUTBOUNDS)
             .putString(KEY_PROFILES, arr.toString())
             .putString(KEY_ACTIVE, active.toString())
             .remove(KEY_SELECTED)
