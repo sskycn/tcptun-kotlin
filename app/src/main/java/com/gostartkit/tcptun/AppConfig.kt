@@ -221,7 +221,6 @@ data class AppConfig(
             .put("outbounds", outbounds)
             .put("route", JSONObject().put("default_outbound", "proxy").put("rules", rules))
             .put("dns", JSONObject())
-            .put("discovery", JSONObject())
             .toString()
     }
 
@@ -233,6 +232,10 @@ data class AppConfig(
         verbose: Boolean,
     ): String {
         val root = JSONObject(rawConfigJson)
+        // tcptun-go removed the top-level discovery config in 30ff0a1 and now
+        // rejects it through strict JSON decoding. Keep previously saved full
+        // configs usable while preserving every currently supported section.
+        root.remove("discovery")
         val outbounds = root.optJSONArray("outbounds")
             ?: throw IllegalArgumentException("outbounds is required")
         require(outbounds.length() > 0) { "outbounds must not be empty" }
@@ -447,11 +450,19 @@ data class AppConfig(
         }
         val host = serverHost.trim()
         val masked = when {
+            host.isIpv4Literal() -> "***.***.***.${host.substringAfterLast('.')}"
+            host.contains(":") -> "***:${host.removeSurrounding("[", "]").substringAfterLast(':').ifEmpty { "0" }}"
             host.length <= 8 -> host
-            host.contains(":") -> host.take(9) + ".***"
             else -> host.take(10) + ".***"
         }
         return "$masked : ${serverPort.trim()}"
+    }
+
+    private fun String.isIpv4Literal(): Boolean {
+        val octets = split('.')
+        return octets.size == 4 && octets.all { octet ->
+            octet.isNotEmpty() && octet.all(Char::isDigit) && octet.toIntOrNull() in 0..255
+        }
     }
 
     fun toJson(): JSONObject {

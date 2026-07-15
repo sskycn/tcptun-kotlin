@@ -117,6 +117,7 @@ class TcptunVpnService : VpnService() {
     private val underlyingNetworkLock = Any()
     private val availableUnderlyingNetworks = mutableMapOf<Network, NetworkCapabilities>()
     @Volatile private var currentDefaultNetwork: Network? = null
+    @Volatile private var underlyingNetworkSelectionInitialized = false
     @Volatile private var stopping = false
     @Volatile private var bridgeRestarting = false
     @Volatile private var lastBridgeRestartAtMs = 0L
@@ -529,6 +530,7 @@ class TcptunVpnService : VpnService() {
         underlyingNetworkCallbackRegistered = false
         synchronized(underlyingNetworkLock) { availableUnderlyingNetworks.clear() }
         currentDefaultNetwork = null
+        underlyingNetworkSelectionInitialized = false
         updateUnderlyingDiagnostics(null)
     }
 
@@ -559,6 +561,8 @@ class TcptunVpnService : VpnService() {
     private fun applyUnderlyingNetwork(network: Network?, reason: String) {
         val previous = currentDefaultNetwork
         if (previous == network) return
+        val initialSelection = !underlyingNetworkSelectionInitialized
+        underlyingNetworkSelectionInitialized = true
         currentDefaultNetwork = network
         updateUnderlyingDiagnostics(network)
         TcptunState.appendLog("underlying network selected: ${network ?: "none"}")
@@ -566,7 +570,7 @@ class TcptunVpnService : VpnService() {
             .onFailure { err -> TcptunState.appendLog("set underlying network failed: ${err.message}") }
         if (tun != null && !stopping) {
             requestDenseHealthCheck(reason)
-            requestBridgeRestart(reason)
+            if (!initialSelection) requestBridgeRestart(reason)
         }
     }
 

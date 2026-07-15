@@ -376,17 +376,19 @@ private fun QrCameraPreview(
     DisposableEffect(context, lifecycleOwner, previewView, bindingKey) {
         val analysisExecutor = Executors.newSingleThreadExecutor()
         val mainExecutor = ContextCompat.getMainExecutor(context)
+        var disposed = false
         val analyzer = WeChatQrAnalyzer(
             onCodeDetected = { code, resume ->
                 mainExecutor.execute {
-                    if (!currentOnCodeDetected(code)) resume()
+                    if (!disposed && !currentOnCodeDetected(code)) resume()
                 }
             },
             onError = { error ->
-                mainExecutor.execute { currentOnScannerError(error) }
+                mainExecutor.execute {
+                    if (!disposed) currentOnScannerError(error)
+                }
             },
         )
-        var disposed = false
         var cameraProvider: ProcessCameraProvider? = null
         var previewUseCase: Preview? = null
         var analysisUseCase: ImageAnalysis? = null
@@ -415,9 +417,9 @@ private fun QrCameraPreview(
                     cameraProvider = provider
                     previewUseCase = preview
                     analysisUseCase = analysis
-                    currentOnCameraReady(boundCamera)
+                    if (!disposed) currentOnCameraReady(boundCamera)
                 } catch (error: Throwable) {
-                    currentOnCameraError(error)
+                    if (!disposed) currentOnCameraError(error)
                 }
             },
             mainExecutor,
@@ -425,13 +427,13 @@ private fun QrCameraPreview(
 
         onDispose {
             disposed = true
-            analyzer.pause()
+            analyzer.close()
             analysisUseCase?.clearAnalyzer()
             cameraProvider?.let { provider ->
                 previewUseCase?.let { provider.unbind(it) }
                 analysisUseCase?.let { provider.unbind(it) }
             }
-            analysisExecutor.shutdown()
+            analysisExecutor.shutdownNow()
             currentOnCameraReady(null)
         }
     }
@@ -443,11 +445,12 @@ private class WeChatQrAnalyzer(
 ) : ImageAnalysis.Analyzer {
     private val awaitingResult = AtomicBoolean(false)
     private val errorReported = AtomicBoolean(false)
+    private val closed = AtomicBoolean(false)
     private var lastAnalysisAt = 0L
 
     override fun analyze(image: ImageProxy) {
         val now = SystemClock.elapsedRealtime()
-        if (awaitingResult.get() || now - lastAnalysisAt < ANALYSIS_INTERVAL_MS) {
+        if (closed.get() || awaitingResult.get() || now - lastAnalysisAt < ANALYSIS_INTERVAL_MS) {
             image.close()
             return
         }
@@ -459,18 +462,19 @@ private class WeChatQrAnalyzer(
             } finally {
                 bitmap.recycle()
             }
-            if (code != null && awaitingResult.compareAndSet(false, true)) {
+            if (!closed.get() && code != null && awaitingResult.compareAndSet(false, true)) {
                 onCodeDetected(code) { awaitingResult.set(false) }
             }
             errorReported.set(false)
         } catch (error: Throwable) {
-            if (errorReported.compareAndSet(false, true)) onError(error)
+            if (!closed.get() && errorReported.compareAndSet(false, true)) onError(error)
         } finally {
             image.close()
         }
     }
 
-    fun pause() {
+    fun close() {
+        closed.set(true)
         awaitingResult.set(true)
     }
 

@@ -100,8 +100,7 @@ Custom routing is stored in the strict JSON `route.rules`:
     "default_outbound": "profile-pool",
     "rules": [{"domain_suffixes": ["example.com"], "outbound": "profile-a"}]
   },
-  "dns": {},
-  "discovery": {}
+  "dns": {}
 }
 ```
 
@@ -124,9 +123,10 @@ Android per-app filtering is intentionally not used: the VPN installs IPv4 and
 IPv6 default routes and sends all captured traffic to tcptun-go.
 
 Profiles can also store a complete strict tcptun-go JSON document. The app
-preserves all supported `log`, `inbounds`, `outbounds`, `route`, `dns`, and
-`discovery` fields, then injects/replaces one `android-vpn` SOCKS5 inbound at
-runtime so the TUN adapter uses the configured local port, UDP mode, and auth.
+preserves all supported `log`, `inbounds`, `outbounds`, `route`, and `dns`
+fields, removes the retired top-level `discovery` field from older saved
+configs, then injects/replaces one `android-vpn` SOCKS5 inbound at runtime so
+the TUN adapter uses the configured local port, UDP mode, and auth.
 
 Build the AAR through this Kotlin project wrapper:
 

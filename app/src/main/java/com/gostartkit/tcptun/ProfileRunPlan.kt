@@ -215,6 +215,5 @@ internal fun ProfileRunPlan.toBridgeJson(
         .put("outbounds", outbounds)
         .put("route", JSONObject().put("default_outbound", BalancedOutboundTag).put("rules", rules))
         .put("dns", JSONObject())
-        .put("discovery", JSONObject())
         .toString()
 }

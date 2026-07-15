@@ -216,6 +216,7 @@ class AndroidBridgeContractTest {
         assertEquals("direct", rules.getJSONObject(1).getString("outbound"))
         assertEquals("example.com", rules.getJSONObject(1).getJSONArray("domain_suffixes").getString(0))
         assertEquals(2, rules.length())
+        assertFalse(config.has("discovery"))
 
         assertEngineStarts(config.toString())
     }
@@ -278,6 +279,7 @@ class AndroidBridgeContractTest {
         assertEquals("tcp", rules.getJSONObject(1).getJSONArray("network").getString(0))
         assertEquals("profile-pool", rules.getJSONObject(2).getString("outbound"))
         assertEquals("direct", rules.getJSONObject(3).getString("outbound"))
+        assertFalse(config.has("discovery"))
 
         assertEngineStarts(config.toString())
         assertEngineHotSwitchesOutbound(config.toString(), secondaryTag)
@@ -558,6 +560,7 @@ class AndroidBridgeContractTest {
         assertEquals("existing", inbounds.getJSONObject(1).getString("tag"))
         assertEquals("blocked", root.getJSONObject("route").getJSONArray("rules").getJSONObject(0).getString("outbound"))
         assertEquals("prefer_ipv4", root.getJSONObject("dns").getString("strategy"))
+        assertFalse(root.has("discovery"))
 
         assertEngineStarts(config)
     }
