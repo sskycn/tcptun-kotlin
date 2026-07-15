@@ -35,6 +35,7 @@
     <string name="empty_clipboard">Clipboard is empty</string>
     <string name="invalid_clipboard_data">The clipboard does not contain a supported profile or tcptun configuration.</string>
     <string name="empty_profiles">No profiles yet</string>
+    <string name="empty_profiles_hint">Import a profile from clipboard or QR code, or create one manually.</string>
     <string name="profile_connected">Connected</string>
     <string name="profile_stopped">Stopped</string>
     <string name="error_prefix">Error: %1$s</string>

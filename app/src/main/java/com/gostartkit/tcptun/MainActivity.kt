@@ -20,6 +20,13 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
@@ -35,6 +42,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -53,15 +61,20 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.Lan
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.QrCodeScanner
+import androidx.compose.material.icons.rounded.Router
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -70,8 +83,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -89,6 +103,7 @@ import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -101,8 +116,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
@@ -126,6 +143,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val SnackbarAutoDismissMillis = 6_000L
+
+private val CardShape = RoundedCornerShape(20.dp)
+private val CardShapeCompact = RoundedCornerShape(16.dp)
+private val MenuShape = RoundedCornerShape(16.dp)
+private val ListContentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
+private val ListItemSpacing = 10.dp
 
 private data class LocalIpInfo(
     val underlyingInterface: String = "",
@@ -638,19 +661,16 @@ internal fun TcptunScreen(
             ) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(0.dp),
+                    contentPadding = ListContentPadding,
+                    verticalArrangement = Arrangement.spacedBy(ListItemSpacing),
                 ) {
                     if (mixedListenerNetwork.ipv4.isNotBlank() || mixedListenerNetwork.gatewayIpv4.isNotBlank()) {
                         item(key = "mixed-listener-network-header") {
-                            Column {
-                                ProfileListHeader(
-                                    listenerIpv4 = mixedListenerNetwork.ipv4,
-                                    gatewayIpv4 = mixedListenerNetwork.gatewayIpv4,
-                                    onIpClick = { showIpInformation = true },
-                                )
-                                Spacer(Modifier.height(12.dp))
-                            }
+                            ProfileListHeader(
+                                listenerIpv4 = mixedListenerNetwork.ipv4,
+                                gatewayIpv4 = mixedListenerNetwork.gatewayIpv4,
+                                onIpClick = { showIpInformation = true },
+                            )
                         }
                     }
                     items(state.profiles, key = { it.id }) { profile ->
@@ -737,8 +757,9 @@ private fun ProfileListHeader(
     val colors = MaterialTheme.colorScheme
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = colors.surfaceContainerHigh,
+        shape = CardShape,
+        color = colors.primaryContainer.copy(alpha = 0.55f),
+        border = BorderStroke(1.dp, colors.primary.copy(alpha = 0.18f)),
         tonalElevation = 0.dp,
     ) {
         Row(
@@ -748,10 +769,24 @@ private fun ProfileListHeader(
                     onClickLabel = stringResource(R.string.view_ip_information),
                     onClick = onIpClick,
                 )
-                .padding(start = 16.dp, top = 14.dp, end = 8.dp, bottom = 14.dp),
+                .padding(start = 14.dp, top = 14.dp, end = 8.dp, bottom = 14.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Surface(
+                modifier = Modifier.size(42.dp),
+                shape = CircleShape,
+                color = colors.primary.copy(alpha = 0.14f),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Rounded.Lan,
+                        contentDescription = null,
+                        tint = colors.primary,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(3.dp),
@@ -774,8 +809,8 @@ private fun ProfileListHeader(
             Box(
                 modifier = Modifier
                     .width(1.dp)
-                    .height(38.dp)
-                    .background(colors.outlineVariant.copy(alpha = 0.7f)),
+                    .height(36.dp)
+                    .background(colors.outlineVariant.copy(alpha = 0.55f)),
             )
             Column(
                 modifier = Modifier.weight(1f),
@@ -879,7 +914,18 @@ private fun TopBar(
     val colors = MaterialTheme.colorScheme
 
     TopAppBar(
-        title = { Text(title, style = MaterialTheme.typography.titleLarge) },
+        title = {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+        },
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = colors.background,
+            titleContentColor = colors.onBackground,
+            actionIconContentColor = colors.onSurfaceVariant,
+        ),
         actions = {
             Box {
                 IconButton(onClick = { menuExpanded = true }) {
@@ -891,7 +937,7 @@ private fun TopBar(
                 DropdownMenu(
                     expanded = menuExpanded,
                     onDismissRequest = { menuExpanded = false },
-                    shape = RoundedCornerShape(12.dp),
+                    shape = MenuShape,
                     containerColor = colors.surfaceContainer,
                     tonalElevation = 3.dp,
                     shadowElevation = 6.dp,
@@ -942,7 +988,7 @@ private fun MainActionsFab(
         DropdownMenu(
             expanded = menuExpanded,
             onDismissRequest = { menuExpanded = false },
-            shape = RoundedCornerShape(12.dp),
+            shape = MenuShape,
             containerColor = colors.surfaceContainer,
             tonalElevation = 3.dp,
             shadowElevation = 6.dp,
@@ -976,7 +1022,15 @@ private fun MainActionsFab(
                 ),
             )
         }
-        FloatingActionButton(onClick = { menuExpanded = true }) {
+        FloatingActionButton(
+            onClick = { menuExpanded = true },
+            containerColor = colors.primaryContainer,
+            contentColor = colors.onPrimaryContainer,
+            elevation = FloatingActionButtonDefaults.elevation(
+                defaultElevation = 4.dp,
+                pressedElevation = 8.dp,
+            ),
+        ) {
             Icon(
                 Icons.Rounded.Add,
                 contentDescription = stringResource(R.string.actions),
@@ -997,8 +1051,18 @@ private fun ProfileRow(
     onDeleteRequest: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
-    val rowColor = if (running) colors.surfaceContainerLow else colors.surface
-    val statusColor = if (running) colors.tertiary else colors.onSurfaceVariant
+    val rowColor by animateColorAsState(
+        targetValue = if (running) colors.tertiaryContainer.copy(alpha = 0.42f) else colors.surfaceContainerLow,
+        label = "profileRowColor",
+    )
+    val statusColor by animateColorAsState(
+        targetValue = if (running) colors.tertiary else colors.onSurfaceVariant,
+        label = "profileStatusColor",
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (running) colors.tertiary.copy(alpha = 0.45f) else colors.outlineVariant.copy(alpha = 0.35f),
+        label = "profileBorderColor",
+    )
     val dismissState = rememberSwipeToDismissBoxState()
 
     LaunchedEffect(dismissState.currentValue) {
@@ -1021,7 +1085,7 @@ private fun ProfileRow(
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(colors.errorContainer, RoundedCornerShape(16.dp))
+                    .background(colors.errorContainer, CardShape)
                     .padding(horizontal = 24.dp),
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
@@ -1036,99 +1100,145 @@ private fun ProfileRow(
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(0.dp),
+            shape = CardShape,
             color = rowColor,
-            tonalElevation = 0.dp,
+            border = BorderStroke(1.dp, borderColor),
+            tonalElevation = if (running) 1.dp else 0.dp,
         ) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 92.dp)
+                    .clickable(enabled = enabled, onClick = onClick)
+                    .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(
+                ProfileStatusMark(running = running)
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 96.dp)
-                        .clickable(enabled = enabled, onClick = onClick)
-                        .padding(start = 4.dp, end = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                        .weight(1f)
+                        .padding(horizontal = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Surface(
-                        modifier = Modifier.width(48.dp).height(48.dp),
-                        shape = CircleShape,
-                        color = if (running) colors.tertiaryContainer else colors.surfaceContainerHighest,
+                    Text(
+                        profile.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            if (running) {
-                                Icon(
-                                    Icons.Rounded.Check,
-                                    contentDescription = null,
-                                    tint = colors.onTertiaryContainer,
+                        AssistChip(
+                            onClick = {},
+                            enabled = false,
+                            label = {
+                                Text(
+                                    profile.label(),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
-                            } else {
-                                Box(
-                                    modifier = Modifier
-                                        .width(12.dp)
-                                        .height(12.dp)
-                                        .background(colors.onSurfaceVariant, RoundedCornerShape(2.dp)),
-                                )
-                            }
-                        }
-                    }
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(vertical = 13.dp, horizontal = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(3.dp),
-                    ) {
-                        Text(
-                            profile.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = colors.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                            },
+                            colors = AssistChipDefaults.assistChipColors(
+                                disabledContainerColor = if (running) {
+                                    colors.tertiary.copy(alpha = 0.16f)
+                                } else {
+                                    colors.surfaceContainerHighest
+                                },
+                                disabledLabelColor = if (running) colors.tertiary else colors.onSurfaceVariant,
+                            ),
+                            border = null,
+                            modifier = Modifier.height(28.dp),
                         )
                         Text(
-                            text = "${profile.label()} · " + stringResource(
+                            text = stringResource(
                                 if (running) R.string.profile_connected else R.string.profile_stopped,
                             ),
                             style = MaterialTheme.typography.bodyMedium,
                             color = statusColor,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            profile.maskedAddress(),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = colors.onSurfaceVariant,
-                            fontFamily = FontFamily.Monospace,
+                            fontWeight = if (running) FontWeight.Medium else FontWeight.Normal,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    IconButton(
-                        onClick = onShare,
-                        enabled = shareable,
-                    ) {
-                        Icon(
-                            Icons.Rounded.Share,
-                            contentDescription = stringResource(R.string.share),
-                            tint = if (shareable) colors.onSurfaceVariant else colors.onSurface.copy(alpha = 0.38f),
-                        )
-                    }
-                    IconButton(
-                        onClick = onShowQrCode,
-                        enabled = shareable,
-                    ) {
-                        Icon(
-                            Icons.Rounded.QrCode2,
-                            contentDescription = stringResource(R.string.show_qr_code),
-                            tint = if (shareable) colors.onSurfaceVariant else colors.onSurface.copy(alpha = 0.38f),
-                        )
-                    }
+                    Text(
+                        profile.maskedAddress(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.onSurfaceVariant,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
-                HorizontalDivider(
-                    modifier = Modifier.padding(start = 64.dp),
-                    color = colors.outlineVariant.copy(alpha = 0.7f),
+                IconButton(
+                    onClick = onShare,
+                    enabled = shareable,
+                ) {
+                    Icon(
+                        Icons.Rounded.Share,
+                        contentDescription = stringResource(R.string.share),
+                        tint = if (shareable) colors.onSurfaceVariant else colors.onSurface.copy(alpha = 0.38f),
+                    )
+                }
+                IconButton(
+                    onClick = onShowQrCode,
+                    enabled = shareable,
+                ) {
+                    Icon(
+                        Icons.Rounded.QrCode2,
+                        contentDescription = stringResource(R.string.show_qr_code),
+                        tint = if (shareable) colors.onSurfaceVariant else colors.onSurface.copy(alpha = 0.38f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProfileStatusMark(running: Boolean) {
+    val colors = MaterialTheme.colorScheme
+    val pulse = if (running) {
+        val transition = rememberInfiniteTransition(label = "connectedPulse")
+        transition.animateFloat(
+            initialValue = 0.55f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1200),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "connectedPulseAlpha",
+        ).value
+    } else {
+        1f
+    }
+    Surface(
+        modifier = Modifier.size(48.dp),
+        shape = CircleShape,
+        color = if (running) colors.tertiaryContainer else colors.surfaceContainerHighest,
+        border = if (running) {
+            BorderStroke(1.5.dp, colors.tertiary.copy(alpha = 0.35f + 0.35f * pulse))
+        } else {
+            null
+        },
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            if (running) {
+                Icon(
+                    Icons.Rounded.Check,
+                    contentDescription = null,
+                    tint = colors.onTertiaryContainer,
+                    modifier = Modifier.alpha(0.75f + 0.25f * pulse),
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .background(colors.onSurfaceVariant.copy(alpha = 0.55f), CircleShape),
                 )
             }
         }
@@ -1139,18 +1249,20 @@ private fun ProfileRow(
 private fun ConnectionStatusMark(
     color: Color,
     containerColor: Color,
+    icon: ImageVector = Icons.Rounded.Speed,
 ) {
     Surface(
-        modifier = Modifier.width(42.dp).height(42.dp),
+        modifier = Modifier.size(44.dp),
         shape = CircleShape,
         color = containerColor,
+        border = BorderStroke(1.dp, color.copy(alpha = 0.22f)),
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(
-                Icons.Rounded.Speed,
+                icon,
                 contentDescription = null,
                 tint = color,
-                modifier = Modifier.padding(9.dp),
+                modifier = Modifier.size(22.dp),
             )
         }
     }
@@ -1176,8 +1288,9 @@ private fun ProfileQrCodeDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
+                    shape = CardShapeCompact,
                     color = Color.White,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
                 ) {
                     Image(
                         bitmap = bitmap.asImageBitmap(),
@@ -1185,7 +1298,7 @@ private fun ProfileQrCodeDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .aspectRatio(1f)
-                            .padding(12.dp),
+                            .padding(16.dp),
                     )
                 }
                 Text(
@@ -1205,24 +1318,56 @@ private fun ProfileQrCodeDialog(
 
 @Composable
 private fun EmptyState(onAdd: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 48.dp),
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
+            .padding(top = 28.dp),
+        shape = CardShape,
+        color = colors.surfaceContainerLow,
+        border = BorderStroke(1.dp, colors.outlineVariant.copy(alpha = 0.4f)),
     ) {
         Column(
-            modifier = Modifier.padding(24.dp),
+            modifier = Modifier.padding(horizontal = 28.dp, vertical = 36.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            Surface(
+                modifier = Modifier.size(72.dp),
+                shape = CircleShape,
+                color = colors.primaryContainer.copy(alpha = 0.7f),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Rounded.Hub,
+                        contentDescription = null,
+                        tint = colors.primary,
+                        modifier = Modifier.size(36.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.height(4.dp))
             Text(
                 stringResource(R.string.empty_profiles),
                 style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.onSurface,
+                textAlign = TextAlign.Center,
             )
-            Button(onClick = onAdd) {
+            Text(
+                stringResource(R.string.empty_profiles_hint),
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(4.dp))
+            FilledTonalButton(onClick = onAdd) {
+                Icon(
+                    Icons.Rounded.Add,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(8.dp))
                 Text(stringResource(R.string.add_profile))
             }
         }
@@ -1257,28 +1402,42 @@ private fun BottomStatus(
         status == "Starting" || status == "Stopping" -> colors.tertiary
         else -> colors.onSurfaceVariant
     }
+    val barColor = when {
+        error.isNotBlank() -> colors.errorContainer.copy(alpha = 0.45f)
+        status == "Running" -> colors.primaryContainer.copy(alpha = 0.5f)
+        status == "Starting" || status == "Stopping" -> colors.tertiaryContainer.copy(alpha = 0.45f)
+        else -> colors.surfaceContainer
+    }
+    val statusIcon = when {
+        error.isNotBlank() -> Icons.Rounded.Speed
+        status == "Running" -> Icons.Rounded.Check
+        else -> Icons.Rounded.Speed
+    }
     BottomAppBar(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 72.dp, max = 144.dp)
+            .heightIn(min = 76.dp, max = 152.dp)
             .clickable(enabled = tcpingEnabled && !tcping.running, onClick = onClick),
-        containerColor = colors.surfaceContainerLow,
+        containerColor = barColor,
         contentColor = contentColor,
+        tonalElevation = 2.dp,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             ConnectionStatusMark(
                 color = contentColor,
                 containerColor = contentColor.copy(alpha = 0.14f),
+                icon = statusIcon,
             )
             Text(
                 text,
                 style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Medium,
                 color = contentColor,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
@@ -1342,23 +1501,18 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = ListContentPadding,
+            verticalArrangement = Arrangement.spacedBy(ListItemSpacing),
         ) {
             item {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                ) {
+                SettingsCard {
                     Column(
-                        modifier = Modifier.padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Text(
-                            stringResource(R.string.runtime_diagnostics),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
+                        SectionTitle(
+                            icon = Icons.Rounded.Speed,
+                            title = stringResource(R.string.runtime_diagnostics),
                         )
                         DiagnosticsLine(stringResource(R.string.diag_vpn), diagnostics.vpnStatus)
                         DiagnosticsLine(stringResource(R.string.diag_underlying_network), diagnostics.underlyingNetwork)
@@ -1382,6 +1536,52 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SettingsCard(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = CardShape,
+        color = colors.surfaceContainerLow,
+        border = BorderStroke(1.dp, colors.outlineVariant.copy(alpha = 0.35f)),
+        content = content,
+    )
+}
+
+@Composable
+private fun SectionTitle(
+    icon: ImageVector,
+    title: String,
+) {
+    val colors = MaterialTheme.colorScheme
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Surface(
+            modifier = Modifier.size(36.dp),
+            shape = CircleShape,
+            color = colors.primaryContainer.copy(alpha = 0.75f),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = colors.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(
+            title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = colors.onSurface,
+        )
     }
 }
 
@@ -1412,12 +1612,13 @@ private fun IpInformationPage(onBack: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = ListContentPadding,
+            verticalArrangement = Arrangement.spacedBy(ListItemSpacing),
         ) {
             item {
                 IpInformationCard(
                     title = stringResource(R.string.ip_mixed_listener),
+                    icon = Icons.Rounded.Lan,
                     lines = listOf(
                         stringResource(R.string.ip_configured_listen) to configuredListenAddress,
                         stringResource(R.string.ip_actual_listen) to actualListenAddress.ifBlank { noneLabel },
@@ -1429,6 +1630,7 @@ private fun IpInformationPage(onBack: () -> Unit) {
             item {
                 IpInformationCard(
                     title = stringResource(R.string.ip_underlying_network),
+                    icon = Icons.Rounded.Router,
                     lines = listOf(
                         stringResource(R.string.ip_underlying_interface) to ipInfo.underlyingInterface.ifBlank { noneLabel },
                         stringResource(R.string.ip_underlying_ipv4) to ipInfo.underlyingIpv4.ifBlank { noneLabel },
@@ -1440,6 +1642,7 @@ private fun IpInformationPage(onBack: () -> Unit) {
             item {
                 IpInformationCard(
                     title = stringResource(R.string.ip_vpn_network),
+                    icon = Icons.Rounded.Hub,
                     lines = listOf(
                         stringResource(R.string.ip_vpn_ipv4) to ipInfo.vpnIpv4.ifBlank { noneLabel },
                         stringResource(R.string.ip_vpn_ipv6) to ipInfo.vpnIpv6.ifBlank { noneLabel },
@@ -1459,22 +1662,18 @@ private fun IpInformationPage(onBack: () -> Unit) {
 }
 
 @Composable
-private fun IpInformationCard(title: String, lines: List<Pair<String, String>>) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-    ) {
+private fun IpInformationCard(
+    title: String,
+    icon: ImageVector,
+    lines: List<Pair<String, String>>,
+) {
+    SettingsCard {
         SelectionContainer {
             Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
+                SectionTitle(icon = icon, title = title)
                 lines.forEach { (label, value) -> DiagnosticsLine(label, value) }
             }
         }
@@ -1534,32 +1733,19 @@ private fun SettingsPage(onBack: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = ListContentPadding,
+            verticalArrangement = Arrangement.spacedBy(ListItemSpacing),
         ) {
             item {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                ) {
+                SettingsCard {
                     Column(
-                        modifier = Modifier.padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Rounded.Tune,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Text(
-                                stringResource(R.string.transparent_proxy_settings),
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                        }
+                        SectionTitle(
+                            icon = Icons.Rounded.Tune,
+                            title = stringResource(R.string.transparent_proxy_settings),
+                        )
                         ChoiceRow("MTU", settings.mtu.toString(), mtuOptions) { value ->
                             saveSettings(settings.copy(mtu = value.toIntOrNull() ?: TcptunVpnService.DEFAULT_VPN_MTU))
                         }
@@ -1699,19 +1885,14 @@ private fun SettingsPage(onBack: () -> Unit) {
                 }
             }
             item {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                ) {
+                SettingsCard {
                     Column(
-                        modifier = Modifier.padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Text(
-                            stringResource(R.string.current_effective),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
+                        SectionTitle(
+                            icon = Icons.Rounded.Check,
+                            title = stringResource(R.string.current_effective),
                         )
                         DiagnosticsLine("MTU", diagnostics.mtu.toString())
                         DiagnosticsLine(stringResource(R.string.socks_listen), TcptunVpnService.localSocksListenAddr(settings))
@@ -1790,20 +1971,17 @@ private fun RouteManagementPage(onBack: () -> Unit) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.route_management)) },
-                navigationIcon = {
-                    IconButton(onClick = ::leave) {
-                        Icon(
-                            Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = stringResource(R.string.back),
-                        )
-                    }
-                },
+            AppTopBar(
+                title = stringResource(R.string.route_management),
+                onBack = ::leave,
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { editingRule = ManagedRouteRule() }) {
+            FloatingActionButton(
+                onClick = { editingRule = ManagedRouteRule() },
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            ) {
                 Icon(Icons.Rounded.Add, contentDescription = stringResource(R.string.add_route_rule))
             }
         },
@@ -1812,22 +1990,18 @@ private fun RouteManagementPage(onBack: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = ListContentPadding,
+            verticalArrangement = Arrangement.spacedBy(ListItemSpacing),
         ) {
             item {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                ) {
+                SettingsCard {
                     Column(
-                        modifier = Modifier.padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text(
-                            stringResource(R.string.route_rules_count, rules.count { it.enabled }),
-                            style = MaterialTheme.typography.titleMedium,
+                        SectionTitle(
+                            icon = Icons.AutoMirrored.Rounded.AltRoute,
+                            title = stringResource(R.string.route_rules_count, rules.count { it.enabled }),
                         )
                         Text(
                             stringResource(R.string.route_management_note),
@@ -1952,7 +2126,7 @@ private fun ManagedRouteRuleRow(
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(colors.errorContainer, RoundedCornerShape(8.dp))
+                    .background(colors.errorContainer, CardShape)
                     .padding(horizontal = 24.dp),
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
@@ -1965,8 +2139,12 @@ private fun ManagedRouteRuleRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 88.dp),
-            shape = RoundedCornerShape(8.dp),
+            shape = CardShape,
             color = if (rule.enabled) colors.surfaceContainerLow else colors.surfaceContainer,
+            border = BorderStroke(
+                1.dp,
+                if (rule.enabled) colors.primary.copy(alpha = 0.2f) else colors.outlineVariant.copy(alpha = 0.35f),
+            ),
         ) {
             Row(
                 modifier = Modifier
@@ -2010,20 +2188,37 @@ private fun ManagedRouteRuleRow(
 
 @Composable
 private fun RouteRulesEmptyState(onAdd: () -> Unit) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 36.dp),
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
+    val colors = MaterialTheme.colorScheme
+    SettingsCard(
+        modifier = Modifier.padding(top = 24.dp),
     ) {
         Column(
-            modifier = Modifier.padding(24.dp),
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(stringResource(R.string.empty_route_rules), style = MaterialTheme.typography.titleMedium)
-            Button(onClick = onAdd) {
+            Surface(
+                modifier = Modifier.size(64.dp),
+                shape = CircleShape,
+                color = colors.primaryContainer.copy(alpha = 0.7f),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.AltRoute,
+                        contentDescription = null,
+                        tint = colors.primary,
+                        modifier = Modifier.size(32.dp),
+                    )
+                }
+            }
+            Text(
+                stringResource(R.string.empty_route_rules),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            FilledTonalButton(onClick = onAdd) {
+                Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
                 Text(stringResource(R.string.add_route_rule))
             }
         }
@@ -2169,17 +2364,9 @@ private fun routeRuleExample(type: ManagedRouteRuleType): String = stringResourc
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DiagnosticsTopBar(onBack: () -> Unit, onShowLogs: () -> Unit) {
-    TopAppBar(
-        title = { Text(stringResource(R.string.diagnostics), style = MaterialTheme.typography.titleLarge) },
-        navigationIcon = {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = stringResource(R.string.back),
-                    tint = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-        },
+    AppTopBar(
+        title = stringResource(R.string.diagnostics),
+        onBack = onBack,
         actions = {
             TextButton(onClick = onShowLogs) {
                 Text(stringResource(R.string.logs))
@@ -2191,55 +2378,82 @@ private fun DiagnosticsTopBar(onBack: () -> Unit, onShowLogs: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun IpInformationTopBar(onBack: () -> Unit) {
-    TopAppBar(
-        title = { Text(stringResource(R.string.ip_information), style = MaterialTheme.typography.titleLarge) },
-        navigationIcon = {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = stringResource(R.string.back),
-                    tint = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-        },
+    AppTopBar(
+        title = stringResource(R.string.ip_information),
+        onBack = onBack,
     )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingsTopBar(onBack: () -> Unit) {
+    AppTopBar(
+        title = stringResource(R.string.settings),
+        onBack = onBack,
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AppTopBar(
+    title: String,
+    onBack: (() -> Unit)? = null,
+    actions: @Composable () -> Unit = {},
+) {
+    val colors = MaterialTheme.colorScheme
     TopAppBar(
-        title = { Text(stringResource(R.string.settings), style = MaterialTheme.typography.titleLarge) },
+        title = {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+        },
         navigationIcon = {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = stringResource(R.string.back),
-                    tint = MaterialTheme.colorScheme.onSurface,
-                )
+            if (onBack != null) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = stringResource(R.string.back),
+                        tint = colors.onSurface,
+                    )
+                }
             }
         },
+        actions = { actions() },
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = colors.background,
+            titleContentColor = colors.onBackground,
+            navigationIconContentColor = colors.onSurface,
+            actionIconContentColor = colors.onSurfaceVariant,
+        ),
     )
 }
 
 @Composable
 private fun DiagnosticsLine(label: String, value: String) {
+    val colors = MaterialTheme.colorScheme
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(colors.surfaceContainerHighest.copy(alpha = 0.35f), CardShapeCompact)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Top,
     ) {
         Text(
             label,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = colors.onSurfaceVariant,
             modifier = Modifier.weight(0.46f),
         )
         Text(
             value,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
+            fontWeight = FontWeight.Medium,
+            color = colors.onSurface,
             modifier = Modifier.weight(0.54f),
+            textAlign = TextAlign.End,
         )
     }
 }
@@ -2286,133 +2500,157 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 if (formError.isNotBlank()) {
-                    Text(formError, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
-                }
-                OutlinedTextField(
-                    value = config.name,
-                    onValueChange = { config = config.copy(name = it) },
-                    label = { Text(stringResource(R.string.name)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                ToggleRow(stringResource(R.string.full_config_mode), useFullConfig) { enabled ->
-                    useFullConfig = enabled
-                    config = if (enabled) {
-                        val generated = config.toBridgeJson(localListenAddr = "127.0.0.1:1080")
-                        config.copy(rawConfigJson = JSONObject(generated).toString(2))
-                    } else {
-                        config.copy(rawConfigJson = "")
-                    }
-                    formError = ""
-                }
-                if (useFullConfig) {
-                    Text(
-                        stringResource(R.string.full_config_note),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    OutlinedTextField(
-                        value = config.rawConfigJson,
-                        onValueChange = { config = config.copy(rawConfigJson = it.take(MAX_FULL_CONFIG_LENGTH)) },
-                        label = { Text(stringResource(R.string.full_config_json)) },
-                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                        minLines = 18,
+                    Surface(
                         modifier = Modifier.fillMaxWidth(),
-                    )
-                } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(
-                        value = config.serverHost,
-                        onValueChange = { config = config.copy(serverHost = it) },
-                        label = { Text(stringResource(R.string.server_address)) },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                    OutlinedTextField(
-                        value = config.serverPort,
-                        onValueChange = { config = config.copy(serverPort = it.filter(Char::isDigit)) },
-                        label = { Text(stringResource(R.string.port)) },
-                        singleLine = true,
-                        modifier = Modifier.weight(0.52f),
-                    )
+                        shape = CardShapeCompact,
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.65f),
+                    ) {
+                        Text(
+                            formError,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                        )
+                    }
                 }
-                ChoiceRow(stringResource(R.string.protocol), config.protocol, AppConfig.Protocols) { config = config.copy(protocol = it) }
-                ChoiceRow(stringResource(R.string.field_transport), config.transport, AppConfig.Transports) { config = config.copy(transport = it) }
-                OutlinedTextField(
-                    value = config.token,
-                    onValueChange = { config = config.copy(token = it) },
-                    label = { Text(stringResource(R.string.field_token)) },
-                    visualTransformation = PasswordVisualTransformation(),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(
-                        value = config.sni,
-                        onValueChange = { config = config.copy(sni = it) },
-                        label = { Text(stringResource(R.string.field_sni)) },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                    OutlinedTextField(
-                        value = config.path,
-                        onValueChange = { config = config.copy(path = it) },
-                        label = { Text(stringResource(R.string.field_path)) },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                OutlinedTextField(
-                    value = config.tunnelSecurity,
-                    onValueChange = { config = config.copy(tunnelSecurity = it.lowercase()) },
-                    label = { Text(stringResource(R.string.field_security)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = config.flow,
-                    onValueChange = { config = config.copy(flow = it) },
-                    label = { Text(stringResource(R.string.field_flow)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = config.realityPublicKey,
-                    onValueChange = { config = config.copy(realityPublicKey = it) },
-                    label = { Text(stringResource(R.string.field_reality_public_key)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(
-                        value = config.realityFingerprint,
-                        onValueChange = { config = config.copy(realityFingerprint = it) },
-                        label = { Text(stringResource(R.string.field_fingerprint)) },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                    OutlinedTextField(
-                        value = config.realityShortId,
-                        onValueChange = { config = config.copy(realityShortId = it) },
-                        label = { Text(stringResource(R.string.field_short_id)) },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                OutlinedTextField(
-                    value = config.realitySpiderX,
-                    onValueChange = { config = config.copy(realitySpiderX = it) },
-                    label = { Text(stringResource(R.string.field_spider_x)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                ChoiceRow(stringResource(R.string.field_upstream), config.upstreamProtocol, AppConfig.UpstreamProtocols) {
-                    config = config.copy(upstreamProtocol = it)
-                }
-                ToggleRow(stringResource(R.string.field_tls), config.tls) { config = config.copy(tls = it) }
-                ToggleRow(stringResource(R.string.field_tls_insecure), config.tlsInsecure) { config = config.copy(tlsInsecure = it) }
-                ToggleRow(stringResource(R.string.field_mux), config.mux) { config = config.copy(mux = it) }
-                ToggleRow(stringResource(R.string.field_udp), config.udp) { config = config.copy(udp = it) }
+                SettingsCard {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        OutlinedTextField(
+                            value = config.name,
+                            onValueChange = { config = config.copy(name = it) },
+                            label = { Text(stringResource(R.string.name)) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        ToggleRow(stringResource(R.string.full_config_mode), useFullConfig) { enabled ->
+                            useFullConfig = enabled
+                            config = if (enabled) {
+                                val generated = config.toBridgeJson(localListenAddr = "127.0.0.1:1080")
+                                config.copy(rawConfigJson = JSONObject(generated).toString(2))
+                            } else {
+                                config.copy(rawConfigJson = "")
+                            }
+                            formError = ""
+                        }
+                        if (useFullConfig) {
+                            Text(
+                                stringResource(R.string.full_config_note),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            OutlinedTextField(
+                                value = config.rawConfigJson,
+                                onValueChange = { config = config.copy(rawConfigJson = it.take(MAX_FULL_CONFIG_LENGTH)) },
+                                label = { Text(stringResource(R.string.full_config_json)) },
+                                textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                minLines = 18,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        } else {
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                OutlinedTextField(
+                                    value = config.serverHost,
+                                    onValueChange = { config = config.copy(serverHost = it) },
+                                    label = { Text(stringResource(R.string.server_address)) },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                OutlinedTextField(
+                                    value = config.serverPort,
+                                    onValueChange = { config = config.copy(serverPort = it.filter(Char::isDigit)) },
+                                    label = { Text(stringResource(R.string.port)) },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(0.52f),
+                                )
+                            }
+                            ChoiceRow(stringResource(R.string.protocol), config.protocol, AppConfig.Protocols) {
+                                config = config.copy(protocol = it)
+                            }
+                            ChoiceRow(stringResource(R.string.field_transport), config.transport, AppConfig.Transports) {
+                                config = config.copy(transport = it)
+                            }
+                            OutlinedTextField(
+                                value = config.token,
+                                onValueChange = { config = config.copy(token = it) },
+                                label = { Text(stringResource(R.string.field_token)) },
+                                visualTransformation = PasswordVisualTransformation(),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                OutlinedTextField(
+                                    value = config.sni,
+                                    onValueChange = { config = config.copy(sni = it) },
+                                    label = { Text(stringResource(R.string.field_sni)) },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                OutlinedTextField(
+                                    value = config.path,
+                                    onValueChange = { config = config.copy(path = it) },
+                                    label = { Text(stringResource(R.string.field_path)) },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            OutlinedTextField(
+                                value = config.tunnelSecurity,
+                                onValueChange = { config = config.copy(tunnelSecurity = it.lowercase()) },
+                                label = { Text(stringResource(R.string.field_security)) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedTextField(
+                                value = config.flow,
+                                onValueChange = { config = config.copy(flow = it) },
+                                label = { Text(stringResource(R.string.field_flow)) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedTextField(
+                                value = config.realityPublicKey,
+                                onValueChange = { config = config.copy(realityPublicKey = it) },
+                                label = { Text(stringResource(R.string.field_reality_public_key)) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                OutlinedTextField(
+                                    value = config.realityFingerprint,
+                                    onValueChange = { config = config.copy(realityFingerprint = it) },
+                                    label = { Text(stringResource(R.string.field_fingerprint)) },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                OutlinedTextField(
+                                    value = config.realityShortId,
+                                    onValueChange = { config = config.copy(realityShortId = it) },
+                                    label = { Text(stringResource(R.string.field_short_id)) },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            OutlinedTextField(
+                                value = config.realitySpiderX,
+                                onValueChange = { config = config.copy(realitySpiderX = it) },
+                                label = { Text(stringResource(R.string.field_spider_x)) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            ChoiceRow(stringResource(R.string.field_upstream), config.upstreamProtocol, AppConfig.UpstreamProtocols) {
+                                config = config.copy(upstreamProtocol = it)
+                            }
+                            ToggleRow(stringResource(R.string.field_tls), config.tls) { config = config.copy(tls = it) }
+                            ToggleRow(stringResource(R.string.field_tls_insecure), config.tlsInsecure) {
+                                config = config.copy(tlsInsecure = it)
+                            }
+                            ToggleRow(stringResource(R.string.field_mux), config.mux) { config = config.copy(mux = it) }
+                            ToggleRow(stringResource(R.string.field_udp), config.udp) { config = config.copy(udp = it) }
+                        }
+                    }
                 }
             }
         }
@@ -2424,19 +2662,14 @@ private const val MAX_FULL_CONFIG_LENGTH = 512 * 1024
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EditTopBar(title: String, onBack: () -> Unit, onSave: () -> Unit) {
-    TopAppBar(
-        title = { Text(title, style = MaterialTheme.typography.titleLarge) },
-        navigationIcon = {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = stringResource(R.string.back),
-                    tint = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-        },
+    AppTopBar(
+        title = title,
+        onBack = onBack,
         actions = {
-            Button(onClick = onSave) {
+            FilledTonalButton(
+                onClick = onSave,
+                modifier = Modifier.padding(end = 8.dp),
+            ) {
                 Text(stringResource(R.string.save))
             }
         },
@@ -2461,7 +2694,7 @@ private fun ChoiceRow(title: String, value: String, options: List<String>, onCha
         ExposedDropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            shape = RoundedCornerShape(12.dp),
+            shape = MenuShape,
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
             tonalElevation = 3.dp,
             shadowElevation = 6.dp,
@@ -2484,10 +2717,15 @@ private fun ChoiceRow(title: String, value: String, options: List<String>, onCha
 
 @Composable
 private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    val colors = MaterialTheme.colorScheme
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = CardShapeCompact,
+        color = if (checked) colors.secondaryContainer.copy(alpha = 0.55f) else colors.surfaceContainerHighest.copy(alpha = 0.65f),
+        border = BorderStroke(
+            1.dp,
+            if (checked) colors.secondary.copy(alpha = 0.22f) else colors.outlineVariant.copy(alpha = 0.3f),
+        ),
     ) {
         Row(
             modifier = Modifier
@@ -2500,7 +2738,8 @@ private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
             Text(
                 label,
                 style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = colors.onSurface,
+                modifier = Modifier.weight(1f).padding(end = 12.dp),
             )
             Switch(checked = checked, onCheckedChange = onChange)
         }
@@ -2520,8 +2759,9 @@ private fun LogsDialog(onDismiss: () -> Unit) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 520.dp),
-                shape = RoundedCornerShape(8.dp),
+                shape = CardShapeCompact,
                 color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
             ) {
                 Box(
                     modifier = Modifier

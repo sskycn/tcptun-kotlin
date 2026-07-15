@@ -35,6 +35,7 @@
     <string name="empty_clipboard">剪切板为空</string>
     <string name="invalid_clipboard_data">剪切板中没有可导入的配置或 tcptun 配置。</string>
     <string name="empty_profiles">还没有配置项</string>
+    <string name="empty_profiles_hint">可从剪切板或二维码导入，也可以手动添加。</string>
     <string name="profile_connected">已连接</string>
     <string name="profile_stopped">已停止</string>
     <string name="error_prefix">错误：%1$s</string>
