@@ -39,7 +39,6 @@
     <string name="profile_connected">已连接</string>
     <string name="profile_stopped">已停止</string>
     <string name="profile_degraded">连接异常</string>
-    <string name="profile_health_checking">正在检测连接健康…</string>
     <string name="profile_health_healthy">健康</string>
     <string name="profile_health_healthy_latency">健康 · %1$d ms</string>
     <plurals name="profile_health_degraded_failures">

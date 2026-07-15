@@ -135,6 +135,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val SnackbarAutoDismissMillis = 6_000L
+private const val HealthUnknownAnimationIntervalMillis = 500L
 
 private val CardShape = RoundedCornerShape(16.dp)
 private val CardShapeCompact = RoundedCornerShape(12.dp)
@@ -1170,7 +1171,7 @@ private fun ProfileStatusMark(running: Boolean, degraded: Boolean) {
 @Composable
 private fun profileHealthLabel(health: ProfileHealth?): String {
     return when (health?.status ?: ProfileHealthStatus.Unknown) {
-        ProfileHealthStatus.Unknown -> stringResource(R.string.profile_health_checking)
+        ProfileHealthStatus.Unknown -> animatedHealthUnknownLabel()
         ProfileHealthStatus.Healthy -> health?.latencyMs?.let { latency ->
             stringResource(R.string.profile_health_healthy_latency, latency)
         } ?: stringResource(R.string.profile_health_healthy)
@@ -1179,6 +1180,17 @@ private fun profileHealthLabel(health: ProfileHealth?): String {
             pluralStringResource(R.plurals.profile_health_degraded_failures, failures, failures)
         }
     }
+}
+
+@Composable
+private fun animatedHealthUnknownLabel(): String {
+    val dotCount by produceState(initialValue = 1) {
+        while (true) {
+            delay(HealthUnknownAnimationIntervalMillis)
+            value = value % 3 + 1
+        }
+    }
+    return ".".repeat(dotCount)
 }
 
 @Composable
