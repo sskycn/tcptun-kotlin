@@ -117,10 +117,12 @@ import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.tcptun.client.ui.theme.TcpTunTheme
@@ -1079,8 +1081,20 @@ private fun ProfileRow(
                         .padding(horizontal = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
+                    val healthLabel = if (running) profileHealthLabel(health) else null
+                    val healthLabelStyle = MaterialTheme.typography.labelMedium.toSpanStyle().copy(
+                        color = if (degraded) colors.onErrorContainer else colors.primary,
+                    )
                     Text(
-                        profile.name,
+                        text = buildAnnotatedString {
+                            append(profile.name)
+                            healthLabel?.let {
+                                append(" · ")
+                                withStyle(healthLabelStyle) {
+                                    append(it)
+                                }
+                            }
+                        },
                         style = MaterialTheme.typography.titleMedium,
                         color = primaryContentColor,
                         maxLines = 1,
@@ -1100,15 +1114,6 @@ private fun ProfileRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    if (running) {
-                        Text(
-                            text = profileHealthLabel(health),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (degraded) colors.onErrorContainer else colors.primary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
                 }
                 IconButton(
                     onClick = onShare,
@@ -1169,12 +1174,12 @@ private fun ProfileStatusMark(running: Boolean, degraded: Boolean) {
 }
 
 @Composable
-private fun profileHealthLabel(health: ProfileHealth?): String {
+private fun profileHealthLabel(health: ProfileHealth?): String? {
     return when (health?.status ?: ProfileHealthStatus.Unknown) {
         ProfileHealthStatus.Unknown -> animatedHealthUnknownLabel()
         ProfileHealthStatus.Healthy -> health?.latencyMs?.let { latency ->
-            stringResource(R.string.profile_health_healthy_latency, latency)
-        } ?: stringResource(R.string.profile_health_healthy)
+            stringResource(R.string.profile_health_latency, latency)
+        }
         ProfileHealthStatus.Degraded -> {
             val failures = (health?.failures ?: 1).coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
             pluralStringResource(R.plurals.profile_health_degraded_failures, failures, failures)

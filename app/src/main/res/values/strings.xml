@@ -39,8 +39,7 @@
     <string name="profile_connected">Connected</string>
     <string name="profile_stopped">Stopped</string>
     <string name="profile_degraded">Connection degraded</string>
-    <string name="profile_health_healthy">Healthy</string>
-    <string name="profile_health_healthy_latency">Healthy · %1$d ms</string>
+    <string name="profile_health_latency">%1$d ms</string>
     <plurals name="profile_health_degraded_failures">
         <item quantity="one">Degraded · %1$d consecutive failure</item>
         <item quantity="other">Degraded · %1$d consecutive failures</item>
