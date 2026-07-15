@@ -62,6 +62,13 @@ class AndroidBridgeContractTest {
                 Long::class.javaPrimitiveType,
                 Long::class.javaPrimitiveType,
             )
+            engine.javaClass.getMethod(
+                "probeOutboundHealth",
+                String::class.java,
+                String::class.java,
+                Long::class.javaPrimitiveType,
+                Long::class.javaPrimitiveType,
+            )
             engine.javaClass.getMethod("outboundsStatusJSON")
             assertEquals("Stopped", engine.status())
             assertEquals("stopped", JSONObject(engine.statusJSON()).getString("state"))
@@ -286,6 +293,31 @@ class AndroidBridgeContractTest {
     }
 
     @Test
+    fun healthTargetsStayOnPoolAheadOfProfileSpecificRules() {
+        val first = AppConfig(id = "health-a", name = "A", serverHost = "192.0.2.10", token = "a")
+        val second = AppConfig(id = "health-b", name = "B", serverHost = "192.0.2.20", token = "b")
+        val config = JSONObject(
+            ProfileRunPlan(listOf(first, second)).toBridgeJson(
+                localListenAddr = "127.0.0.1:18089",
+                managedRouteRules = listOf(
+                    ManagedRouteRule(
+                        type = ManagedRouteRuleType.DomainSuffix,
+                        value = "connectivitycheck.gstatic.com",
+                        outboundProfileId = second.id,
+                    ),
+                ),
+            ),
+        )
+
+        val rules = config.getJSONObject("route").getJSONArray("rules")
+        assertEquals("profile-pool", rules.getJSONObject(0).getString("outbound"))
+        assertEquals(
+            profileOutboundTag(second.id),
+            rules.getJSONObject(1).getString("outbound"),
+        )
+    }
+
+    @Test
     fun singleProfileUsesTheSameStablePoolStructure() {
         val profile = AppConfig(
             id = "00000000-0000-4000-8000-000000000010",
@@ -399,6 +431,63 @@ class AndroidBridgeContractTest {
                     "profile-b" to true,
                     "profile-pool" to true,
                 )
+            } finally {
+                engine.close()
+            }
+        }
+    }
+
+    @Test
+    fun healthProbeTracksThreeMembersAndRecoversOneFailedMember() {
+        ServerSocket(0, 4, InetAddress.getByName("127.0.0.1")).use { target ->
+            val accepted = CompletableFuture<Unit>()
+            thread(name = "member-health-contract-listener", isDaemon = true) {
+                runCatching {
+                    repeat(4) { target.accept().use { } }
+                }.fold(accepted::complete, accepted::completeExceptionally)
+            }
+            val unavailablePort = ServerSocket(0).use { it.localPort }
+            val config = """{
+                "inbounds":[{"tag":"local","type":"mixed","listen":"127.0.0.1","port":18090,"network":["tcp"],"outbound":"pool"}],
+                "outbounds":[
+                    {"tag":"a","type":"direct","network":["tcp"]},
+                    {"tag":"b","type":"direct","network":["tcp"]},
+                    {"tag":"c","type":"direct","network":["tcp"]},
+                    {"tag":"pool","type":"balance","network":["tcp"],"members":[{"outbound":"a"},{"outbound":"b"},{"outbound":"c"}]}
+                ],
+                "route":{"default_outbound":"pool"}
+            }""".trimIndent()
+            val engine = Androidbridge.newEngine()
+            try {
+                engine.configure(withAvailableInboundPorts(config))
+                engine.startConfiguredSessionWithDisabledOutbounds("[]")
+                listOf("a", "b", "c").forEach { tag ->
+                    assertTrue(engine.probeOutboundHealth(tag, "127.0.0.1", target.localPort.toLong(), 1_000) >= 0)
+                }
+                var statuses = JSONArray(engine.outboundsStatusJSON())
+                listOf("a", "b", "c").forEach { tag ->
+                    val status = (0 until statuses.length()).map(statuses::getJSONObject)
+                        .first { it.getString("tag") == tag }
+                    assertEquals("healthy", status.getString("health"))
+                    assertEquals(0L, status.getLong("failures"))
+                }
+
+                assertTrue(runCatching {
+                    engine.probeOutboundHealth("b", "127.0.0.1", unavailablePort.toLong(), 300)
+                }.isFailure)
+                statuses = JSONArray(engine.outboundsStatusJSON())
+                var memberB = (0 until statuses.length()).map(statuses::getJSONObject)
+                    .first { it.getString("tag") == "b" }
+                assertEquals("degraded", memberB.getString("health"))
+                assertTrue(memberB.getLong("failures") > 0)
+
+                assertTrue(engine.probeOutboundHealth("b", "127.0.0.1", target.localPort.toLong(), 1_000) >= 0)
+                statuses = JSONArray(engine.outboundsStatusJSON())
+                memberB = (0 until statuses.length()).map(statuses::getJSONObject)
+                    .first { it.getString("tag") == "b" }
+                assertEquals("healthy", memberB.getString("health"))
+                assertEquals(0L, memberB.getLong("failures"))
+                accepted.get(3, TimeUnit.SECONDS)
             } finally {
                 engine.close()
             }

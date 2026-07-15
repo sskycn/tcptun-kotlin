@@ -25,6 +25,7 @@ interface TcptunBridge {
     fun startOutbound(tag: String)
     fun stopOutbound(tag: String, force: Boolean, timeoutMillis: Long)
     fun probeOutbound(tag: String, host: String, port: Int, timeoutMillis: Long): Long
+    fun probeOutboundHealth(tag: String, host: String, port: Int, timeoutMillis: Long): Long
     fun outboundsStatusJson(): String
     fun stop()
     fun close()
@@ -103,10 +104,18 @@ class ReflectionTcptunBridge : TcptunBridge {
     }
 
     override fun probeOutbound(tag: String, host: String, port: Int, timeoutMillis: Long): Long {
+        return invokeProbe("probeOutbound", tag, host, port, timeoutMillis)
+    }
+
+    override fun probeOutboundHealth(tag: String, host: String, port: Int, timeoutMillis: Long): Long {
+        return invokeProbe("probeOutboundHealth", tag, host, port, timeoutMillis)
+    }
+
+    private fun invokeProbe(methodName: String, tag: String, host: String, port: Int, timeoutMillis: Long): Long {
         val method = engine.javaClass.methods.singleOrNull {
-            it.name == "probeOutbound" && it.parameterTypes.size == 4
+            it.name == methodName && it.parameterTypes.size == 4
         } ?: throw IllegalStateException(
-            "androidbridge.Engine.probeOutbound is unavailable. Rebuild app/libs/androidbridge.aar.",
+            "androidbridge.Engine.$methodName is unavailable. Rebuild app/libs/androidbridge.aar.",
         )
         val portArgument: Any = when (method.parameterTypes[2]) {
             Int::class.javaPrimitiveType, Int::class.javaObjectType -> port
@@ -118,7 +127,7 @@ class ReflectionTcptunBridge : TcptunBridge {
         }
         return try {
             (method.invoke(engine, tag, host, portArgument, timeoutArgument) as? Number)?.toLong()
-                ?: throw IllegalStateException("androidbridge.Engine.probeOutbound returned no elapsed time")
+                ?: throw IllegalStateException("androidbridge.Engine.$methodName returned no elapsed time")
         } catch (err: ReflectiveOperationException) {
             val cause = err.cause ?: err
             throw IllegalStateException(cause.message ?: cause.javaClass.name, cause)

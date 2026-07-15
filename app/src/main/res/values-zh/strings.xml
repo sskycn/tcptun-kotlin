@@ -38,6 +38,13 @@
     <string name="empty_profiles_hint">可从剪切板或二维码导入，也可以手动添加。</string>
     <string name="profile_connected">已连接</string>
     <string name="profile_stopped">已停止</string>
+    <string name="profile_degraded">连接异常</string>
+    <string name="profile_health_checking">正在检测连接健康…</string>
+    <string name="profile_health_healthy">健康</string>
+    <string name="profile_health_healthy_latency">健康 · %1$d ms</string>
+    <plurals name="profile_health_degraded_failures">
+        <item quantity="other">异常 · 连续失败 %1$d 次</item>
+    </plurals>
     <string name="error_prefix">错误：%1$s</string>
     <string name="tcping_failed_fallback">失败</string>
     <string name="tcping_step">TCPing %1$s · %2$d/%3$d · %4$s…</string>

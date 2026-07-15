@@ -173,7 +173,7 @@ internal fun ProfileRunPlan.toBridgeJson(
     val activeRules = managedRouteRules.map(ManagedRouteRule::normalized)
         .filter { it.enabled && it.isValid() }
     val rules = JSONArray()
-    if (allowDirectFirst || activeRules.any { it.outbound == ManagedRouteOutbound.Direct }) {
+    if (allowDirectFirst || activeRules.isNotEmpty()) {
         rules.put(
             JSONObject()
                 .put("inbound", JSONArray().put("local"))

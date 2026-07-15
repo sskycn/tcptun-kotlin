@@ -26,6 +26,7 @@ import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -69,6 +70,12 @@ private data class HealthFailure(
     val restartTarget: HealthRestartTarget,
 )
 
+private data class MemberHealthProbeResult(
+    val profile: AppConfig,
+    val elapsedMs: Long? = null,
+    val error: String = "",
+)
+
 private data class BridgeReadyWaiter(
     val epoch: Long,
     val future: CompletableFuture<Unit> = CompletableFuture(),
@@ -99,13 +106,18 @@ class TcptunVpnService : VpnService() {
     private val bridge: TcptunBridge = ReflectionTcptunBridge()
     private val bridgeLock = Any()
     private val tunnelLock = Any()
-    private val lifecycleExecutor = Executors.newSingleThreadExecutor { runnable ->
+    private val lifecycleExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "TcptunLifecycle").apply { isDaemon = true }
     }
     private val tcpingExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "TcptunTcping").apply { isDaemon = true }
     }
+    private val memberHealthExecutor = Executors.newFixedThreadPool(MAX_CONCURRENT_MEMBER_HEALTH_PROBES) { runnable ->
+        Thread(runnable, "TcptunMemberHealth").apply { isDaemon = true }
+    }
     private val lifecycleGeneration = AtomicInteger()
+    private val monitorGeneration = AtomicInteger()
+    private val bridgeRestartRequestGeneration = AtomicInteger()
     private val bridgeReadyWaiter = AtomicReference<BridgeReadyWaiter?>(null)
     private var tun: android.os.ParcelFileDescriptor? = null
     @Volatile private var bridgeConfigJson: String? = null
@@ -180,6 +192,9 @@ class TcptunVpnService : VpnService() {
             stopVpn(setStopped = false, clearSavedConfig = false, stopSelfService = false)
         }
         stopping = false
+        bridgeRestartRequestGeneration.incrementAndGet()
+        lastBridgeRestartAtMs = 0L
+        lastTunnelRestartAtMs = 0L
         lastUpstreamProbeAtMs = 0L
         val json = intent.getStringExtra(EXTRA_CONFIG) ?: run {
             TcptunState.error("missing VPN config")
@@ -259,6 +274,7 @@ class TcptunVpnService : VpnService() {
                     return
                 }
                 runningPlan = plan
+                TcptunState.resetProfileHealth(plan.activeProfiles)
                 startBridgeMonitor()
                 TcptunState.setStatus("Running")
                 updateBridgeDiagnostics()
@@ -332,6 +348,8 @@ class TcptunVpnService : VpnService() {
                 setOutboundRunning(profile, profile.id in nextPlan.activeIds)
             }
             runningPlan = nextPlan
+            TcptunState.initializeProfileHealth(nextPlan.activeProfiles)
+            requestDenseHealthCheck("active connections changed")
             saveDesiredRunningPlan(this, nextPlan)
             updateNotification(runningNotificationState(nextPlan))
             updateBridgeDiagnostics()
@@ -360,6 +378,11 @@ class TcptunVpnService : VpnService() {
             } else {
                 bridge.stopOutbound(tag, force = true, timeoutMillis = OUTBOUND_STOP_TIMEOUT_MS)
             }
+        }
+        if (shouldRun) {
+            TcptunState.setProfileHealth(profile.id, ProfileHealth())
+        } else {
+            TcptunState.removeProfileHealth(profile.id)
         }
         TcptunState.appendLog("connection ${profile.name}: ${if (shouldRun) "started" else "stopped"}")
     }
@@ -591,6 +614,7 @@ class TcptunVpnService : VpnService() {
     private fun stopVpn(setStopped: Boolean = true, clearSavedConfig: Boolean = true, stopSelfService: Boolean = true) {
         if (stopping) return
         stopping = true
+        bridgeRestartRequestGeneration.incrementAndGet()
         if (setStopped) {
             TcptunState.setStatus("Stopping")
         }
@@ -642,6 +666,7 @@ class TcptunVpnService : VpnService() {
     override fun onDestroy() {
         lifecycleGeneration.incrementAndGet()
         tcpingExecutor.shutdownNow()
+        memberHealthExecutor.shutdownNow()
         stopVpn(setStopped = TcptunState.status != "Error", clearSavedConfig = false)
         runCatching { synchronized(bridgeLock) { bridge.close() } }
             .onFailure { err -> TcptunState.appendLog("tcptun engine close failed: ${err.message}") }
@@ -821,11 +846,27 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun requestBridgeRestart(reason: String) {
+        val generation = bridgeRestartRequestGeneration.incrementAndGet()
+        scheduleBridgeRestart(reason, generation)
+    }
+
+    private fun scheduleBridgeRestart(reason: String, generation: Int) {
+        val remainingCooldownMs = (
+            BRIDGE_RESTART_MIN_INTERVAL_MS - (System.currentTimeMillis() - lastBridgeRestartAtMs)
+        ).coerceAtLeast(0)
         runCatching {
-            lifecycleExecutor.execute {
+            lifecycleExecutor.schedule({
+                if (generation != bridgeRestartRequestGeneration.get() || stopping || tun == null) return@schedule
+                val remainingMs = (
+                    BRIDGE_RESTART_MIN_INTERVAL_MS - (System.currentTimeMillis() - lastBridgeRestartAtMs)
+                ).coerceAtLeast(0)
+                if (remainingMs > 0) {
+                    scheduleBridgeRestart(reason, generation)
+                    return@schedule
+                }
                 runCatching { restartBridge(reason) }
                     .onFailure { err -> TcptunState.appendLog("tcptun bridge restart failed: ${err.message}") }
-            }
+            }, remainingCooldownMs, TimeUnit.MILLISECONDS)
         }.onFailure { err ->
             if (!stopping) TcptunState.appendLog("tcptun bridge restart scheduling failed: ${err.message}")
         }
@@ -911,17 +952,23 @@ class TcptunVpnService : VpnService() {
 
     private fun startBridgeMonitor() {
         stopBridgeMonitor()
+        val generation = monitorGeneration.incrementAndGet()
         stableHealthSuccesses = 0
         monitorThread = Thread {
             var bridgeFailures = 0
             var tunnelFailures = 0
-            while (!stopping && !Thread.currentThread().isInterrupted) {
+            while (
+                generation == monitorGeneration.get() &&
+                !stopping &&
+                !Thread.currentThread().isInterrupted
+            ) {
                 try {
                     val intervalMs = bridgeHealthIntervalMs()
                     TcptunState.updateDiagnostics { it.copy(healthCheckIntervalSeconds = intervalMs / 1_000) }
                     sleepBridgeHealthInterval(intervalMs)
-                    if (tun == null || stopping) continue
-                    val failure = vpnHealthFailure()
+                    if (generation != monitorGeneration.get() || tun == null || stopping) continue
+                    val failure = vpnHealthFailure(generation)
+                    if (generation != monitorGeneration.get() || stopping) return@Thread
                     if (failure == null) {
                         bridgeFailures = 0
                         tunnelFailures = 0
@@ -964,6 +1011,7 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun stopBridgeMonitor() {
+        monitorGeneration.incrementAndGet()
         monitorThread?.interrupt()
         monitorThread = null
     }
@@ -993,7 +1041,7 @@ class TcptunVpnService : VpnService() {
         }
     }
 
-    private fun vpnHealthFailure(): HealthFailure? {
+    private fun vpnHealthFailure(monitorEpoch: Int): HealthFailure? {
         tunnelHealthFailure()?.let {
             return HealthFailure(it, HealthRestartTarget.Tunnel)
         }
@@ -1022,9 +1070,140 @@ class TcptunVpnService : VpnService() {
             return HealthFailure("local proxy ${activeLocalSocksConnectAddr()} is not accepting connections", HealthRestartTarget.Bridge)
         }
         if (shouldRunUpstreamProbe()) {
-            upstreamProbeFailure()?.let { return HealthFailure(it, HealthRestartTarget.Bridge) }
+            val targets = orderedUpstreamProbeTargets()
+            probeActiveMembers(targets, monitorEpoch)
+            if (monitorEpoch != monitorGeneration.get() || stopping) return null
+            val upstreamFailure = upstreamProbeFailure(targets)
+            updateRawProfileHealth(upstreamFailure)
+            upstreamFailure?.let { return HealthFailure(it, HealthRestartTarget.Bridge) }
         }
         return null
+    }
+
+    private fun probeActiveMembers(targets: List<UpstreamProbeTarget>, monitorEpoch: Int) {
+        // A full-JSON profile can use a selector as its default outbound. It is
+        // represented as one app profile, so only the aggregate SOCKS/TLS probe
+        // can describe its health without guessing at its internal members.
+        val profiles = runningPlan?.activeProfiles.orEmpty().filter { it.rawConfigJson.isBlank() }
+        if (profiles.isEmpty() || targets.isEmpty()) return
+        val tasks = profiles.map { profile ->
+            Callable { probeMember(profile, targets) }
+        }
+        val batches = (profiles.size + MAX_CONCURRENT_MEMBER_HEALTH_PROBES - 1) / MAX_CONCURRENT_MEMBER_HEALTH_PROBES
+        val timeoutMs = MEMBER_HEALTH_PROBE_TIMEOUT_MS.toLong() * targets.size * batches + MEMBER_HEALTH_PROBE_GRACE_MS
+        val futures = memberHealthExecutor.invokeAll(tasks, timeoutMs, TimeUnit.MILLISECONDS)
+        if (monitorEpoch != monitorGeneration.get() || stopping) return
+        futures.forEachIndexed { index, future ->
+            val profile = profiles[index]
+            if (profile.id !in runningPlan?.activeIds.orEmpty()) return@forEachIndexed
+            val result = runCatching {
+                if (future.isCancelled) {
+                    MemberHealthProbeResult(profile, error = "health probe timed out")
+                } else {
+                    future.get()
+                }
+            }.getOrElse { err ->
+                MemberHealthProbeResult(profile, error = err.cause?.message ?: err.message ?: err.javaClass.simpleName)
+            }
+            val previous = TcptunState.state.value.profileHealth[profile.id]
+            val now = System.currentTimeMillis()
+            val health = if (result.elapsedMs != null) {
+                ProfileHealth(
+                    status = ProfileHealthStatus.Healthy,
+                    latencyMs = result.elapsedMs,
+                    failures = 0,
+                    lastCheckedAtMs = now,
+                    lastSucceededAtMs = now,
+                )
+            } else {
+                ProfileHealth(
+                    status = ProfileHealthStatus.Degraded,
+                    latencyMs = previous?.latencyMs,
+                    failures = (previous?.failures ?: 0) + 1,
+                    lastCheckedAtMs = now,
+                    lastSucceededAtMs = previous?.lastSucceededAtMs ?: 0,
+                    error = result.error,
+                )
+            }
+            TcptunState.setProfileHealth(profile.id, health)
+            if (previous?.status != health.status) {
+                val detail = health.latencyMs?.let { "${it}ms" } ?: health.error
+                TcptunState.appendLog("connection ${profile.name} health: ${health.status.name.lowercase()} $detail")
+            }
+        }
+        refreshProfileHealthFromCore(profiles)
+    }
+
+    private fun updateRawProfileHealth(failure: String?) {
+        val profile = runningPlan?.activeProfiles?.singleOrNull { it.rawConfigJson.isNotBlank() } ?: return
+        val previous = TcptunState.state.value.profileHealth[profile.id]
+        val now = System.currentTimeMillis()
+        val health = if (failure == null) {
+            ProfileHealth(
+                status = ProfileHealthStatus.Healthy,
+                failures = 0,
+                lastCheckedAtMs = now,
+                lastSucceededAtMs = now,
+            )
+        } else {
+            ProfileHealth(
+                status = ProfileHealthStatus.Degraded,
+                latencyMs = previous?.latencyMs,
+                failures = (previous?.failures ?: 0) + 1,
+                lastCheckedAtMs = now,
+                lastSucceededAtMs = previous?.lastSucceededAtMs ?: 0,
+                error = failure,
+            )
+        }
+        TcptunState.setProfileHealth(profile.id, health)
+    }
+
+    private fun refreshProfileHealthFromCore(profiles: List<AppConfig>) {
+        val profileByTag = profiles.associateBy(AppConfig::runtimeOutboundTag)
+        runCatching { JSONArray(bridge.outboundsStatusJson()) }
+            .onSuccess { statuses ->
+                for (index in 0 until statuses.length()) {
+                    val status = statuses.optJSONObject(index) ?: continue
+                    val profile = profileByTag[status.optString("tag")] ?: continue
+                    if (profile.id !in runningPlan?.activeIds.orEmpty()) continue
+                    val healthStatus = when (status.optString("health").lowercase()) {
+                        "healthy" -> ProfileHealthStatus.Healthy
+                        "degraded" -> ProfileHealthStatus.Degraded
+                        else -> continue
+                    }
+                    val previous = TcptunState.state.value.profileHealth[profile.id]
+                    TcptunState.setProfileHealth(
+                        profile.id,
+                        ProfileHealth(
+                            status = healthStatus,
+                            latencyMs = status.optLong("latency_ms").takeIf { it > 0 },
+                            failures = status.optLong("failures").coerceAtLeast(0),
+                            lastCheckedAtMs = status.optLong("last_observed_at_ms"),
+                            lastSucceededAtMs = status.optLong("last_succeeded_at_ms"),
+                            error = previous?.error.takeIf { healthStatus == ProfileHealthStatus.Degraded }.orEmpty(),
+                        ),
+                    )
+                }
+            }
+            .onFailure { err -> TcptunState.appendLog("outbound health status unavailable: ${err.message}") }
+    }
+
+    private fun probeMember(profile: AppConfig, targets: List<UpstreamProbeTarget>): MemberHealthProbeResult {
+        val failures = mutableListOf<String>()
+        for (target in targets) {
+            val elapsed = runCatching {
+                bridge.probeOutboundHealth(
+                    tag = profile.runtimeOutboundTag(),
+                    host = target.host,
+                    port = target.port,
+                    timeoutMillis = MEMBER_HEALTH_PROBE_TIMEOUT_MS,
+                )
+            }
+            elapsed.getOrNull()?.let { return MemberHealthProbeResult(profile, elapsedMs = it) }
+            val err = elapsed.exceptionOrNull()
+            failures += "${target.label}: ${err?.message ?: err?.javaClass?.simpleName ?: "failed"}"
+        }
+        return MemberHealthProbeResult(profile, error = failures.joinToString("; "))
     }
 
     private fun tunnelHealthFailure(): String? {
@@ -1099,8 +1278,7 @@ class TcptunVpnService : VpnService() {
         return true
     }
 
-    private fun upstreamProbeFailure(): String? {
-        val targets = orderedUpstreamProbeTargets()
+    private fun upstreamProbeFailure(targets: List<UpstreamProbeTarget>): String? {
         val failures = mutableListOf<String>()
         for (target in targets) {
             val failure = probeUpstream(target)
@@ -1333,6 +1511,9 @@ class TcptunVpnService : VpnService() {
         private const val BRIDGE_READY_TIMEOUT_MS = 15_000L
         private const val OUTBOUND_STOP_TIMEOUT_MS = 15_000L
         private const val TCPING_OUTBOUND_TIMEOUT_MS = 3_000L
+        private const val MEMBER_HEALTH_PROBE_TIMEOUT_MS = 3_000L
+        private const val MEMBER_HEALTH_PROBE_GRACE_MS = 1_000L
+        private const val MAX_CONCURRENT_MEMBER_HEALTH_PROBES = 4
         private const val TUNNEL_RESTART_DELAY_MS = 300L
         private const val TUNNEL_RESTART_MIN_INTERVAL_MS = 30_000L
         private const val RUNTIME_SETTINGS_RESTART_DEBOUNCE_MS = 800L

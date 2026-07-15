@@ -115,6 +115,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
@@ -665,6 +666,7 @@ internal fun TcptunScreen(
                     ProfileRow(
                         profile = profile,
                         running = profile.id in state.activeIds && isVpnActiveStatus(vpnState.status),
+                        health = vpnState.profileHealth[profile.id],
                         enabled = !isVpnTransitionStatus(vpnState.status),
                         onClick = { toggleProfile(profile) },
                         shareable = ProfileUriCodec.encode(profile) != null,
@@ -1000,6 +1002,7 @@ private fun MainActionsFab(
 private fun ProfileRow(
     profile: AppConfig,
     running: Boolean,
+    health: ProfileHealth?,
     enabled: Boolean,
     shareable: Boolean,
     onClick: () -> Unit,
@@ -1008,8 +1011,15 @@ private fun ProfileRow(
     onDeleteRequest: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
+    val degraded = running && health?.status == ProfileHealthStatus.Degraded
+    val primaryContentColor = if (degraded) colors.onErrorContainer else colors.onSurface
+    val secondaryContentColor = if (degraded) colors.onErrorContainer else colors.onSurfaceVariant
     val rowColor by animateColorAsState(
-        targetValue = if (running) colors.secondaryContainer else colors.surfaceContainerLow,
+        targetValue = when {
+            degraded -> colors.errorContainer
+            running -> colors.secondaryContainer
+            else -> colors.surfaceContainerLow
+        },
         label = "profileRowColor",
     )
     val dismissState = rememberSwipeToDismissBoxState()
@@ -1061,7 +1071,7 @@ private fun ProfileRow(
                     .padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                ProfileStatusMark(running = running)
+                ProfileStatusMark(running = running, degraded = degraded)
                 Column(
                     modifier = Modifier
                         .weight(1f)
@@ -1071,24 +1081,33 @@ private fun ProfileRow(
                     Text(
                         profile.name,
                         style = MaterialTheme.typography.titleMedium,
-                        color = colors.onSurface,
+                        color = primaryContentColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text = profile.label(),
                         style = MaterialTheme.typography.bodyMedium,
-                        color = colors.onSurfaceVariant,
+                        color = secondaryContentColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         profile.maskedAddress(),
                         style = MaterialTheme.typography.bodySmall,
-                        color = colors.onSurfaceVariant,
+                        color = secondaryContentColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    if (running) {
+                        Text(
+                            text = profileHealthLabel(health),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (degraded) colors.onErrorContainer else colors.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
                 IconButton(
                     onClick = onShare,
@@ -1097,7 +1116,7 @@ private fun ProfileRow(
                     Icon(
                         Icons.Rounded.Share,
                         contentDescription = stringResource(R.string.share),
-                        tint = if (shareable) colors.onSurfaceVariant else colors.onSurface.copy(alpha = 0.38f),
+                        tint = if (shareable) secondaryContentColor else primaryContentColor.copy(alpha = 0.38f),
                     )
                 }
                 IconButton(
@@ -1107,7 +1126,7 @@ private fun ProfileRow(
                     Icon(
                         Icons.Rounded.QrCode2,
                         contentDescription = stringResource(R.string.show_qr_code),
-                        tint = if (shareable) colors.onSurfaceVariant else colors.onSurface.copy(alpha = 0.38f),
+                        tint = if (shareable) secondaryContentColor else primaryContentColor.copy(alpha = 0.38f),
                     )
                 }
             }
@@ -1116,22 +1135,48 @@ private fun ProfileRow(
 }
 
 @Composable
-private fun ProfileStatusMark(running: Boolean) {
+private fun ProfileStatusMark(running: Boolean, degraded: Boolean) {
     val colors = MaterialTheme.colorScheme
     Surface(
         modifier = Modifier.size(40.dp),
         shape = CircleShape,
-        color = if (running) colors.primary else colors.surfaceContainerHighest,
+        color = when {
+            degraded -> colors.error
+            running -> colors.primary
+            else -> colors.surfaceContainerHighest
+        },
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(
                 imageVector = if (running) Icons.Rounded.Stop else Icons.Rounded.PlayArrow,
                 contentDescription = stringResource(
-                    if (running) R.string.profile_connected else R.string.profile_stopped,
+                    when {
+                        degraded -> R.string.profile_degraded
+                        running -> R.string.profile_connected
+                        else -> R.string.profile_stopped
+                    },
                 ),
-                tint = if (running) colors.onPrimary else colors.onSurfaceVariant,
+                tint = when {
+                    degraded -> colors.onError
+                    running -> colors.onPrimary
+                    else -> colors.onSurfaceVariant
+                },
                 modifier = Modifier.size(20.dp),
             )
+        }
+    }
+}
+
+@Composable
+private fun profileHealthLabel(health: ProfileHealth?): String {
+    return when (health?.status ?: ProfileHealthStatus.Unknown) {
+        ProfileHealthStatus.Unknown -> stringResource(R.string.profile_health_checking)
+        ProfileHealthStatus.Healthy -> health?.latencyMs?.let { latency ->
+            stringResource(R.string.profile_health_healthy_latency, latency)
+        } ?: stringResource(R.string.profile_health_healthy)
+        ProfileHealthStatus.Degraded -> {
+            val failures = (health?.failures ?: 1).coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
+            pluralStringResource(R.plurals.profile_health_degraded_failures, failures, failures)
         }
     }
 }

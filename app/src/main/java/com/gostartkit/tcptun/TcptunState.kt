@@ -41,8 +41,24 @@ data class TcptunRuntimeState(
     val lastError: String = "",
     val diagnostics: TcptunDiagnostics = TcptunDiagnostics(),
     val tcping: TcpingProgress = TcpingProgress(),
+    val profileHealth: Map<String, ProfileHealth> = emptyMap(),
     val logs: List<String> = emptyList(),
     val profileStateRevision: Long = 0,
+)
+
+enum class ProfileHealthStatus {
+    Unknown,
+    Healthy,
+    Degraded,
+}
+
+data class ProfileHealth(
+    val status: ProfileHealthStatus = ProfileHealthStatus.Unknown,
+    val latencyMs: Long? = null,
+    val failures: Long = 0,
+    val lastCheckedAtMs: Long = 0,
+    val lastSucceededAtMs: Long = 0,
+    val error: String = "",
 )
 
 data class TcpingLinkResult(
@@ -156,6 +172,7 @@ object TcptunState {
             lastError = if (value == "Error") current.lastError else "",
             diagnostics = current.diagnostics.copy(vpnStatus = value),
             tcping = if (value == "Stopped" || value == "Error") TcpingProgress() else current.tcping,
+            profileHealth = if (value == "Stopped" || value == "Error") emptyMap() else current.profileHealth,
         )
     }
 
@@ -167,6 +184,7 @@ object TcptunState {
             lastError = message,
             diagnostics = current.diagnostics.copy(vpnStatus = "Error"),
             tcping = TcpingProgress(),
+            profileHealth = emptyMap(),
         )
         appendLog("error: $message")
     }
@@ -257,6 +275,36 @@ object TcptunState {
     fun notifyProfileStateChanged() {
         val current = _state.value
         _state.value = current.copy(profileStateRevision = current.profileStateRevision + 1)
+    }
+
+    @Synchronized
+    fun initializeProfileHealth(profiles: List<AppConfig>) {
+        val current = _state.value
+        _state.value = current.copy(
+            profileHealth = profiles.associate { profile ->
+                profile.id to (current.profileHealth[profile.id] ?: ProfileHealth())
+            },
+        )
+    }
+
+    @Synchronized
+    fun resetProfileHealth(profiles: List<AppConfig>) {
+        _state.value = _state.value.copy(
+            profileHealth = profiles.associate { profile -> profile.id to ProfileHealth() },
+        )
+    }
+
+    @Synchronized
+    fun setProfileHealth(profileId: String, health: ProfileHealth) {
+        if (profileId.isBlank()) return
+        val current = _state.value
+        _state.value = current.copy(profileHealth = current.profileHealth + (profileId to health))
+    }
+
+    @Synchronized
+    fun removeProfileHealth(profileId: String) {
+        if (profileId !in _state.value.profileHealth) return
+        _state.value = _state.value.copy(profileHealth = _state.value.profileHealth - profileId)
     }
 
     @Synchronized

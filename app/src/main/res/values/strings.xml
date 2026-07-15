@@ -38,6 +38,14 @@
     <string name="empty_profiles_hint">Import a profile from clipboard or QR code, or create one manually.</string>
     <string name="profile_connected">Connected</string>
     <string name="profile_stopped">Stopped</string>
+    <string name="profile_degraded">Connection degraded</string>
+    <string name="profile_health_checking">Checking connection health…</string>
+    <string name="profile_health_healthy">Healthy</string>
+    <string name="profile_health_healthy_latency">Healthy · %1$d ms</string>
+    <plurals name="profile_health_degraded_failures">
+        <item quantity="one">Degraded · %1$d consecutive failure</item>
+        <item quantity="other">Degraded · %1$d consecutive failures</item>
+    </plurals>
     <string name="error_prefix">Error: %1$s</string>
     <string name="tcping_failed_fallback">failed</string>
     <string name="tcping_step">TCPing %1$s · %2$d/%3$d · %4$s…</string>

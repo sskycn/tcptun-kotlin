@@ -51,6 +51,8 @@ func (e *Engine) Configure(configJson string) error
 func (e *Engine) StartConfiguredSessionWithDisabledOutbounds(disabledTagsJson string) (int64, error)
 func (e *Engine) StartOutbound(tag string) error
 func (e *Engine) StopOutbound(tag string, force bool, timeoutMillis int64) error
+func (e *Engine) ProbeOutbound(tag string, host string, port int, timeoutMillis int64) (int64, error)
+func (e *Engine) ProbeOutboundHealth(tag string, host string, port int, timeoutMillis int64) (int64, error)
 func (e *Engine) OutboundsStatusJSON() string
 func (e *Engine) Stop() error
 func (e *Engine) Close() error
@@ -70,6 +72,11 @@ an optional TCP-only `direct-first` outbound. Ordered route rules are evaluated
 first and may select a specific configured profile by its stable tag; unmatched sessions enter the
 pool, whose effective weights follow active load, observed connection latency,
 and failures while destination affinity keeps related sessions on one link.
+The service periodically calls `ProbeOutboundHealth` for every active pool
+member. Failed checks increase only that member's balance penalty; a successful
+check clears the penalty so a recovered member can immediately re-enter
+selection. `OutboundsStatusJSON` reports `health`, `failures`, `latency_ms`,
+`last_observed_at_ms`, and `last_succeeded_at_ms` without exposing credentials.
 The service first calls `Configure`, which has no runtime side effects, and then
 starts the configured session with every inactive profile tag disabled from its
 first state. Later profile row taps call `StartOutbound` or `StopOutbound` without recreating the Android
