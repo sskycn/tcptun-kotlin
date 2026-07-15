@@ -40,15 +40,17 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.AltRoute
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
@@ -57,6 +59,7 @@ import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
@@ -68,6 +71,7 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -103,6 +107,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -137,18 +142,24 @@ private data class NetworkLinkInfo(
     val linkProperties: LinkProperties,
 )
 
+internal data class MixedListenerNetworkDisplay(
+    val ipv4: String,
+    val gatewayIpv4: String,
+)
+
 private fun readLocalIpInfo(connectivity: ConnectivityManager, networks: Collection<Network>): LocalIpInfo {
     val links = networks.mapNotNull { network ->
         val capabilities = connectivity.getNetworkCapabilities(network) ?: return@mapNotNull null
         val linkProperties = connectivity.getLinkProperties(network) ?: return@mapNotNull null
         NetworkLinkInfo(network, capabilities, linkProperties)
     }
-    val underlying = links
-        .filter {
-            it.capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                it.capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-        }
-        .maxByOrNull {
+    val activeNetwork = connectivity.activeNetwork
+    val underlyingCandidates = links.filter {
+        it.capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            it.capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+    }
+    val underlying = underlyingCandidates.firstOrNull { it.network == activeNetwork }
+        ?: underlyingCandidates.maxByOrNull {
             underlyingNetworkScore(
                 validated = it.capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
                 ethernet = it.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET),
@@ -156,7 +167,6 @@ private fun readLocalIpInfo(connectivity: ConnectivityManager, networks: Collect
                 cellular = it.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR),
             )
         }
-    val activeNetwork = connectivity.activeNetwork
     val vpn = links.firstOrNull {
         it.network == activeNetwork && it.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
     } ?: links.firstOrNull { it.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) }
@@ -191,6 +201,34 @@ private fun formatIpAddresses(linkProperties: LinkProperties?, ipv6: Boolean): S
         .joinToString("\n")
 }
 
+internal fun mixedListenerNetworkDisplay(
+    listenAddress: String,
+    underlyingIpv4: String,
+    underlyingGatewayIpv4: String,
+): MixedListenerNetworkDisplay {
+    val listenHost = hostFromListenAddress(listenAddress)
+    val networkIpv4 = underlyingIpv4.substringBefore('\n').substringBefore('/').trim()
+    val networkGateway = underlyingGatewayIpv4.substringBefore('\n').trim()
+    return when (listenHost) {
+        "", "0.0.0.0", "::", "*" -> MixedListenerNetworkDisplay(networkIpv4, networkGateway)
+        "127.0.0.1", "::1", "localhost" -> MixedListenerNetworkDisplay(listenHost, "")
+        else -> MixedListenerNetworkDisplay(
+            ipv4 = listenHost,
+            gatewayIpv4 = networkGateway.takeIf { listenHost == networkIpv4 }.orEmpty(),
+        )
+    }
+}
+
+private fun hostFromListenAddress(address: String): String {
+    val value = address.trim().substringBefore(',').trim()
+    if (value.startsWith('[')) return value.substringAfter('[').substringBefore(']').trim()
+    return when (value.count { it == ':' }) {
+        0 -> value
+        1 -> value.substringBeforeLast(':').trim()
+        else -> value
+    }
+}
+
 @Composable
 private fun rememberLocalIpInfo(context: Context): LocalIpInfo {
     val connectivity = remember(context) {
@@ -203,12 +241,27 @@ private fun rememberLocalIpInfo(context: Context): LocalIpInfo {
     ) {
         val observedNetworks = initialNetworks.toMutableSet()
         val observedNetworksLock = Any()
-        fun refresh(network: Network, available: Boolean) {
-            val snapshot = synchronized(observedNetworksLock) {
-                if (available) observedNetworks.add(network) else observedNetworks.remove(network)
-                observedNetworks.toList()
+        var refreshSequence = 0L
+        fun scheduleRefresh(updateNetworks: MutableSet<Network>.() -> Unit = {}) {
+            val (sequence, snapshot) = synchronized(observedNetworksLock) {
+                observedNetworks.updateNetworks()
+                ++refreshSequence to observedNetworks.toList()
             }
-            launch { value = readLocalIpInfo(connectivity, snapshot) }
+            launch {
+                val next = readLocalIpInfo(connectivity, snapshot)
+                val isCurrent = synchronized(observedNetworksLock) { sequence == refreshSequence }
+                if (isCurrent) value = next
+            }
+        }
+        fun refresh(network: Network, available: Boolean) {
+            scheduleRefresh {
+                if (available) add(network) else remove(network)
+            }
+        }
+        fun refreshDefaultNetwork(network: Network) {
+            scheduleRefresh {
+                if (connectivity.activeNetwork == network) add(network)
+            }
         }
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) = refresh(network, available = true)
@@ -220,12 +273,26 @@ private fun rememberLocalIpInfo(context: Context): LocalIpInfo {
                 refresh(network, available = true)
             }
         }
+        val defaultNetworkCallback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = refreshDefaultNetwork(network)
+            override fun onLost(network: Network) = scheduleRefresh()
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                refreshDefaultNetwork(network)
+            }
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                refreshDefaultNetwork(network)
+            }
+        }
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
         val registered = runCatching { connectivity.registerNetworkCallback(request, callback) }.isSuccess
+        val defaultRegistered = runCatching {
+            connectivity.registerDefaultNetworkCallback(defaultNetworkCallback)
+        }.isSuccess
         awaitDispose {
             if (registered) runCatching { connectivity.unregisterNetworkCallback(callback) }
+            if (defaultRegistered) runCatching { connectivity.unregisterNetworkCallback(defaultNetworkCallback) }
         }
     }
     return info
@@ -241,7 +308,7 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) handleProfileIntent(intent)
         enableEdgeToEdge()
         setContent {
-            TcpTunTheme(dynamicColor = true) {
+            TcpTunTheme {
                 TcptunScreen(
                     pendingProfileUri = pendingProfileUri,
                     onProfileUriConsumed = { sequence ->
@@ -279,6 +346,7 @@ internal fun TcptunScreen(
     var pendingConfig by remember { mutableStateOf<ProfileRunPlan?>(null) }
     var pendingNotificationConfig by remember { mutableStateOf<ProfileRunPlan?>(null) }
     var editingProfile by remember { mutableStateOf<AppConfig?>(null) }
+    var showIpInformation by remember { mutableStateOf(false) }
     var showDiagnostics by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showRouteManagement by remember { mutableStateOf(false) }
@@ -443,11 +511,11 @@ internal fun TcptunScreen(
 
     fun toggleProfile(profile: AppConfig) {
         if (isVpnTransitionStatus(vpnState.status)) return
-        val nextActiveIds = if (profile.id in state.activeIds) {
-            state.activeIds - profile.id
-        } else {
-            state.activeIds + profile.id
-        }
+        val nextActiveIds = nextActiveProfileIds(
+            activeIds = state.activeIds,
+            profileId = profile.id,
+            vpnStatus = vpnState.status,
+        )
         applyRunningState(state.copy(activeIds = nextActiveIds))
     }
 
@@ -485,6 +553,8 @@ internal fun TcptunScreen(
             onBack = { showQrScanner = false },
             onProfileScanned = ::importScannedProfile,
         )
+    } else if (showIpInformation) {
+        IpInformationPage(onBack = { showIpInformation = false })
     } else if (showDiagnostics) {
         DiagnosticsPage(
             onBack = { showDiagnostics = false },
@@ -500,6 +570,18 @@ internal fun TcptunScreen(
         )
     } else if (editing == null) {
         val listIpInfo = rememberLocalIpInfo(context)
+        val configuredListenAddress = TcptunVpnService.localSocksListenAddr(
+            TcptunVpnService.readRuntimeSettings(context),
+        )
+        val effectiveListenAddress = vpnState.diagnostics.bridgeListen
+            .takeIf { vpnState.status == "Running" }
+            .orEmpty()
+            .ifBlank { configuredListenAddress }
+        val mixedListenerNetwork = mixedListenerNetworkDisplay(
+            listenAddress = effectiveListenAddress,
+            underlyingIpv4 = listIpInfo.underlyingIpv4,
+            underlyingGatewayIpv4 = listIpInfo.underlyingGatewayIpv4,
+        )
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             topBar = {
@@ -557,21 +639,24 @@ internal fun TcptunScreen(
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp),
                 ) {
-                    if (listIpInfo.underlyingIpv4.isNotBlank() || listIpInfo.underlyingGatewayIpv4.isNotBlank()) {
-                        item(key = "underlying-ipv4-header") {
-                            ProfileListHeader(
-                                localIpv4 = listIpInfo.underlyingIpv4.substringBefore('/').substringBefore('\n'),
-                                gatewayIpv4 = listIpInfo.underlyingGatewayIpv4.substringBefore('\n'),
-                            )
+                    if (mixedListenerNetwork.ipv4.isNotBlank() || mixedListenerNetwork.gatewayIpv4.isNotBlank()) {
+                        item(key = "mixed-listener-network-header") {
+                            Column {
+                                ProfileListHeader(
+                                    listenerIpv4 = mixedListenerNetwork.ipv4,
+                                    gatewayIpv4 = mixedListenerNetwork.gatewayIpv4,
+                                    onIpClick = { showIpInformation = true },
+                                )
+                                Spacer(Modifier.height(12.dp))
+                            }
                         }
                     }
                     items(state.profiles, key = { it.id }) { profile ->
                         ProfileRow(
                             profile = profile,
                             running = profile.id in state.activeIds && isVpnActiveStatus(vpnState.status),
-                            status = vpnState.status.takeIf { profile.id in state.activeIds },
                             enabled = !isVpnTransitionStatus(vpnState.status),
                             onClick = { toggleProfile(profile) },
                             shareable = ProfileUriCodec.encode(profile) != null,
@@ -645,39 +730,79 @@ internal fun TcptunScreen(
 
 @Composable
 private fun ProfileListHeader(
-    localIpv4: String,
+    listenerIpv4: String,
     gatewayIpv4: String,
+    onIpClick: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(18.dp),
         color = colors.surfaceContainerHigh,
-        tonalElevation = 1.dp,
+        tonalElevation = 0.dp,
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(
+                    onClickLabel = stringResource(R.string.view_ip_information),
+                    onClick = onIpClick,
+                )
+                .padding(start = 16.dp, top = 14.dp, end = 8.dp, bottom = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = localIpv4,
+            Column(
                 modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyLarge,
-                color = colors.onSurface,
-                fontFamily = FontFamily.Monospace,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text(
+                    text = listenerIpv4.ifBlank { "—" },
+                    style = MaterialTheme.typography.titleMedium,
+                    color = colors.onSurface,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = stringResource(R.string.ip_mixed_listener),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .width(1.dp)
+                    .height(38.dp)
+                    .background(colors.outlineVariant.copy(alpha = 0.7f)),
             )
-            Text(
-                text = gatewayIpv4,
+            Column(
                 modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyLarge,
-                color = colors.onSurface,
-                fontFamily = FontFamily.Monospace,
-                textAlign = TextAlign.End,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Text(
+                    text = gatewayIpv4.ifBlank { "—" },
+                    style = MaterialTheme.typography.titleMedium,
+                    color = colors.onSurface,
+                    fontFamily = FontFamily.Monospace,
+                    textAlign = TextAlign.End,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = stringResource(R.string.ip_gateway_ipv4),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                    textAlign = TextAlign.End,
+                    maxLines = 1,
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                contentDescription = null,
+                tint = colors.onSurfaceVariant.copy(alpha = 0.72f),
             )
         }
     }
@@ -864,7 +989,6 @@ private fun MainActionsFab(
 private fun ProfileRow(
     profile: AppConfig,
     running: Boolean,
-    status: String?,
     enabled: Boolean,
     shareable: Boolean,
     onClick: () -> Unit,
@@ -873,8 +997,8 @@ private fun ProfileRow(
     onDeleteRequest: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
-    val rowColor = if (running) colors.secondaryContainer else colors.surfaceContainerLow
-    val statusColor = if (running) colors.primary else colors.onSurfaceVariant
+    val rowColor = if (running) colors.surfaceContainerLow else colors.surface
+    val statusColor = if (running) colors.tertiary else colors.onSurfaceVariant
     val dismissState = rememberSwipeToDismissBoxState()
 
     LaunchedEffect(dismissState.currentValue) {
@@ -897,7 +1021,7 @@ private fun ProfileRow(
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(colors.errorContainer, RoundedCornerShape(8.dp))
+                    .background(colors.errorContainer, RoundedCornerShape(16.dp))
                     .padding(horizontal = 24.dp),
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
@@ -911,69 +1035,123 @@ private fun ProfileRow(
         },
     ) {
         Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 108.dp),
-            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(0.dp),
             color = rowColor,
-            tonalElevation = if (running) 2.dp else 0.dp,
+            tonalElevation = 0.dp,
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(enabled = enabled, onClick = onClick),
-                verticalAlignment = Alignment.CenterVertically,
+            Column(
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                Box(
+                Row(
                     modifier = Modifier
-                        .width(5.dp)
-                        .height(72.dp)
-                        .background(if (running) statusColor else Color.Transparent, RoundedCornerShape(8.dp)),
+                        .fillMaxWidth()
+                        .heightIn(min = 96.dp)
+                        .clickable(enabled = enabled, onClick = onClick)
+                        .padding(start = 4.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Surface(
+                        modifier = Modifier.width(48.dp).height(48.dp),
+                        shape = CircleShape,
+                        color = if (running) colors.tertiaryContainer else colors.surfaceContainerHighest,
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            if (running) {
+                                Icon(
+                                    Icons.Rounded.Check,
+                                    contentDescription = null,
+                                    tint = colors.onTertiaryContainer,
+                                )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .width(12.dp)
+                                        .height(12.dp)
+                                        .background(colors.onSurfaceVariant, RoundedCornerShape(2.dp)),
+                                )
+                            }
+                        }
+                    }
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(vertical = 13.dp, horizontal = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(3.dp),
+                    ) {
+                        Text(
+                            profile.name,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = "${profile.label()} · " + stringResource(
+                                if (running) R.string.profile_connected else R.string.profile_stopped,
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = statusColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            profile.maskedAddress(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.onSurfaceVariant,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    IconButton(
+                        onClick = onShare,
+                        enabled = shareable,
+                    ) {
+                        Icon(
+                            Icons.Rounded.Share,
+                            contentDescription = stringResource(R.string.share),
+                            tint = if (shareable) colors.onSurfaceVariant else colors.onSurface.copy(alpha = 0.38f),
+                        )
+                    }
+                    IconButton(
+                        onClick = onShowQrCode,
+                        enabled = shareable,
+                    ) {
+                        Icon(
+                            Icons.Rounded.QrCode2,
+                            contentDescription = stringResource(R.string.show_qr_code),
+                            tint = if (shareable) colors.onSurfaceVariant else colors.onSurface.copy(alpha = 0.38f),
+                        )
+                    }
+                }
+                HorizontalDivider(
+                    modifier = Modifier.padding(start = 64.dp),
+                    color = colors.outlineVariant.copy(alpha = 0.7f),
                 )
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(vertical = 14.dp, horizontal = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Text(
-                        profile.name,
-                        style = MaterialTheme.typography.titleLarge,
-                        color = colors.onSurface,
-                    )
-                    Text(
-                        profile.maskedAddress(),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = colors.onSurfaceVariant,
-                    )
-                    Text(
-                        text = status?.let { "${profile.label()} · ${vpnStatusLabel(it)}" } ?: profile.label(),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = statusColor,
-                    )
-                }
-                IconButton(
-                    onClick = onShare,
-                    enabled = shareable,
-                ) {
-                    Icon(
-                        Icons.Rounded.Share,
-                        contentDescription = stringResource(R.string.share),
-                        tint = if (shareable) colors.onSurfaceVariant else colors.onSurface.copy(alpha = 0.38f),
-                    )
-                }
-                IconButton(
-                    onClick = onShowQrCode,
-                    enabled = shareable,
-                    modifier = Modifier.padding(end = 8.dp),
-                ) {
-                    Icon(
-                        Icons.Rounded.QrCode2,
-                        contentDescription = stringResource(R.string.show_qr_code),
-                        tint = if (shareable) colors.onSurfaceVariant else colors.onSurface.copy(alpha = 0.38f),
-                    )
-                }
             }
+        }
+    }
+}
+
+@Composable
+private fun ConnectionStatusMark(
+    color: Color,
+    containerColor: Color,
+) {
+    Surface(
+        modifier = Modifier.width(42.dp).height(42.dp),
+        shape = CircleShape,
+        color = containerColor,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                Icons.Rounded.Speed,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.padding(9.dp),
+            )
         }
     }
 }
@@ -1084,17 +1262,29 @@ private fun BottomStatus(
             .fillMaxWidth()
             .heightIn(min = 72.dp, max = 144.dp)
             .clickable(enabled = tcpingEnabled && !tcping.running, onClick = onClick),
-        containerColor = colors.surfaceContainer,
+        containerColor = colors.surfaceContainerLow,
         contentColor = contentColor,
     ) {
-        Text(
-            text,
-            style = MaterialTheme.typography.titleMedium,
-            color = contentColor,
-            maxLines = 4,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            ConnectionStatusMark(
+                color = contentColor,
+                containerColor = contentColor.copy(alpha = 0.14f),
+            )
+            Text(
+                text,
+                style = MaterialTheme.typography.titleMedium,
+                color = contentColor,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 
@@ -1196,9 +1386,104 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
 }
 
 @Composable
-private fun SettingsPage(onBack: () -> Unit) {
+private fun IpInformationPage(onBack: () -> Unit) {
     val context = LocalContext.current
     val ipInfo = rememberLocalIpInfo(context)
+    val vpnState by TcptunState.state.collectAsState()
+    val settings = TcptunVpnService.readRuntimeSettings(context)
+    val configuredListenAddress = TcptunVpnService.localSocksListenAddr(settings)
+    val actualListenAddress = vpnState.diagnostics.bridgeListen
+        .takeIf { vpnState.status == "Running" }
+        .orEmpty()
+    val effectiveListenAddress = actualListenAddress.ifBlank { configuredListenAddress }
+    val listenerNetwork = mixedListenerNetworkDisplay(
+        listenAddress = effectiveListenAddress,
+        underlyingIpv4 = ipInfo.underlyingIpv4,
+        underlyingGatewayIpv4 = ipInfo.underlyingGatewayIpv4,
+    )
+    val noneLabel = stringResource(R.string.none)
+
+    BackHandler(onBack = onBack)
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = { IpInformationTopBar(onBack = onBack) },
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            item {
+                IpInformationCard(
+                    title = stringResource(R.string.ip_mixed_listener),
+                    lines = listOf(
+                        stringResource(R.string.ip_configured_listen) to configuredListenAddress,
+                        stringResource(R.string.ip_actual_listen) to actualListenAddress.ifBlank { noneLabel },
+                        stringResource(R.string.ip_listener_ipv4) to listenerNetwork.ipv4.ifBlank { noneLabel },
+                        stringResource(R.string.ip_gateway_ipv4) to listenerNetwork.gatewayIpv4.ifBlank { noneLabel },
+                    ),
+                )
+            }
+            item {
+                IpInformationCard(
+                    title = stringResource(R.string.ip_underlying_network),
+                    lines = listOf(
+                        stringResource(R.string.ip_underlying_interface) to ipInfo.underlyingInterface.ifBlank { noneLabel },
+                        stringResource(R.string.ip_underlying_ipv4) to ipInfo.underlyingIpv4.ifBlank { noneLabel },
+                        stringResource(R.string.ip_gateway_ipv4) to ipInfo.underlyingGatewayIpv4.ifBlank { noneLabel },
+                        stringResource(R.string.ip_underlying_ipv6) to ipInfo.underlyingIpv6.ifBlank { noneLabel },
+                    ),
+                )
+            }
+            item {
+                IpInformationCard(
+                    title = stringResource(R.string.ip_vpn_network),
+                    lines = listOf(
+                        stringResource(R.string.ip_vpn_ipv4) to ipInfo.vpnIpv4.ifBlank { noneLabel },
+                        stringResource(R.string.ip_vpn_ipv6) to ipInfo.vpnIpv6.ifBlank { noneLabel },
+                    ),
+                )
+            }
+            item {
+                Text(
+                    stringResource(R.string.ip_information_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun IpInformationCard(title: String, lines: List<Pair<String, String>>) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        SelectionContainer {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                lines.forEach { (label, value) -> DiagnosticsLine(label, value) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsPage(onBack: () -> Unit) {
+    val context = LocalContext.current
     var settings by remember { mutableStateOf(TcptunVpnService.readRuntimeSettings(context)) }
     var socksPortText by remember { mutableStateOf(settings.socksPort.toString()) }
     var probeTimeoutText by remember { mutableStateOf(settings.probeTimeout) }
@@ -1439,50 +1724,6 @@ private fun SettingsPage(onBack: () -> Unit) {
                         DiagnosticsLine(stringResource(R.string.socks_auth), if (settings.socksUsername.isNotEmpty() || settings.socksPassword.isNotEmpty()) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.field_udp), if (diagnostics.udpEnabled) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.diag_power_saving), if (diagnostics.powerSavingMode) stringResource(R.string.enabled) else stringResource(R.string.disabled))
-                    }
-                }
-            }
-            item {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                ) {
-                    Column(
-                        modifier = Modifier.padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        val noneLabel = stringResource(R.string.none)
-                        Text(
-                            stringResource(R.string.ip_information),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        DiagnosticsLine(
-                            stringResource(R.string.ip_underlying_interface),
-                            ipInfo.underlyingInterface.ifBlank { noneLabel },
-                        )
-                        DiagnosticsLine(
-                            stringResource(R.string.ip_underlying_ipv4),
-                            ipInfo.underlyingIpv4.ifBlank { noneLabel },
-                        )
-                        DiagnosticsLine(
-                            stringResource(R.string.ip_underlying_ipv6),
-                            ipInfo.underlyingIpv6.ifBlank { noneLabel },
-                        )
-                        DiagnosticsLine(
-                            stringResource(R.string.ip_vpn_ipv4),
-                            ipInfo.vpnIpv4.ifBlank { noneLabel },
-                        )
-                        DiagnosticsLine(
-                            stringResource(R.string.ip_vpn_ipv6),
-                            ipInfo.vpnIpv6.ifBlank { noneLabel },
-                        )
-                        Text(
-                            stringResource(R.string.ip_information_note),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                     }
                 }
             }
@@ -1949,6 +2190,23 @@ private fun DiagnosticsTopBar(onBack: () -> Unit, onShowLogs: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+private fun IpInformationTopBar(onBack: () -> Unit) {
+    TopAppBar(
+        title = { Text(stringResource(R.string.ip_information), style = MaterialTheme.typography.titleLarge) },
+        navigationIcon = {
+            IconButton(onClick = onBack) {
+                Icon(
+                    Icons.AutoMirrored.Rounded.ArrowBack,
+                    contentDescription = stringResource(R.string.back),
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        },
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 private fun SettingsTopBar(onBack: () -> Unit) {
     TopAppBar(
         title = { Text(stringResource(R.string.settings), style = MaterialTheme.typography.titleLarge) },
@@ -2389,6 +2647,15 @@ private fun applyRuntimeSettings(context: Context) {
 
 private fun isVpnActiveStatus(status: String): Boolean {
     return status == "Starting" || status == "Running" || status == "Stopping"
+}
+
+internal fun nextActiveProfileIds(
+    activeIds: Set<String>,
+    profileId: String,
+    vpnStatus: String,
+): Set<String> {
+    val profileIsRunning = profileId in activeIds && isVpnActiveStatus(vpnStatus)
+    return if (profileIsRunning) activeIds - profileId else activeIds + profileId
 }
 
 internal fun canStartTcping(status: String, activeProfileCount: Int): Boolean =
