@@ -21,12 +21,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
@@ -66,15 +60,15 @@ import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Lan
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Router
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -85,7 +79,6 @@ import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -116,7 +109,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -124,7 +116,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -144,11 +135,11 @@ import kotlinx.coroutines.withContext
 
 private const val SnackbarAutoDismissMillis = 6_000L
 
-private val CardShape = RoundedCornerShape(20.dp)
-private val CardShapeCompact = RoundedCornerShape(16.dp)
-private val MenuShape = RoundedCornerShape(16.dp)
+private val CardShape = RoundedCornerShape(16.dp)
+private val CardShapeCompact = RoundedCornerShape(12.dp)
+private val MenuShape = RoundedCornerShape(12.dp)
 private val ListContentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-private val ListItemSpacing = 10.dp
+private val ListItemSpacing = 8.dp
 
 private data class LocalIpInfo(
     val underlyingInterface: String = "",
@@ -654,41 +645,37 @@ internal fun TcptunScreen(
                 )
             },
         ) { padding ->
-            Box(
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
+                contentPadding = ListContentPadding,
+                verticalArrangement = Arrangement.spacedBy(ListItemSpacing),
             ) {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = ListContentPadding,
-                    verticalArrangement = Arrangement.spacedBy(ListItemSpacing),
-                ) {
-                    if (mixedListenerNetwork.ipv4.isNotBlank() || mixedListenerNetwork.gatewayIpv4.isNotBlank()) {
-                        item(key = "mixed-listener-network-header") {
-                            ProfileListHeader(
-                                listenerIpv4 = mixedListenerNetwork.ipv4,
-                                gatewayIpv4 = mixedListenerNetwork.gatewayIpv4,
-                                onIpClick = { showIpInformation = true },
-                            )
-                        }
-                    }
-                    items(state.profiles, key = { it.id }) { profile ->
-                        ProfileRow(
-                            profile = profile,
-                            running = profile.id in state.activeIds && isVpnActiveStatus(vpnState.status),
-                            enabled = !isVpnTransitionStatus(vpnState.status),
-                            onClick = { toggleProfile(profile) },
-                            shareable = ProfileUriCodec.encode(profile) != null,
-                            onShare = { shareProfile(context, profile) },
-                            onShowQrCode = { profileQrCode = profile },
-                            onDeleteRequest = { deleteProfile(profile) },
+                if (mixedListenerNetwork.ipv4.isNotBlank() || mixedListenerNetwork.gatewayIpv4.isNotBlank()) {
+                    item(key = "mixed-listener-network-header") {
+                        ProfileListHeader(
+                            listenerIpv4 = mixedListenerNetwork.ipv4,
+                            gatewayIpv4 = mixedListenerNetwork.gatewayIpv4,
+                            onIpClick = { showIpInformation = true },
                         )
                     }
-                    if (state.profiles.isEmpty()) {
-                        item {
-                            EmptyState(onAdd = { editingProfile = AppConfig(id = UUID.randomUUID().toString(), name = "proxy") })
-                        }
+                }
+                items(state.profiles, key = { it.id }) { profile ->
+                    ProfileRow(
+                        profile = profile,
+                        running = profile.id in state.activeIds && isVpnActiveStatus(vpnState.status),
+                        enabled = !isVpnTransitionStatus(vpnState.status),
+                        onClick = { toggleProfile(profile) },
+                        shareable = ProfileUriCodec.encode(profile) != null,
+                        onShare = { shareProfile(context, profile) },
+                        onShowQrCode = { profileQrCode = profile },
+                        onDeleteRequest = { deleteProfile(profile) },
+                    )
+                }
+                if (state.profiles.isEmpty()) {
+                    item {
+                        EmptyState(onAdd = { editingProfile = AppConfig(id = UUID.randomUUID().toString(), name = "proxy") })
                     }
                 }
             }
@@ -758,8 +745,7 @@ private fun ProfileListHeader(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = CardShape,
-        color = colors.primaryContainer.copy(alpha = 0.55f),
-        border = BorderStroke(1.dp, colors.primary.copy(alpha = 0.18f)),
+        color = colors.surfaceContainerLow,
         tonalElevation = 0.dp,
     ) {
         Row(
@@ -769,33 +755,24 @@ private fun ProfileListHeader(
                     onClickLabel = stringResource(R.string.view_ip_information),
                     onClick = onIpClick,
                 )
-                .padding(start = 14.dp, top = 14.dp, end = 8.dp, bottom = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(start = 16.dp, top = 14.dp, end = 8.dp, bottom = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Surface(
-                modifier = Modifier.size(42.dp),
-                shape = CircleShape,
-                color = colors.primary.copy(alpha = 0.14f),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        Icons.Rounded.Lan,
-                        contentDescription = null,
-                        tint = colors.primary,
-                        modifier = Modifier.size(22.dp),
-                    )
-                }
-            }
+            Icon(
+                Icons.Rounded.Lan,
+                contentDescription = null,
+                tint = colors.onSurfaceVariant,
+                modifier = Modifier.size(22.dp),
+            )
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(3.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
                     text = listenerIpv4.ifBlank { "—" },
                     style = MaterialTheme.typography.titleMedium,
                     color = colors.onSurface,
-                    fontFamily = FontFamily.Monospace,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -806,22 +783,15 @@ private fun ProfileListHeader(
                     maxLines = 1,
                 )
             }
-            Box(
-                modifier = Modifier
-                    .width(1.dp)
-                    .height(36.dp)
-                    .background(colors.outlineVariant.copy(alpha = 0.55f)),
-            )
             Column(
                 modifier = Modifier.weight(1f),
                 horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(3.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
                     text = gatewayIpv4.ifBlank { "—" },
                     style = MaterialTheme.typography.titleMedium,
                     color = colors.onSurface,
-                    fontFamily = FontFamily.Monospace,
                     textAlign = TextAlign.End,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -837,7 +807,7 @@ private fun ProfileListHeader(
             Icon(
                 Icons.AutoMirrored.Rounded.KeyboardArrowRight,
                 contentDescription = null,
-                tint = colors.onSurfaceVariant.copy(alpha = 0.72f),
+                tint = colors.onSurfaceVariant,
             )
         }
     }
@@ -918,7 +888,6 @@ private fun TopBar(
             Text(
                 title,
                 style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
             )
         },
         colors = TopAppBarDefaults.topAppBarColors(
@@ -939,8 +908,6 @@ private fun TopBar(
                     onDismissRequest = { menuExpanded = false },
                     shape = MenuShape,
                     containerColor = colors.surfaceContainer,
-                    tonalElevation = 3.dp,
-                    shadowElevation = 6.dp,
                 ) {
                     DropdownMenuItem(
                         leadingIcon = {
@@ -990,8 +957,6 @@ private fun MainActionsFab(
             onDismissRequest = { menuExpanded = false },
             shape = MenuShape,
             containerColor = colors.surfaceContainer,
-            tonalElevation = 3.dp,
-            shadowElevation = 6.dp,
         ) {
             DropdownMenuItem(
                 leadingIcon = {
@@ -1022,15 +987,7 @@ private fun MainActionsFab(
                 ),
             )
         }
-        FloatingActionButton(
-            onClick = { menuExpanded = true },
-            containerColor = colors.primaryContainer,
-            contentColor = colors.onPrimaryContainer,
-            elevation = FloatingActionButtonDefaults.elevation(
-                defaultElevation = 4.dp,
-                pressedElevation = 8.dp,
-            ),
-        ) {
+        FloatingActionButton(onClick = { menuExpanded = true }) {
             Icon(
                 Icons.Rounded.Add,
                 contentDescription = stringResource(R.string.actions),
@@ -1052,16 +1009,8 @@ private fun ProfileRow(
 ) {
     val colors = MaterialTheme.colorScheme
     val rowColor by animateColorAsState(
-        targetValue = if (running) colors.tertiaryContainer.copy(alpha = 0.42f) else colors.surfaceContainerLow,
+        targetValue = if (running) colors.secondaryContainer else colors.surfaceContainerLow,
         label = "profileRowColor",
-    )
-    val statusColor by animateColorAsState(
-        targetValue = if (running) colors.tertiary else colors.onSurfaceVariant,
-        label = "profileStatusColor",
-    )
-    val borderColor by animateColorAsState(
-        targetValue = if (running) colors.tertiary.copy(alpha = 0.45f) else colors.outlineVariant.copy(alpha = 0.35f),
-        label = "profileBorderColor",
     )
     val dismissState = rememberSwipeToDismissBoxState()
 
@@ -1102,15 +1051,14 @@ private fun ProfileRow(
             modifier = Modifier.fillMaxWidth(),
             shape = CardShape,
             color = rowColor,
-            border = BorderStroke(1.dp, borderColor),
-            tonalElevation = if (running) 1.dp else 0.dp,
+            tonalElevation = 0.dp,
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 92.dp)
+                    .heightIn(min = 88.dp)
                     .clickable(enabled = enabled, onClick = onClick)
-                    .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp),
+                    .padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 ProfileStatusMark(running = running)
@@ -1118,58 +1066,26 @@ private fun ProfileRow(
                     modifier = Modifier
                         .weight(1f)
                         .padding(horizontal = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     Text(
                         profile.name,
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
                         color = colors.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        AssistChip(
-                            onClick = {},
-                            enabled = false,
-                            label = {
-                                Text(
-                                    profile.label(),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            },
-                            colors = AssistChipDefaults.assistChipColors(
-                                disabledContainerColor = if (running) {
-                                    colors.tertiary.copy(alpha = 0.16f)
-                                } else {
-                                    colors.surfaceContainerHighest
-                                },
-                                disabledLabelColor = if (running) colors.tertiary else colors.onSurfaceVariant,
-                            ),
-                            border = null,
-                            modifier = Modifier.height(28.dp),
-                        )
-                        Text(
-                            text = stringResource(
-                                if (running) R.string.profile_connected else R.string.profile_stopped,
-                            ),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = statusColor,
-                            fontWeight = if (running) FontWeight.Medium else FontWeight.Normal,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
+                    Text(
+                        text = profile.label(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                     Text(
                         profile.maskedAddress(),
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.onSurfaceVariant,
-                        fontFamily = FontFamily.Monospace,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -1202,45 +1118,20 @@ private fun ProfileRow(
 @Composable
 private fun ProfileStatusMark(running: Boolean) {
     val colors = MaterialTheme.colorScheme
-    val pulse = if (running) {
-        val transition = rememberInfiniteTransition(label = "connectedPulse")
-        transition.animateFloat(
-            initialValue = 0.55f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 1200),
-                repeatMode = RepeatMode.Reverse,
-            ),
-            label = "connectedPulseAlpha",
-        ).value
-    } else {
-        1f
-    }
     Surface(
-        modifier = Modifier.size(48.dp),
+        modifier = Modifier.size(40.dp),
         shape = CircleShape,
-        color = if (running) colors.tertiaryContainer else colors.surfaceContainerHighest,
-        border = if (running) {
-            BorderStroke(1.5.dp, colors.tertiary.copy(alpha = 0.35f + 0.35f * pulse))
-        } else {
-            null
-        },
+        color = if (running) colors.primary else colors.surfaceContainerHighest,
     ) {
         Box(contentAlignment = Alignment.Center) {
-            if (running) {
-                Icon(
-                    Icons.Rounded.Check,
-                    contentDescription = null,
-                    tint = colors.onTertiaryContainer,
-                    modifier = Modifier.alpha(0.75f + 0.25f * pulse),
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .background(colors.onSurfaceVariant.copy(alpha = 0.55f), CircleShape),
-                )
-            }
+            Icon(
+                imageVector = if (running) Icons.Rounded.Stop else Icons.Rounded.PlayArrow,
+                contentDescription = stringResource(
+                    if (running) R.string.profile_connected else R.string.profile_stopped,
+                ),
+                tint = if (running) colors.onPrimary else colors.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
         }
     }
 }
@@ -1252,17 +1143,16 @@ private fun ConnectionStatusMark(
     icon: ImageVector = Icons.Rounded.Speed,
 ) {
     Surface(
-        modifier = Modifier.size(44.dp),
+        modifier = Modifier.size(40.dp),
         shape = CircleShape,
         color = containerColor,
-        border = BorderStroke(1.dp, color.copy(alpha = 0.22f)),
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(
                 icon,
                 contentDescription = null,
                 tint = color,
-                modifier = Modifier.size(22.dp),
+                modifier = Modifier.size(20.dp),
             )
         }
     }
@@ -1290,7 +1180,6 @@ private fun ProfileQrCodeDialog(
                 Surface(
                     shape = CardShapeCompact,
                     color = Color.White,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
                 ) {
                     Image(
                         bitmap = bitmap.asImageBitmap(),
@@ -1298,7 +1187,7 @@ private fun ProfileQrCodeDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .aspectRatio(1f)
-                            .padding(16.dp),
+                            .padding(12.dp),
                     )
                 }
                 Text(
@@ -1319,57 +1208,34 @@ private fun ProfileQrCodeDialog(
 @Composable
 private fun EmptyState(onAdd: () -> Unit) {
     val colors = MaterialTheme.colorScheme
-    Surface(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 28.dp),
-        shape = CardShape,
-        color = colors.surfaceContainerLow,
-        border = BorderStroke(1.dp, colors.outlineVariant.copy(alpha = 0.4f)),
+            .padding(horizontal = 24.dp, vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 28.dp, vertical = 36.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Surface(
-                modifier = Modifier.size(72.dp),
-                shape = CircleShape,
-                color = colors.primaryContainer.copy(alpha = 0.7f),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        Icons.Rounded.Hub,
-                        contentDescription = null,
-                        tint = colors.primary,
-                        modifier = Modifier.size(36.dp),
-                    )
-                }
-            }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                stringResource(R.string.empty_profiles),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = colors.onSurface,
-                textAlign = TextAlign.Center,
-            )
-            Text(
-                stringResource(R.string.empty_profiles_hint),
-                style = MaterialTheme.typography.bodyMedium,
-                color = colors.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.height(4.dp))
-            FilledTonalButton(onClick = onAdd) {
-                Icon(
-                    Icons.Rounded.Add,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(stringResource(R.string.add_profile))
-            }
+        Icon(
+            Icons.Rounded.Hub,
+            contentDescription = null,
+            tint = colors.onSurfaceVariant,
+            modifier = Modifier.size(40.dp),
+        )
+        Text(
+            stringResource(R.string.empty_profiles),
+            style = MaterialTheme.typography.titleMedium,
+            color = colors.onSurface,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            stringResource(R.string.empty_profiles_hint),
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(4.dp))
+        FilledTonalButton(onClick = onAdd) {
+            Text(stringResource(R.string.add_profile))
         }
     }
 }
@@ -1402,12 +1268,6 @@ private fun BottomStatus(
         status == "Starting" || status == "Stopping" -> colors.tertiary
         else -> colors.onSurfaceVariant
     }
-    val barColor = when {
-        error.isNotBlank() -> colors.errorContainer.copy(alpha = 0.45f)
-        status == "Running" -> colors.primaryContainer.copy(alpha = 0.5f)
-        status == "Starting" || status == "Stopping" -> colors.tertiaryContainer.copy(alpha = 0.45f)
-        else -> colors.surfaceContainer
-    }
     val statusIcon = when {
         error.isNotBlank() -> Icons.Rounded.Speed
         status == "Running" -> Icons.Rounded.Check
@@ -1416,28 +1276,26 @@ private fun BottomStatus(
     BottomAppBar(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 76.dp, max = 152.dp)
+            .heightIn(min = 72.dp, max = 144.dp)
             .clickable(enabled = tcpingEnabled && !tcping.running, onClick = onClick),
-        containerColor = barColor,
+        containerColor = colors.surfaceContainer,
         contentColor = contentColor,
-        tonalElevation = 2.dp,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             ConnectionStatusMark(
                 color = contentColor,
-                containerColor = contentColor.copy(alpha = 0.14f),
+                containerColor = contentColor.copy(alpha = 0.12f),
                 icon = statusIcon,
             )
             Text(
                 text,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Medium,
+                style = MaterialTheme.typography.bodyLarge,
                 color = contentColor,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
@@ -1544,12 +1402,10 @@ private fun SettingsCard(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
-    val colors = MaterialTheme.colorScheme
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = CardShape,
-        color = colors.surfaceContainerLow,
-        border = BorderStroke(1.dp, colors.outlineVariant.copy(alpha = 0.35f)),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
         content = content,
     )
 }
@@ -1560,26 +1416,19 @@ private fun SectionTitle(
     title: String,
 ) {
     val colors = MaterialTheme.colorScheme
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Surface(
-            modifier = Modifier.size(36.dp),
-            shape = CircleShape,
-            color = colors.primaryContainer.copy(alpha = 0.75f),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    icon,
-                    contentDescription = null,
-                    tint = colors.primary,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-        }
-        Spacer(Modifier.width(12.dp))
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = colors.onSurfaceVariant,
+            modifier = Modifier.size(22.dp),
+        )
         Text(
             title,
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
             color = colors.onSurface,
         )
     }
@@ -1977,11 +1826,7 @@ private fun RouteManagementPage(onBack: () -> Unit) {
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = { editingRule = ManagedRouteRule() },
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            ) {
+            FloatingActionButton(onClick = { editingRule = ManagedRouteRule() }) {
                 Icon(Icons.Rounded.Add, contentDescription = stringResource(R.string.add_route_rule))
             }
         },
@@ -2141,10 +1986,6 @@ private fun ManagedRouteRuleRow(
                 .heightIn(min = 88.dp),
             shape = CardShape,
             color = if (rule.enabled) colors.surfaceContainerLow else colors.surfaceContainer,
-            border = BorderStroke(
-                1.dp,
-                if (rule.enabled) colors.primary.copy(alpha = 0.2f) else colors.outlineVariant.copy(alpha = 0.35f),
-            ),
         ) {
             Row(
                 modifier = Modifier
@@ -2189,38 +2030,26 @@ private fun ManagedRouteRuleRow(
 @Composable
 private fun RouteRulesEmptyState(onAdd: () -> Unit) {
     val colors = MaterialTheme.colorScheme
-    SettingsCard(
-        modifier = Modifier.padding(top = 24.dp),
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 40.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Surface(
-                modifier = Modifier.size(64.dp),
-                shape = CircleShape,
-                color = colors.primaryContainer.copy(alpha = 0.7f),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        Icons.AutoMirrored.Rounded.AltRoute,
-                        contentDescription = null,
-                        tint = colors.primary,
-                        modifier = Modifier.size(32.dp),
-                    )
-                }
-            }
-            Text(
-                stringResource(R.string.empty_route_rules),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-            FilledTonalButton(onClick = onAdd) {
-                Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(stringResource(R.string.add_route_rule))
-            }
+        Icon(
+            Icons.AutoMirrored.Rounded.AltRoute,
+            contentDescription = null,
+            tint = colors.onSurfaceVariant,
+            modifier = Modifier.size(36.dp),
+        )
+        Text(
+            stringResource(R.string.empty_route_rules),
+            style = MaterialTheme.typography.titleMedium,
+            color = colors.onSurface,
+        )
+        FilledTonalButton(onClick = onAdd) {
+            Text(stringResource(R.string.add_route_rule))
         }
     }
 }
@@ -2406,7 +2235,6 @@ private fun AppTopBar(
             Text(
                 title,
                 style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
             )
         },
         navigationIcon = {
@@ -2415,7 +2243,6 @@ private fun AppTopBar(
                     Icon(
                         Icons.AutoMirrored.Rounded.ArrowBack,
                         contentDescription = stringResource(R.string.back),
-                        tint = colors.onSurface,
                     )
                 }
             }
@@ -2434,10 +2261,7 @@ private fun AppTopBar(
 private fun DiagnosticsLine(label: String, value: String) {
     val colors = MaterialTheme.colorScheme
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(colors.surfaceContainerHighest.copy(alpha = 0.35f), CardShapeCompact)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+        modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Top,
     ) {
@@ -2450,7 +2274,6 @@ private fun DiagnosticsLine(label: String, value: String) {
         Text(
             value,
             style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
             color = colors.onSurface,
             modifier = Modifier.weight(0.54f),
             textAlign = TextAlign.End,
@@ -2500,24 +2323,15 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 if (formError.isNotBlank()) {
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = CardShapeCompact,
-                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.65f),
-                    ) {
-                        Text(
-                            formError,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                        )
-                    }
+                    Text(
+                        formError,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
-                SettingsCard {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
                         OutlinedTextField(
                             value = config.name,
                             onValueChange = { config = config.copy(name = it) },
@@ -2650,7 +2464,6 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                             ToggleRow(stringResource(R.string.field_mux), config.mux) { config = config.copy(mux = it) }
                             ToggleRow(stringResource(R.string.field_udp), config.udp) { config = config.copy(udp = it) }
                         }
-                    }
                 }
             }
         }
@@ -2696,8 +2509,6 @@ private fun ChoiceRow(title: String, value: String, options: List<String>, onCha
             onDismissRequest = { expanded = false },
             shape = MenuShape,
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
-            tonalElevation = 3.dp,
-            shadowElevation = 6.dp,
         ) {
             options.forEach { option ->
                 DropdownMenuItem(
@@ -2717,32 +2528,21 @@ private fun ChoiceRow(title: String, value: String, options: List<String>, onCha
 
 @Composable
 private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    val colors = MaterialTheme.colorScheme
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = CardShapeCompact,
-        color = if (checked) colors.secondaryContainer.copy(alpha = 0.55f) else colors.surfaceContainerHighest.copy(alpha = 0.65f),
-        border = BorderStroke(
-            1.dp,
-            if (checked) colors.secondary.copy(alpha = 0.22f) else colors.outlineVariant.copy(alpha = 0.3f),
-        ),
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onChange(!checked) }
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onChange(!checked) }
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                label,
-                style = MaterialTheme.typography.bodyLarge,
-                color = colors.onSurface,
-                modifier = Modifier.weight(1f).padding(end = 12.dp),
-            )
-            Switch(checked = checked, onCheckedChange = onChange)
-        }
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f).padding(end = 12.dp),
+        )
+        Switch(checked = checked, onCheckedChange = onChange)
     }
 }
 
@@ -2761,7 +2561,6 @@ private fun LogsDialog(onDismiss: () -> Unit) {
                     .heightIn(max = 520.dp),
                 shape = CardShapeCompact,
                 color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
             ) {
                 Box(
                     modifier = Modifier

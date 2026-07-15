@@ -59,7 +59,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -133,7 +132,6 @@ internal fun QrScannerPage(
                     Text(
                         stringResource(R.string.scan_profile_qr_code),
                         style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.SemiBold,
                     )
                 },
                 navigationIcon = {
