@@ -16,6 +16,7 @@ data class TcptunDiagnostics(
     val bridgeListen: String = "",
     val bridgeRemote: String = "",
     val bridgeActiveConnections: Int = 0,
+    val bridgeClientIps: List<String> = emptyList(),
     val bridgeMuxSources: Int = 0,
     val bridgeMuxSessions: Int = 0,
     val bridgeMuxStreams: Int = 0,
@@ -93,6 +94,7 @@ internal data class BridgeStatusEvent(
     val listen: String,
     val remote: String,
     val activeConnections: Int,
+    val clientIps: List<String>,
     val muxSources: Int,
     val muxSessions: Int,
     val muxStreams: Int,
@@ -154,6 +156,7 @@ object TcptunState {
                 bridgeRecoverable = false,
                 bridgeLastError = "",
                 bridgeActiveConnections = 0,
+                bridgeClientIps = emptyList(),
                 bridgeMuxSources = 0,
                 bridgeMuxSessions = 0,
                 bridgeMuxStreams = 0,
@@ -170,7 +173,14 @@ object TcptunState {
         _state.value = current.copy(
             status = value,
             lastError = if (value == "Error") current.lastError else "",
-            diagnostics = current.diagnostics.copy(vpnStatus = value),
+            diagnostics = current.diagnostics.copy(
+                vpnStatus = value,
+                bridgeClientIps = if (value == "Stopped" || value == "Error") {
+                    emptyList()
+                } else {
+                    current.diagnostics.bridgeClientIps
+                },
+            ),
             tcping = if (value == "Stopped" || value == "Error") TcpingProgress() else current.tcping,
             profileHealth = if (value == "Stopped" || value == "Error") emptyMap() else current.profileHealth,
         )
@@ -182,7 +192,7 @@ object TcptunState {
         _state.value = current.copy(
             status = "Error",
             lastError = message,
-            diagnostics = current.diagnostics.copy(vpnStatus = "Error"),
+            diagnostics = current.diagnostics.copy(vpnStatus = "Error", bridgeClientIps = emptyList()),
             tcping = TcpingProgress(),
             profileHealth = emptyMap(),
         )
@@ -209,6 +219,13 @@ object TcptunState {
                 listen = json.optString("listen"),
                 remote = json.optString("remote"),
                 activeConnections = json.optInt("active_connections", 0),
+                clientIps = normalizeClientIps(
+                    buildList {
+                        json.optJSONArray("client_ips")?.let { values ->
+                            for (index in 0 until values.length()) add(values.optString(index))
+                        }
+                    },
+                ),
                 muxSources = json.optInt("mux_sources", 0),
                 muxSessions = json.optInt("mux_sessions", 0),
                 muxStreams = json.optInt("mux_streams", 0),
@@ -242,6 +259,7 @@ object TcptunState {
                 bridgeListen = event.listen,
                 bridgeRemote = event.remote,
                 bridgeActiveConnections = event.activeConnections,
+                bridgeClientIps = event.clientIps,
                 bridgeMuxSources = event.muxSources,
                 bridgeMuxSessions = event.muxSessions,
                 bridgeMuxStreams = event.muxStreams,

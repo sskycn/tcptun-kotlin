@@ -167,4 +167,31 @@ class ProfileDeepLinkTest {
         assertEquals(profileConnectionIdentity(first), profileConnectionIdentity(renamed))
         assertFalse(profileConnectionIdentity(first) == profileConnectionIdentity(differentPool))
     }
+
+    @Test
+    fun fullJsonConnectionIdentityIsCanonicalAndNonNull() {
+        val first = AppConfig(
+            id = "one",
+            name = "first",
+            rawConfigJson = """
+                {
+                  "outbounds": [{"tag": "native", "type": "native", "token": "secret"}],
+                  "route": {"default_outbound": "native", "rules": []}
+                }
+            """.trimIndent(),
+        )
+        val reformattedAndRenamed = first.copy(
+            id = "two",
+            name = "renamed",
+            rawConfigJson = """{"route":{"rules":[],"default_outbound":"native"},"outbounds":[{"token":"secret","type":"native","tag":"native"}]}""",
+        )
+        val different = first.copy(
+            id = "three",
+            rawConfigJson = first.rawConfigJson.replace("secret", "other-secret"),
+        )
+
+        assertNotNull(profileConnectionIdentity(first))
+        assertEquals(profileConnectionIdentity(first), profileConnectionIdentity(reformattedAndRenamed))
+        assertFalse(profileConnectionIdentity(first) == profileConnectionIdentity(different))
+    }
 }

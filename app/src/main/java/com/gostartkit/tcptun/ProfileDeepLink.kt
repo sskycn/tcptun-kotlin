@@ -7,6 +7,8 @@ import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.nio.charset.CodingErrorAction
 import java.util.Locale
+import org.json.JSONArray
+import org.json.JSONObject
 
 internal const val MaxProfileUriLength = 64 * 1024
 
@@ -93,7 +95,29 @@ internal fun profileUriFromIntent(intent: Intent?): String? {
 }
 
 internal fun profileConnectionIdentity(config: AppConfig): String? {
-    return runCatching { ProfileUriCodec.encode(config.copy(id = "", name = "")) }.getOrNull()
+    if (config.rawConfigJson.isNotBlank()) {
+        return runCatching {
+            "json:" + canonicalJsonValue(JSONObject(config.rawConfigJson))
+        }.getOrNull()
+    }
+    return ProfileUriCodec.encode(config.copy(id = "", name = ""))?.let { "uri:$it" }
+}
+
+private fun canonicalJsonValue(value: Any?): String {
+    return when (value) {
+        null, JSONObject.NULL -> "null"
+        is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(
+            prefix = "{",
+            postfix = "}",
+        ) { key -> "${JSONObject.quote(key)}:${canonicalJsonValue(value.get(key))}" }
+        is JSONArray -> (0 until value.length()).joinToString(
+            prefix = "[",
+            postfix = "]",
+        ) { index -> canonicalJsonValue(value.get(index)) }
+        is String -> JSONObject.quote(value)
+        is Number, is Boolean -> value.toString()
+        else -> JSONObject.quote(value.toString())
+    }
 }
 
 /**

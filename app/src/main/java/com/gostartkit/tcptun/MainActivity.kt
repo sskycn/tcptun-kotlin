@@ -11,9 +11,11 @@ import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.TetheringManager
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import androidx.annotation.RequiresApi
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -152,6 +154,8 @@ private data class LocalIpInfo(
     val underlyingIpv6: String = "",
     val vpnIpv4: String = "",
     val vpnIpv6: String = "",
+    val hotspotInterface: String = "",
+    val hotspotIpv4: String = "",
 )
 
 private data class NetworkLinkInfo(
@@ -165,7 +169,24 @@ internal data class MixedListenerNetworkDisplay(
     val gatewayIpv4: String,
 )
 
-private fun readLocalIpInfo(connectivity: ConnectivityManager, networks: Collection<Network>): LocalIpInfo {
+internal enum class ProxyAccessScope {
+    NotRunning,
+    LocalOnly,
+    Hotspot,
+    LocalNetwork,
+    Unavailable,
+}
+
+internal data class ProxyAccessDisplay(
+    val address: String,
+    val scope: ProxyAccessScope,
+)
+
+private fun readLocalIpInfo(
+    connectivity: ConnectivityManager,
+    networks: Collection<Network>,
+    tetheredInterfaceNames: Set<String>?,
+): LocalIpInfo {
     val links = networks.mapNotNull { network ->
         val capabilities = connectivity.getNetworkCapabilities(network) ?: return@mapNotNull null
         val linkProperties = connectivity.getLinkProperties(network) ?: return@mapNotNull null
@@ -188,6 +209,14 @@ private fun readLocalIpInfo(connectivity: ConnectivityManager, networks: Collect
     val vpn = links.firstOrNull {
         it.network == activeNetwork && it.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
     } ?: links.firstOrNull { it.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) }
+    val hotspot = selectHotspotIpv4Address(
+        addresses = readInterfaceIpv4Addresses(),
+        tetheredInterfaceNames = tetheredInterfaceNames,
+        excludedInterfaceNames = setOfNotNull(
+            underlying?.linkProperties?.interfaceName,
+            vpn?.linkProperties?.interfaceName,
+        ),
+    )
     return LocalIpInfo(
         underlyingInterface = underlying?.linkProperties?.interfaceName.orEmpty(),
         underlyingIpv4 = formatIpAddresses(underlying?.linkProperties, ipv6 = false),
@@ -195,6 +224,8 @@ private fun readLocalIpInfo(connectivity: ConnectivityManager, networks: Collect
         underlyingIpv6 = formatIpAddresses(underlying?.linkProperties, ipv6 = true),
         vpnIpv4 = formatIpAddresses(vpn?.linkProperties, ipv6 = false),
         vpnIpv6 = formatIpAddresses(vpn?.linkProperties, ipv6 = true),
+        hotspotInterface = hotspot?.interfaceName.orEmpty(),
+        hotspotIpv4 = hotspot?.address.orEmpty(),
     )
 }
 
@@ -223,16 +254,64 @@ internal fun mixedListenerNetworkDisplay(
     listenAddress: String,
     underlyingIpv4: String,
     underlyingGatewayIpv4: String,
+    hotspotIpv4: String = "",
 ): MixedListenerNetworkDisplay {
     val listenHost = hostFromListenAddress(listenAddress)
     val networkIpv4 = underlyingIpv4.substringBefore('\n').substringBefore('/').trim()
     val networkGateway = underlyingGatewayIpv4.substringBefore('\n').trim()
     return when (listenHost) {
-        "", "0.0.0.0", "::", "*" -> MixedListenerNetworkDisplay(networkIpv4, networkGateway)
+        "", "0.0.0.0", "::", "*" -> if (hotspotIpv4.isNotBlank()) {
+            MixedListenerNetworkDisplay(hotspotIpv4, "")
+        } else {
+            MixedListenerNetworkDisplay(networkIpv4, networkGateway)
+        }
         "127.0.0.1", "::1", "localhost" -> MixedListenerNetworkDisplay(listenHost, "")
         else -> MixedListenerNetworkDisplay(
             ipv4 = listenHost,
             gatewayIpv4 = networkGateway.takeIf { listenHost == networkIpv4 }.orEmpty(),
+        )
+    }
+}
+
+internal fun proxyAccessDisplay(
+    listenAddress: String,
+    hotspotIpv4: String,
+    underlyingIpv4: String,
+    proxyRunning: Boolean,
+): ProxyAccessDisplay {
+    val listenHost = hostFromListenAddress(listenAddress)
+    val port = portFromListenAddress(listenAddress)
+    val networkIpv4 = underlyingIpv4.substringBefore('\n').substringBefore('/').trim()
+    if (!proxyRunning) {
+        val configuredHost = when (listenHost) {
+            "", "0.0.0.0", "::", "*" -> hotspotIpv4.ifBlank { networkIpv4 }
+            else -> listenHost
+        }
+        return ProxyAccessDisplay(formatHostPort(configuredHost, port), ProxyAccessScope.NotRunning)
+    }
+    return when (listenHost) {
+        "127.0.0.1", "::1", "localhost" -> ProxyAccessDisplay(
+            address = formatHostPort(listenHost, port),
+            scope = ProxyAccessScope.LocalOnly,
+        )
+        "", "0.0.0.0", "::", "*" -> when {
+            hotspotIpv4.isNotBlank() -> ProxyAccessDisplay(
+                formatHostPort(hotspotIpv4, port),
+                ProxyAccessScope.Hotspot,
+            )
+            networkIpv4.isNotBlank() -> ProxyAccessDisplay(
+                formatHostPort(networkIpv4, port),
+                ProxyAccessScope.LocalNetwork,
+            )
+            else -> ProxyAccessDisplay("", ProxyAccessScope.Unavailable)
+        }
+        else -> ProxyAccessDisplay(
+            address = formatHostPort(listenHost, port),
+            scope = if (listenHost == hotspotIpv4 && hotspotIpv4.isNotBlank()) {
+                ProxyAccessScope.Hotspot
+            } else {
+                ProxyAccessScope.LocalNetwork
+            },
         )
     }
 }
@@ -247,26 +326,61 @@ private fun hostFromListenAddress(address: String): String {
     }
 }
 
+private fun portFromListenAddress(address: String): String {
+    val value = address.trim().substringBefore(',').trim()
+    if (value.startsWith('[')) return value.substringAfter(']').removePrefix(":").trim()
+    return if (value.count { it == ':' } == 1) value.substringAfterLast(':').trim() else ""
+}
+
+private fun formatHostPort(host: String, port: String): String {
+    if (host.isBlank() || port.isBlank()) return host
+    return if (host.contains(':') && !host.startsWith('[')) "[$host]:$port" else "$host:$port"
+}
+
+@RequiresApi(36)
+private fun registerTetheringInterfaceCallback(
+    context: Context,
+    onChanged: (Set<String>) -> Unit,
+): () -> Unit {
+    val manager = requireNotNull(context.getSystemService(TetheringManager::class.java))
+    val callback = object : TetheringManager.TetheringEventCallback {
+        override fun onTetheredInterfacesChanged(interfaces: Set<android.net.TetheringInterface>) {
+            val wifiInterfaces = interfaces
+                .filter { it.type == TetheringManager.TETHERING_WIFI }
+                .mapTo(linkedSetOf()) { it.`interface` }
+            onChanged(wifiInterfaces)
+        }
+    }
+    manager.registerTetheringEventCallback(context.mainExecutor, callback)
+    return { manager.unregisterTetheringEventCallback(callback) }
+}
+
 @Composable
 private fun rememberLocalIpInfo(context: Context): LocalIpInfo {
     val connectivity = remember(context) {
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     }
     val initialNetworks = listOfNotNull(connectivity.activeNetwork)
+    val initialTetheredInterfaces: Set<String>? = if (Build.VERSION.SDK_INT >= 36) emptySet() else null
     val info by produceState(
-        initialValue = readLocalIpInfo(connectivity, initialNetworks),
+        initialValue = readLocalIpInfo(connectivity, initialNetworks, initialTetheredInterfaces),
         connectivity,
     ) {
         val observedNetworks = initialNetworks.toMutableSet()
         val observedNetworksLock = Any()
+        var tetheredInterfaceNames: Set<String>? = initialTetheredInterfaces
         var refreshSequence = 0L
-        fun scheduleRefresh(updateNetworks: MutableSet<Network>.() -> Unit = {}) {
-            val (sequence, snapshot) = synchronized(observedNetworksLock) {
+        fun scheduleRefresh(
+            nextTetheredInterfaceNames: Set<String>? = tetheredInterfaceNames,
+            updateNetworks: MutableSet<Network>.() -> Unit = {},
+        ) {
+            val (sequence, snapshot, tetheredSnapshot) = synchronized(observedNetworksLock) {
                 observedNetworks.updateNetworks()
-                ++refreshSequence to observedNetworks.toList()
+                tetheredInterfaceNames = nextTetheredInterfaceNames
+                Triple(++refreshSequence, observedNetworks.toList(), tetheredInterfaceNames)
             }
             launch {
-                val next = readLocalIpInfo(connectivity, snapshot)
+                val next = readLocalIpInfo(connectivity, snapshot, tetheredSnapshot)
                 val isCurrent = synchronized(observedNetworksLock) { sequence == refreshSequence }
                 if (isCurrent) value = next
             }
@@ -308,9 +422,25 @@ private fun rememberLocalIpInfo(context: Context): LocalIpInfo {
         val defaultRegistered = runCatching {
             connectivity.registerDefaultNetworkCallback(defaultNetworkCallback)
         }.isSuccess
+        val unregisterTetheringCallback = if (Build.VERSION.SDK_INT >= 36) {
+            runCatching {
+                registerTetheringInterfaceCallback(context) { wifiInterfaces ->
+                    scheduleRefresh(nextTetheredInterfaceNames = wifiInterfaces)
+                }
+            }.getOrNull()
+        } else {
+            null
+        }
+        launch {
+            while (true) {
+                delay(2_000)
+                scheduleRefresh()
+            }
+        }
         awaitDispose {
             if (registered) runCatching { connectivity.unregisterNetworkCallback(callback) }
             if (defaultRegistered) runCatching { connectivity.unregisterNetworkCallback(defaultNetworkCallback) }
+            unregisterTetheringCallback?.let { unregister -> runCatching(unregister) }
         }
     }
     return info
@@ -595,10 +725,11 @@ internal fun TcptunScreen(
             .takeIf { vpnState.status == "Running" }
             .orEmpty()
             .ifBlank { configuredListenAddress }
-        val mixedListenerNetwork = mixedListenerNetworkDisplay(
+        val proxyAccess = proxyAccessDisplay(
             listenAddress = effectiveListenAddress,
+            hotspotIpv4 = listIpInfo.hotspotIpv4,
             underlyingIpv4 = listIpInfo.underlyingIpv4,
-            underlyingGatewayIpv4 = listIpInfo.underlyingGatewayIpv4,
+            proxyRunning = vpnState.status == "Running",
         )
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
@@ -656,14 +787,11 @@ internal fun TcptunScreen(
                 contentPadding = ListContentPadding,
                 verticalArrangement = Arrangement.spacedBy(ListItemSpacing),
             ) {
-                if (mixedListenerNetwork.ipv4.isNotBlank() || mixedListenerNetwork.gatewayIpv4.isNotBlank()) {
-                    item(key = "mixed-listener-network-header") {
-                        ProfileListHeader(
-                            listenerIpv4 = mixedListenerNetwork.ipv4,
-                            gatewayIpv4 = mixedListenerNetwork.gatewayIpv4,
-                            onIpClick = { showIpInformation = true },
-                        )
-                    }
+                item(key = "mixed-listener-network-header") {
+                    ProfileListHeader(
+                        proxyAccess = proxyAccess,
+                        onIpClick = { showIpInformation = true },
+                    )
                 }
                 items(state.profiles, key = { it.id }) { profile ->
                     ProfileRow(
@@ -742,11 +870,28 @@ internal fun TcptunScreen(
 
 @Composable
 private fun ProfileListHeader(
-    listenerIpv4: String,
-    gatewayIpv4: String,
+    proxyAccess: ProxyAccessDisplay,
     onIpClick: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
+    val addressLabel = when (proxyAccess.scope) {
+        ProxyAccessScope.NotRunning -> stringResource(R.string.proxy_access_address)
+        ProxyAccessScope.LocalOnly -> stringResource(R.string.proxy_local_only_address)
+        ProxyAccessScope.Hotspot -> stringResource(R.string.proxy_hotspot_address)
+        ProxyAccessScope.LocalNetwork -> stringResource(R.string.proxy_lan_address)
+        ProxyAccessScope.Unavailable -> stringResource(R.string.proxy_access_address)
+    }
+    val accessStatus = when (proxyAccess.scope) {
+        ProxyAccessScope.NotRunning -> stringResource(R.string.proxy_not_running)
+        ProxyAccessScope.LocalOnly -> stringResource(R.string.proxy_hotspot_unavailable)
+        ProxyAccessScope.Hotspot -> stringResource(R.string.proxy_hotspot_available)
+        ProxyAccessScope.LocalNetwork -> stringResource(R.string.proxy_lan_available)
+        ProxyAccessScope.Unavailable -> stringResource(R.string.proxy_no_reachable_address)
+    }
+    val statusColor = when (proxyAccess.scope) {
+        ProxyAccessScope.Hotspot, ProxyAccessScope.LocalNetwork -> colors.primary
+        ProxyAccessScope.NotRunning, ProxyAccessScope.LocalOnly, ProxyAccessScope.Unavailable -> colors.error
+    }
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = CardShape,
@@ -775,14 +920,14 @@ private fun ProfileListHeader(
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
-                    text = listenerIpv4.ifBlank { "—" },
+                    text = proxyAccess.address.ifBlank { "—" },
                     style = MaterialTheme.typography.titleMedium,
                     color = colors.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = stringResource(R.string.ip_mixed_listener),
+                    text = addressLabel,
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.onSurfaceVariant,
                     maxLines = 1,
@@ -794,15 +939,15 @@ private fun ProfileListHeader(
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
-                    text = gatewayIpv4.ifBlank { "—" },
+                    text = accessStatus,
                     style = MaterialTheme.typography.titleMedium,
-                    color = colors.onSurface,
+                    color = statusColor,
                     textAlign = TextAlign.End,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = stringResource(R.string.ip_gateway_ipv4),
+                    text = stringResource(R.string.proxy_access_status),
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.onSurfaceVariant,
                     textAlign = TextAlign.End,
@@ -1511,8 +1656,22 @@ private fun IpInformationPage(onBack: () -> Unit) {
         listenAddress = effectiveListenAddress,
         underlyingIpv4 = ipInfo.underlyingIpv4,
         underlyingGatewayIpv4 = ipInfo.underlyingGatewayIpv4,
+        hotspotIpv4 = ipInfo.hotspotIpv4,
+    )
+    val proxyAccess = proxyAccessDisplay(
+        listenAddress = effectiveListenAddress,
+        hotspotIpv4 = ipInfo.hotspotIpv4,
+        underlyingIpv4 = ipInfo.underlyingIpv4,
+        proxyRunning = vpnState.status == "Running",
     )
     val noneLabel = stringResource(R.string.none)
+
+    LaunchedEffect(vpnState.status) {
+        while (vpnState.status == "Running") {
+            runCatching { context.startService(TcptunVpnService.refreshClientIpsIntent(context)) }
+            delay(1_000)
+        }
+    }
 
     BackHandler(onBack = onBack)
     Scaffold(
@@ -1535,7 +1694,24 @@ private fun IpInformationPage(onBack: () -> Unit) {
                         stringResource(R.string.ip_actual_listen) to actualListenAddress.ifBlank { noneLabel },
                         stringResource(R.string.ip_listener_ipv4) to listenerNetwork.ipv4.ifBlank { noneLabel },
                         stringResource(R.string.ip_gateway_ipv4) to listenerNetwork.gatewayIpv4.ifBlank { noneLabel },
+                        stringResource(R.string.ip_hotspot_interface) to ipInfo.hotspotInterface.ifBlank { noneLabel },
+                        stringResource(R.string.ip_hotspot_ipv4) to ipInfo.hotspotIpv4.ifBlank { noneLabel },
+                        stringResource(R.string.ip_client_proxy_address) to proxyAccess.address.ifBlank { noneLabel },
                     ),
+                )
+            }
+            item {
+                val clientIps = vpnState.diagnostics.bridgeClientIps
+                IpInformationCard(
+                    title = stringResource(R.string.ip_connected_clients),
+                    icon = Icons.Rounded.Hub,
+                    lines = if (clientIps.isEmpty()) {
+                        listOf(stringResource(R.string.ip_client_status) to stringResource(R.string.ip_no_connected_clients))
+                    } else {
+                        clientIps.mapIndexed { index, ip ->
+                            stringResource(R.string.ip_client_number, index + 1) to ip
+                        }
+                    },
                 )
             }
             item {

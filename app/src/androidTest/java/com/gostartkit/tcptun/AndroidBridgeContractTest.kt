@@ -692,6 +692,7 @@ class AndroidBridgeContractTest {
 
         val imported = ProfileUriCodec.decode(raw).getOrThrow()
         assertTrue(imported.rawConfigJson.isNotBlank())
+        assertTrue(profileConnectionIdentity(imported) != null)
         val stored = JSONObject(imported.rawConfigJson)
         assertFalse(stored.has("inbounds"))
         assertFalse(stored.has("log"))
@@ -723,6 +724,49 @@ class AndroidBridgeContractTest {
         assertEquals("android-vpn", ruleInbound.getString(0))
 
         assertEngineStarts(prepared.toString())
+    }
+
+    @Test
+    fun currentSchemaRealityConfigCanBeImported() {
+        val raw = """
+            {
+              "log": {"level": "info"},
+              "inbounds": [{
+                "tag": "local-mixed",
+                "type": "mixed",
+                "address": ["127.0.0.1:1080"],
+                "network": ["tcp", "udp"]
+              }],
+              "outbounds": [{
+                "tag": "native",
+                "type": "native",
+                "address": ["[2001:db8::1]:443"],
+                "token": "android-import-test",
+                "network": ["tcp", "udp"],
+                "transport": {"type": "raw"},
+                "security": {
+                  "type": "reality",
+                  "server_name": "example.com",
+                  "fingerprint": "chrome",
+                  "public_key": "3HNAKQ6cNuB2YDXVmwtMRLKpfGhBnykI2rXDmW9CKT4",
+                  "short_id": "00",
+                  "spider_x": "/"
+                },
+                "mux": {}
+              }],
+              "route": {"default_outbound": "native", "rules": []},
+              "dns": {}
+            }
+        """.trimIndent()
+
+        val imported = ProfileUriCodec.decode(raw).getOrThrow()
+
+        validateImportedProfile(imported)
+        assertTrue(profileConnectionIdentity(imported) != null)
+        val prepared = JSONObject(imported.toBridgeJson(localListenAddr = "127.0.0.1:1080"))
+        val outbound = prepared.getJSONArray("outbounds").getJSONObject(0)
+        assertEquals("[2001:db8::1]:443", outbound.getJSONArray("address").getString(0))
+        assertEquals("reality", outbound.getJSONObject("security").getString("type"))
     }
 
     private fun assertEngineStarts(config: String) {

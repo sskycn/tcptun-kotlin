@@ -83,6 +83,7 @@ private data class BridgeReadyWaiter(
 
 private data class BridgeRuntimeSnapshot(
     val activeConnections: Int,
+    val clientIps: List<String>,
     val muxSources: Int,
     val muxSessions: Int,
     val muxStreams: Int,
@@ -173,6 +174,7 @@ class TcptunVpnService : VpnService() {
             }
             ACTION_TCPING_OUTBOUNDS -> requestOutboundTcping(intent)
             ACTION_APPLY_RUNTIME_SETTINGS -> requestRuntimeSettingsRestart("runtime settings changed")
+            ACTION_REFRESH_CLIENT_IPS -> refreshBridgeClientIps()
             else -> requestRestoreLastRunningConfig()
         }
         return START_STICKY
@@ -1058,6 +1060,7 @@ class TcptunVpnService : VpnService() {
                 localProxyAddress = activeLocalSocksConnectAddr(),
                 localProxyPort = activeSocksPort,
                 bridgeActiveConnections = runtimeSnapshot?.activeConnections ?: it.bridgeActiveConnections,
+                bridgeClientIps = runtimeSnapshot?.clientIps ?: it.bridgeClientIps,
                 bridgeMuxSources = runtimeSnapshot?.muxSources ?: it.bridgeMuxSources,
                 bridgeMuxSessions = runtimeSnapshot?.muxSessions ?: it.bridgeMuxSessions,
                 bridgeMuxStreams = runtimeSnapshot?.muxStreams ?: it.bridgeMuxStreams,
@@ -1239,6 +1242,7 @@ class TcptunVpnService : VpnService() {
                 localProxyAddress = activeLocalSocksConnectAddr(),
                 localProxyPort = activeSocksPort,
                 bridgeActiveConnections = runtimeSnapshot?.activeConnections ?: it.bridgeActiveConnections,
+                bridgeClientIps = runtimeSnapshot?.clientIps ?: it.bridgeClientIps,
                 bridgeMuxSources = runtimeSnapshot?.muxSources ?: it.bridgeMuxSources,
                 bridgeMuxSessions = runtimeSnapshot?.muxSessions ?: it.bridgeMuxSessions,
                 bridgeMuxStreams = runtimeSnapshot?.muxStreams ?: it.bridgeMuxStreams,
@@ -1251,11 +1255,29 @@ class TcptunVpnService : VpnService() {
             val json = JSONObject(bridge.statusJson())
             BridgeRuntimeSnapshot(
                 activeConnections = json.optInt("active_connections", 0),
+                clientIps = normalizeClientIps(
+                    buildList {
+                        json.optJSONArray("client_ips")?.let { values ->
+                            for (index in 0 until values.length()) add(values.optString(index))
+                        }
+                    },
+                ),
                 muxSources = json.optInt("mux_sources", 0),
                 muxSessions = json.optInt("mux_sessions", 0),
                 muxStreams = json.optInt("mux_streams", 0),
             )
         }.getOrNull()
+    }
+
+    private fun refreshBridgeClientIps() {
+        if (stopping || tun == null || TcptunState.status != "Running") return
+        val snapshot = bridgeRuntimeSnapshot() ?: return
+        TcptunState.updateDiagnostics {
+            it.copy(
+                bridgeActiveConnections = snapshot.activeConnections,
+                bridgeClientIps = snapshot.clientIps,
+            )
+        }
     }
 
     private fun canConnectLocalProxy(): Boolean {
@@ -1481,6 +1503,7 @@ class TcptunVpnService : VpnService() {
         const val ACTION_UPDATE_OUTBOUNDS = "com.tcptun.client.UPDATE_OUTBOUNDS"
         const val ACTION_TCPING_OUTBOUNDS = "com.tcptun.client.TCPING_OUTBOUNDS"
         const val ACTION_APPLY_RUNTIME_SETTINGS = "com.tcptun.client.APPLY_RUNTIME_SETTINGS"
+        const val ACTION_REFRESH_CLIENT_IPS = "com.tcptun.client.REFRESH_CLIENT_IPS"
         const val EXTRA_CONFIG = "config"
         private const val EXTRA_PROFILE_CONFIG = "profileConfig"
         private const val EXTRA_PROFILE_PLAN = "profilePlan"
@@ -1551,6 +1574,10 @@ class TcptunVpnService : VpnService() {
 
         fun startIntent(context: Context, config: AppConfig): Intent {
             return startIntent(context, ProfileRunPlan(listOf(config)))
+        }
+
+        fun refreshClientIpsIntent(context: Context): Intent {
+            return Intent(context, TcptunVpnService::class.java).setAction(ACTION_REFRESH_CLIENT_IPS)
         }
 
         fun startIntent(context: Context, sourcePlan: ProfileRunPlan): Intent {
