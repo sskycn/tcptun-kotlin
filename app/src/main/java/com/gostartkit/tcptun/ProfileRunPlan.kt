@@ -126,7 +126,6 @@ internal fun ProfileRunPlan.toBridgeJson(
     val inbound = JSONObject(
         singleProfileRoots.getValue(plan.profiles.first().id).getJSONArray("inbounds").getJSONObject(0).toString(),
     )
-        .put("outbound", BalancedOutboundTag)
         .put("network", JSONArray().put("tcp").apply { if (acceptsUdp) put("udp") })
     val outbounds = JSONArray()
     plan.profiles.forEach { profile ->

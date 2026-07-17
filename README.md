@@ -88,14 +88,14 @@ Custom routing is stored in the strict JSON `route.rules`:
 {
   "log": {"level": "info"},
   "inbounds": [
-    {"tag": "local", "type": "socks5", "listen": "127.0.0.1", "port": 1080,
-     "network": ["tcp", "udp"], "outbound": "profile-pool"}
+    {"tag": "local", "type": "socks5", "address": ["127.0.0.1:1080"],
+     "network": ["tcp", "udp"]}
   ],
   "outbounds": [
-    {"tag": "profile-a", "type": "native", "server": "203.0.113.10", "port": 9443,
-     "token": "secret", "transport": {"type": "raw"}, "mux": {"enabled": true}},
-    {"tag": "profile-b", "type": "native", "server": "203.0.113.20", "port": 9443,
-     "token": "secret", "transport": {"type": "raw"}, "mux": {"enabled": true}},
+    {"tag": "profile-a", "type": "native", "address": ["203.0.113.10:9443"],
+     "token": "secret", "transport": {"type": "raw"}, "mux": {}},
+    {"tag": "profile-b", "type": "native", "address": ["203.0.113.20:9443"],
+     "token": "secret", "transport": {"type": "raw"}, "mux": {}},
     {"tag": "direct", "type": "direct"},
     {"tag": "profile-pool", "type": "balance", "affinity_ttl": "10m",
      "members": [

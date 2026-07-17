@@ -69,10 +69,8 @@ class AarLifecycleTest {
         "inbounds":[{
             "tag":"lifecycle-in",
             "type":"mixed",
-            "listen":"127.0.0.1",
-            "port":$port,
-            "network":["tcp"],
-            "outbound":"direct"
+            "address":["127.0.0.1:$port"],
+            "network":["tcp"]
         }],
         "outbounds":[{"tag":"direct","type":"direct","network":["tcp"]}],
         "route":{"default_outbound":"direct"}

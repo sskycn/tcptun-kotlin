@@ -104,44 +104,41 @@ data class AppConfig(
             )
         }
         val (listenHost, listenPort) = splitHostPort(localListenAddr)
+        val normalizedListenAddr = joinHostPort(listenHost, listenPort)
         val networks = JSONArray().put("tcp").apply {
             if (udp) put("udp")
         }
         val inbound = JSONObject()
             .put("tag", "local")
             .put("type", upstreamProtocol)
-            .put("listen", listenHost)
-            .put("port", listenPort)
+            .put("address", JSONArray().put(normalizedListenAddr))
             .put("network", networks)
-            .put("outbound", "proxy")
             .put("username", socks5Username)
             .put("password", socks5Password)
 
         val proxy = JSONObject()
             .put("tag", "proxy")
             .put("type", protocol)
-            .put("server", serverHost.trim().removeSurrounding("[", "]"))
-            .put("port", serverPort.trim().toInt())
+            .put("address", JSONArray().put(serverAddr))
             .put("flow", flow.trim())
             .put("network", JSONArray().apply { effectiveTunnelNetworks().forEach(::put) })
             .put(
                 "transport",
                 JSONObject()
                     .put("type", transport)
-                    .put("path", normalizedPath())
-                    .put("tls", tls)
-                    .put("server_name", sni.trim())
-                    .put("insecure", tlsInsecure),
+                    .put("path", normalizedPath()),
             )
-            .put(
+        if (mux) {
+            proxy.put(
                 "mux",
-                JSONObject().put("enabled", mux).apply {
+                JSONObject().apply {
                     muxMode.trim().takeIf { it.isNotBlank() }?.let { put("mode", it.lowercase()) }
                     if (muxMaxSessions > 0) put("max_sessions", muxMaxSessions)
                     if (muxMaxStreamsPerSession > 0) put("max_streams_per_session", muxMaxStreamsPerSession)
                     if (muxWarmSpare > 0) put("warm_spares", muxWarmSpare)
                 },
             )
+        }
         when (protocol) {
             "vless", "vmess" -> proxy.put("uuid", token.trim())
             "trojan" -> proxy.put("password", token.trim())
@@ -157,6 +154,14 @@ data class AppConfig(
                     .put("public_key", realityPublicKey.trim())
                     .put("short_id", realityShortId.trim())
                     .put("spider_x", realitySpiderX.trim()),
+            )
+        } else if (tls) {
+            proxy.put(
+                "security",
+                JSONObject()
+                    .put("type", "tls")
+                    .put("server_name", sni.trim())
+                    .put("insecure", tlsInsecure),
             )
         }
 
@@ -255,13 +260,12 @@ data class AppConfig(
         require(defaultOutbound.isNotBlank()) { "route.default_outbound or a tagged outbound is required" }
 
         val (listenHost, listenPort) = splitHostPort(localListenAddr)
+        val normalizedListenAddr = joinHostPort(listenHost, listenPort)
         val androidInbound = JSONObject()
             .put("tag", AndroidVpnInboundTag)
             .put("type", "socks5")
-            .put("listen", listenHost)
-            .put("port", listenPort)
+            .put("address", JSONArray().put(normalizedListenAddr))
             .put("network", JSONArray().put("tcp").apply { if (udpEnabled) put("udp") })
-            .put("outbound", defaultOutbound)
             .put("username", socks5Username)
             .put("password", socks5Password)
         val inbounds = JSONArray().put(androidInbound)
@@ -273,9 +277,13 @@ data class AppConfig(
                 if (tag == AndroidVpnInboundTag || inboundConflictsWithAndroidListener(inbound, listenHost, listenPort)) {
                     if (tag.isNotBlank()) replacedInboundTags += tag
                 } else {
+                    migrateInboundToAddressArray(inbound)
                     inbounds.put(inbound)
                 }
             }
+        }
+        for (index in 0 until outbounds.length()) {
+            outbounds.optJSONObject(index)?.let(::migrateOutboundToCurrentSchema)
         }
         root.put("inbounds", inbounds)
         if (!route.has("default_outbound")) route.put("default_outbound", defaultOutbound)
@@ -289,10 +297,19 @@ data class AppConfig(
     }
 
     private fun inboundConflictsWithAndroidListener(inbound: JSONObject, listenHost: String, listenPort: Int): Boolean {
-        val address = inbound.optString("address").trim()
-        if (address.isNotBlank()) {
-            val parsed = runCatching { splitHostPort(address) }.getOrNull()
-            return parsed != null && parsed.second == listenPort && listenerHostsOverlap(parsed.first, listenHost)
+        val addresses = when (val address = inbound.opt("address")) {
+            is JSONArray -> buildList {
+                for (index in 0 until address.length()) address.optString(index).trim().takeIf(String::isNotBlank)?.let(::add)
+            }
+            is String -> listOf(address.trim()).filter(String::isNotBlank)
+            else -> emptyList()
+        }
+        if (addresses.any { value ->
+                val parsed = runCatching { splitHostPort(value) }.getOrNull()
+                parsed != null && parsed.second == listenPort && listenerHostsOverlap(parsed.first, listenHost)
+            }
+        ) {
+            return true
         }
         if (inbound.optInt("port", -1) != listenPort) return false
         val hosts = buildList {
@@ -304,6 +321,84 @@ data class AppConfig(
             }
         }
         return hosts.any { listenerHostsOverlap(it, listenHost) }
+    }
+
+    private fun migrateInboundToAddressArray(inbound: JSONObject) {
+        val addresses = endpointAddresses(inbound, "listen", "listen_addresses", "port")
+        if (addresses.length() > 0) inbound.put("address", addresses)
+        inbound.remove("listen")
+        inbound.remove("listen_addresses")
+        inbound.remove("port")
+        inbound.remove("outbound")
+        migrateMux(inbound)
+        migrateTransportSecurity(inbound)
+    }
+
+    private fun migrateOutboundToCurrentSchema(outbound: JSONObject) {
+        val addresses = endpointAddresses(outbound, "server", null, "port")
+        if (addresses.length() > 0) outbound.put("address", addresses)
+        outbound.remove("server")
+        outbound.remove("port")
+        migrateMux(outbound)
+        migrateTransportSecurity(outbound)
+    }
+
+    private fun endpointAddresses(
+        endpoint: JSONObject,
+        legacyHostKey: String,
+        legacyHostsKey: String?,
+        legacyPortKey: String,
+    ): JSONArray {
+        when (val current = endpoint.opt("address")) {
+            is JSONArray -> return current
+            is String -> if (current.isNotBlank()) return JSONArray().put(current.trim())
+        }
+        val port = endpoint.optInt(legacyPortKey, -1)
+        if (port !in 0..65535) return JSONArray()
+        val hosts = buildList {
+            endpoint.optString(legacyHostKey).trim().takeIf(String::isNotBlank)?.let(::add)
+            legacyHostsKey?.let { key ->
+                endpoint.optJSONArray(key)?.let { values ->
+                    for (index in 0 until values.length()) {
+                        values.optString(index).trim().takeIf(String::isNotBlank)?.let(::add)
+                    }
+                }
+            }
+        }
+        return JSONArray().apply { hosts.distinct().forEach { put(joinHostPort(it, port)) } }
+    }
+
+    private fun migrateMux(endpoint: JSONObject) {
+        val muxConfig = endpoint.optJSONObject("mux") ?: return
+        if (muxConfig.has("enabled") && !muxConfig.optBoolean("enabled")) {
+            endpoint.remove("mux")
+        } else {
+            muxConfig.remove("enabled")
+        }
+    }
+
+    private fun migrateTransportSecurity(endpoint: JSONObject) {
+        val transportConfig = endpoint.optJSONObject("transport") ?: return
+        val legacyTls = transportConfig.optBoolean("tls", false)
+        val legacyValues = listOf("cert", "key", "server_name")
+            .associateWith { key -> transportConfig.optString(key).trim() }
+            .filterValues(String::isNotBlank)
+        val legacyInsecure = transportConfig.optBoolean("insecure", false)
+        if (legacyTls || legacyValues.isNotEmpty() || legacyInsecure) {
+            val securityConfig = endpoint.optJSONObject("security")
+                ?: JSONObject().also { endpoint.put("security", it) }
+            if (legacyTls && securityConfig.optString("type").isBlank()) securityConfig.put("type", "tls")
+            legacyValues.forEach { (key, value) ->
+                if (!securityConfig.has(key)) securityConfig.put(key, value)
+            }
+            if (legacyInsecure && !securityConfig.has("insecure")) securityConfig.put("insecure", true)
+        }
+        listOf("tls", "cert", "key", "server_name", "insecure").forEach(transportConfig::remove)
+    }
+
+    private fun joinHostPort(host: String, port: Int): String {
+        val normalized = host.trim().removeSurrounding("[", "]")
+        return if (normalized.contains(':')) "[$normalized]:$port" else "$normalized:$port"
     }
 
     private fun listenerHostsOverlap(first: String, second: String): Boolean {

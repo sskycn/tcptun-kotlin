@@ -83,8 +83,8 @@ class AndroidBridgeContractTest {
     fun currentBridgeValidatesWithoutStartingRuntime() {
         Androidbridge.validateConfig(
             """{
-                "inbounds":[{"tag":"local","type":"mixed","listen":"127.0.0.1","port":18080,"network":["tcp"],"outbound":"proxy"}],
-                "outbounds":[{"tag":"proxy","type":"native","server":"203.0.113.10","port":9443,"token":"secret","network":["tcp"],"transport":{"type":"raw"}}],
+                "inbounds":[{"tag":"local","type":"mixed","address":["127.0.0.1:18080"],"network":["tcp"]}],
+                "outbounds":[{"tag":"proxy","type":"native","address":["203.0.113.10:9443"],"token":"secret","network":["tcp"],"transport":{"type":"raw"}}],
                 "route":{"default_outbound":"proxy"}
             }""".trimIndent(),
         )
@@ -95,7 +95,7 @@ class AndroidBridgeContractTest {
         val result = runCatching {
             Androidbridge.validateConfig(
                 """{
-                    "inbounds":[{"tag":"local","type":"mixed","listen":"127.0.0.1","port":18080,"network":["tcp"],"outbound":"missing"}],
+                    "inbounds":[{"tag":"local","type":"mixed","address":["127.0.0.1:18080"],"network":["tcp"]}],
                     "outbounds":[],
                     "route":{"default_outbound":"missing"}
                 }""".trimIndent(),
@@ -400,7 +400,7 @@ class AndroidBridgeContractTest {
                 }.fold(accepted::complete, accepted::completeExceptionally)
             }
             val config = """{
-                "inbounds":[{"tag":"local","type":"mixed","listen":"127.0.0.1","port":18086,"network":["tcp"],"outbound":"profile-pool"}],
+                "inbounds":[{"tag":"local","type":"mixed","address":["127.0.0.1:18086"],"network":["tcp"]}],
                 "outbounds":[
                     {"tag":"profile-a","type":"direct","network":["tcp"]},
                     {"tag":"profile-b","type":"direct","network":["tcp"]},
@@ -448,7 +448,7 @@ class AndroidBridgeContractTest {
             }
             val unavailablePort = ServerSocket(0).use { it.localPort }
             val config = """{
-                "inbounds":[{"tag":"local","type":"mixed","listen":"127.0.0.1","port":18090,"network":["tcp"],"outbound":"pool"}],
+                "inbounds":[{"tag":"local","type":"mixed","address":["127.0.0.1:18090"],"network":["tcp"]}],
                 "outbounds":[
                     {"tag":"a","type":"direct","network":["tcp"]},
                     {"tag":"b","type":"direct","network":["tcp"]},
@@ -564,6 +564,16 @@ class AndroidBridgeContractTest {
         assertFalse(root.has("mode"))
         assertTrue(root.has("inbounds"))
         assertTrue(root.has("outbounds"))
+        val inbound = root.getJSONArray("inbounds").getJSONObject(0)
+        assertEquals("127.0.0.1:18080", inbound.getJSONArray("address").getString(0))
+        assertFalse(inbound.has("listen"))
+        assertFalse(inbound.has("port"))
+        assertFalse(inbound.has("outbound"))
+        val proxy = root.getJSONArray("outbounds").getJSONObject(0)
+        assertEquals("192.0.2.1:9443", proxy.getJSONArray("address").getString(0))
+        assertFalse(proxy.has("server"))
+        assertFalse(proxy.has("port"))
+        assertFalse(proxy.getJSONObject("mux").has("enabled"))
         val autoOutbound = root.getJSONArray("outbounds").getJSONObject(2)
         assertEquals("1250ms", autoOutbound.getString("probe_timeout"))
         assertEquals(3, autoOutbound.getInt("failure_threshold"))
@@ -592,7 +602,7 @@ class AndroidBridgeContractTest {
         )
         val localOnlyOutbounds = localOnly.getJSONArray("outbounds")
         assertEquals(uuid, localOnlyOutbounds.getJSONObject(0).getString("uuid"))
-        assertEquals("2001:db8::1", localOnlyOutbounds.getJSONObject(0).getString("server"))
+        assertEquals("[2001:db8::1]:443", localOnlyOutbounds.getJSONObject(0).getJSONArray("address").getString(0))
         assertEquals(2, localOnlyOutbounds.length())
 
         val routedExternal = JSONObject(
@@ -645,8 +655,10 @@ class AndroidBridgeContractTest {
         val root = JSONObject(config)
         val inbounds = root.getJSONArray("inbounds")
         assertEquals("android-vpn", inbounds.getJSONObject(0).getString("tag"))
-        assertEquals("direct", inbounds.getJSONObject(0).getString("outbound"))
+        assertEquals("127.0.0.1:18090", inbounds.getJSONObject(0).getJSONArray("address").getString(0))
+        assertFalse(inbounds.getJSONObject(0).has("outbound"))
         assertEquals("existing", inbounds.getJSONObject(1).getString("tag"))
+        assertEquals("127.0.0.1:18091", inbounds.getJSONObject(1).getJSONArray("address").getString(0))
         assertEquals("blocked", root.getJSONObject("route").getJSONArray("rules").getJSONObject(0).getString("outbound"))
         assertEquals("prefer_ipv4", root.getJSONObject("dns").getString("strategy"))
         assertFalse(root.has("discovery"))
@@ -665,7 +677,9 @@ class AndroidBridgeContractTest {
               ],
               "outbounds": [
                 {"tag": "proxy", "type": "native", "server": "192.0.2.1", "port": 9443,
-                 "token": "android-import-test", "transport": {"type": "raw"}, "mux": {"enabled": true}}
+                 "token": "android-import-test",
+                 "transport": {"type": "raw", "tls": true, "server_name": "example.com", "insecure": true},
+                 "mux": {"enabled": true}}
               ],
               "route": {
                 "default_outbound": "proxy",
@@ -694,6 +708,16 @@ class AndroidBridgeContractTest {
         val inbounds = prepared.getJSONArray("inbounds")
         assertEquals(1, inbounds.length())
         assertEquals("android-vpn", inbounds.getJSONObject(0).getString("tag"))
+        assertEquals("127.0.0.1:1080", inbounds.getJSONObject(0).getJSONArray("address").getString(0))
+        val proxy = prepared.getJSONArray("outbounds").getJSONObject(0)
+        assertEquals("192.0.2.1:9443", proxy.getJSONArray("address").getString(0))
+        assertFalse(proxy.has("server"))
+        assertFalse(proxy.has("port"))
+        assertFalse(proxy.getJSONObject("mux").has("enabled"))
+        assertEquals("tls", proxy.getJSONObject("security").getString("type"))
+        assertEquals("example.com", proxy.getJSONObject("security").getString("server_name"))
+        assertTrue(proxy.getJSONObject("security").getBoolean("insecure"))
+        assertFalse(proxy.getJSONObject("transport").has("tls"))
         val ruleInbound = prepared.getJSONObject("route").getJSONArray("rules")
             .getJSONObject(0).getJSONArray("inbound")
         assertEquals("android-vpn", ruleInbound.getString(0))
@@ -760,10 +784,7 @@ class AndroidBridgeContractTest {
         try {
             reservations.forEachIndexed { index, reservation ->
                 val inbound = inbounds.getJSONObject(index)
-                inbound.remove("address")
-                inbound.remove("listen_addresses")
-                inbound.put("listen", "127.0.0.1")
-                inbound.put("port", reservation.localPort)
+                inbound.put("address", JSONArray().put("127.0.0.1:${reservation.localPort}"))
             }
             return root.toString()
         } finally {
