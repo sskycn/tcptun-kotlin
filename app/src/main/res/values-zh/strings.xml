@@ -14,7 +14,7 @@
     <string name="profile_qr_code_hint">使用 TcpTun 扫描即可导入此配置</string>
     <string name="scan_qr_code">扫描二维码</string>
     <string name="scan_profile_qr_code">扫描配置二维码</string>
-    <string name="scan_qr_instruction">对准二维码并稍候，相机会变焦后对清楚再识别；也可点击画面手动对焦</string>
+    <string name="scan_qr_instruction">将配置二维码放入框内</string>
     <string name="scan_qr_loading">正在准备二维码扫描器…</string>
     <string name="camera_permission_required">扫描配置二维码需要相机权限。</string>
     <string name="grant_camera_permission">允许使用相机</string>

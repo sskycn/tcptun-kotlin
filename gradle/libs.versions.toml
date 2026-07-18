@@ -9,7 +9,8 @@ activityCompose = "1.13.0"
 kotlin = "2.2.10"
 composeBom = "2026.02.01"
 cameraX = "1.6.1"
-wechatQrCode = "2.6.0"
+mlKitBarcodeScanning = "17.3.0"
+zxing = "3.5.4"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -31,11 +32,8 @@ androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", 
 androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "cameraX" }
 androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "cameraX" }
 androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycleRuntimeKtx" }
-wechat-qrcode-opencv = { group = "com.github.jenly1314.WeChatQRCode", name = "opencv", version.ref = "wechatQrCode" }
-wechat-qrcode-arm64 = { group = "com.github.jenly1314.WeChatQRCode", name = "opencv-armv64", version.ref = "wechatQrCode" }
-wechat-qrcode-armv7 = { group = "com.github.jenly1314.WeChatQRCode", name = "opencv-armv7a", version.ref = "wechatQrCode" }
-wechat-qrcode-x8664 = { group = "com.github.jenly1314.WeChatQRCode", name = "opencv-x86_64", version.ref = "wechatQrCode" }
-wechat-qrcode-detector = { group = "com.github.jenly1314.WeChatQRCode", name = "wechat-qrcode", version.ref = "wechatQrCode" }
+mlkit-barcode-scanning = { group = "com.google.mlkit", name = "barcode-scanning", version.ref = "mlKitBarcodeScanning" }
+zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
