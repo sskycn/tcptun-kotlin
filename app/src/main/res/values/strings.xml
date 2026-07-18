@@ -164,9 +164,9 @@
     <string name="power_saving_mode">Power saving mode</string>
     <string name="power_saving_note">Power saving mode uses longer bridge heartbeat/retry timers and lowers idle health-check frequency.</string>
     <string name="runtime_settings_note">Settings are saved while editing. When you go back, the running VPN restarts once to apply changed settings.</string>
-    <string name="native_tun_tcp_only_note">Native TUN phase 1 is TCP-only. UDP, DNS interception, and fake-IP are not available yet.</string>
+    <string name="native_tun_capabilities_note">Native TUN supports TCP and UDP. Go handles DNS inside the tunnel and enables fake-IP by default.</string>
     <string name="vpn_traffic_mode">VPN traffic mode</string>
-    <string name="tcp_only">TCP-only</string>
+    <string name="tcp_udp">TCP + UDP</string>
     <string name="current_effective">Current effective settings</string>
     <string name="back">Back</string>
     <string name="logs">Logs</string>

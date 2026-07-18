@@ -110,7 +110,17 @@ Custom routing is stored in the strict JSON `route.rules`:
     "default_outbound": "profile-pool",
     "rules": [{"domain_suffixes": ["example.com"], "outbound": "profile-a"}]
   },
-  "dns": {}
+  "dns": {
+    "servers": ["1.1.1.1", "[2606:4700:4700::1111]:53"],
+    "strategy": "prefer_ipv4",
+    "fake_ip": {
+      "enabled": true,
+      "ipv4_range": "198.18.0.0/15",
+      "ipv6_range": "fc00::/18",
+      "capacity": 65536,
+      "ttl": "10m"
+    }
+  }
 }
 ```
 
@@ -291,13 +301,13 @@ vless://00000000-0000-4000-8000-000000000000@203.0.113.10:443?security=reality&e
 - Recent log display.
 - Native tcptun-go TUN forwarding.
 - Runtime reflection bridge to gomobile AAR.
-- In-app diagnostics for VPN, underlying network, bridge state, local proxy reachability, MTU, TCP-only mode, and socket protect.
+- In-app diagnostics for VPN, underlying network, bridge state, local proxy reachability, MTU, TCP/UDP mode, and socket protect.
 - Runtime MTU settings.
 - Strict tcptun-go topology config and cached TCP direct-first routing.
-- Android 10+ per-app outbound routing for TCP flows.
+- Native TUN TCP/UDP forwarding with in-tunnel DNS interception and fake-IP restoration.
+- Android 10+ per-app outbound routing for TCP and UDP flows.
 - Import, edit, persist, share, and run complete strict tcptun-go JSON profiles.
 
 ## Not yet supported
 
 - Building the Go AAR from Gradle automatically.
-- Native TUN UDP forwarding, DNS interception, and fake-IP.

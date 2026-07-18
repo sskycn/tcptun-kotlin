@@ -8,6 +8,25 @@ import java.util.UUID
 internal const val DefaultLocalProxyProtocol = "socks5"
 internal const val AndroidTunInboundTag = "tun"
 internal val LocalProxyProtocols = listOf(DefaultLocalProxyProtocol, "mixed")
+internal val AndroidTunNetworks = listOf("tcp", "udp")
+
+internal fun defaultNativeTunDnsConfig(): JSONObject = JSONObject()
+    .put(
+        "servers",
+        JSONArray()
+            .put("1.1.1.1")
+            .put("[2606:4700:4700::1111]:53"),
+    )
+    .put("strategy", "prefer_ipv4")
+    .put(
+        "fake_ip",
+        JSONObject()
+            .put("enabled", true)
+            .put("ipv4_range", "198.18.0.0/15")
+            .put("ipv6_range", "fc00::/18")
+            .put("capacity", 65_536)
+            .put("ttl", "10m"),
+    )
 
 internal fun normalizeLocalProxyProtocol(value: String): String {
     return value.trim().lowercase().takeIf { it in LocalProxyProtocols }
@@ -108,7 +127,6 @@ data class AppConfig(
             return prepareRawConfigForAndroid(
                 localListenAddr = localListenAddr,
                 localProxyProtocol = localProxyProtocol,
-                udpEnabled = udp,
                 socks5Username = socks5Username,
                 socks5Password = socks5Password,
                 verbose = verbose,
@@ -117,9 +135,7 @@ data class AppConfig(
         val (listenHost, listenPort) = splitHostPort(localListenAddr)
         val normalizedListenAddr = joinHostPort(listenHost, listenPort)
         val normalizedLocalProxyProtocol = normalizeLocalProxyProtocol(localProxyProtocol)
-        val networks = JSONArray().put("tcp").apply {
-            if (udp) put("udp")
-        }
+        val networks = JSONArray().apply { AndroidTunNetworks.forEach(::put) }
         val inbound = JSONObject()
             .put("tag", "local")
             .put("type", normalizedLocalProxyProtocol)
@@ -133,7 +149,7 @@ data class AppConfig(
             .put("type", protocol)
             .put("address", JSONArray().put(serverAddr))
             .put("flow", flow.trim())
-            .put("network", JSONArray().apply { effectiveTunnelNetworks().forEach(::put) })
+            .put("network", JSONArray().apply { AndroidTunNetworks.forEach(::put) })
             .put(
                 "transport",
                 JSONObject()
@@ -238,14 +254,13 @@ data class AppConfig(
             .put("inbounds", JSONArray().put(inbound))
             .put("outbounds", outbounds)
             .put("route", JSONObject().put("default_outbound", "proxy").put("rules", rules))
-            .put("dns", JSONObject())
+            .put("dns", defaultNativeTunDnsConfig())
             .toString()
     }
 
     private fun prepareRawConfigForAndroid(
         localListenAddr: String,
         localProxyProtocol: String,
-        udpEnabled: Boolean,
         socks5Username: String,
         socks5Password: String,
         verbose: Boolean,
@@ -255,6 +270,10 @@ data class AppConfig(
         // rejects it through strict JSON decoding. Keep previously saved full
         // configs usable while preserving every currently supported section.
         root.remove("discovery")
+        val dns = root.optJSONObject("dns")
+        if (dns == null || dns.length() == 0) {
+            root.put("dns", defaultNativeTunDnsConfig())
+        }
         val outbounds = root.optJSONArray("outbounds")
             ?: throw IllegalArgumentException("outbounds is required")
         require(outbounds.length() > 0) { "outbounds must not be empty" }
@@ -280,7 +299,7 @@ data class AppConfig(
             .put("tag", AndroidVpnInboundTag)
             .put("type", normalizedLocalProxyProtocol)
             .put("address", JSONArray().put(normalizedListenAddr))
-            .put("network", JSONArray().put("tcp").apply { if (udpEnabled) put("udp") })
+            .put("network", JSONArray().apply { AndroidTunNetworks.forEach(::put) })
             .put("username", socks5Username)
             .put("password", socks5Password)
         val inbounds = JSONArray().put(androidInbound)
@@ -302,8 +321,12 @@ data class AppConfig(
             }
         }
         for (index in 0 until outbounds.length()) {
-            outbounds.optJSONObject(index)?.let(::migrateOutboundToCurrentSchema)
+            outbounds.optJSONObject(index)?.let { outbound ->
+                migrateOutboundToCurrentSchema(outbound)
+                ensureAndroidTunOutboundNetworks(outbound)
+            }
         }
+        migrateDirectFirstRoutesForAndroidTun(route, outbounds)
         root.put("inbounds", inbounds)
         if (!route.has("default_outbound")) route.put("default_outbound", defaultOutbound)
         if (!route.has("rules")) route.put("rules", JSONArray())
@@ -360,6 +383,49 @@ data class AppConfig(
         outbound.remove("port")
         migrateMux(outbound)
         migrateTransportSecurity(outbound)
+    }
+
+    private fun ensureAndroidTunOutboundNetworks(outbound: JSONObject) {
+        if (outbound.optString("type").trim().equals("direct-first", ignoreCase = true)) return
+        val configured = outbound.optJSONArray("network") ?: return
+        val networks = buildSet {
+            for (index in 0 until configured.length()) {
+                configured.optString(index).trim().lowercase().takeIf(String::isNotBlank)?.let(::add)
+            }
+        }
+        if (AndroidTunNetworks.all(networks::contains)) return
+        outbound.put("network", JSONArray().apply { AndroidTunNetworks.forEach(::put) })
+    }
+
+    private fun migrateDirectFirstRoutesForAndroidTun(route: JSONObject, outbounds: JSONArray) {
+        val directFirstByTag = buildMap<String, JSONObject> {
+            for (index in 0 until outbounds.length()) {
+                val outbound = outbounds.optJSONObject(index) ?: continue
+                if (!outbound.optString("type").trim().equals("direct-first", ignoreCase = true)) continue
+                outbound.optString("tag").trim().takeIf(String::isNotBlank)?.let { put(it, outbound) }
+            }
+        }
+        if (directFirstByTag.isEmpty()) return
+
+        val rules = route.optJSONArray("rules") ?: JSONArray().also { route.put("rules", it) }
+        for (index in 0 until rules.length()) {
+            val rule = rules.optJSONObject(index) ?: continue
+            if (rule.optString("outbound").trim() in directFirstByTag) {
+                rule.put("network", JSONArray().put("tcp"))
+            }
+        }
+
+        val defaultTag = route.optString("default_outbound").trim()
+        val directFirst = directFirstByTag[defaultTag] ?: return
+        val udpFallback = directFirst.optString("fallback").trim()
+        if (udpFallback.isBlank()) return
+        route.put("default_outbound", udpFallback)
+        rules.put(
+            JSONObject()
+                .put("inbound", JSONArray().put(AndroidTunInboundTag))
+                .put("network", JSONArray().put("tcp"))
+                .put("outbound", defaultTag),
+        )
     }
 
     private fun endpointAddresses(

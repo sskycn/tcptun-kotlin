@@ -210,6 +210,9 @@ object ProfileUriCodec {
             val imported = JSONObject()
                 .put("outbounds", obj.getJSONArray("outbounds"))
                 .put("route", route)
+            obj.optJSONObject("dns")?.let { dns ->
+                imported.put("dns", JSONObject(dns.toString()))
+            }
             return AppConfig(
                 id = UUID.randomUUID().toString(),
                 name = "tcptun-json",

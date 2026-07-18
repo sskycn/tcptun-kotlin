@@ -423,6 +423,7 @@ class TcptunVpnService : VpnService() {
             .setMtu(mtu)
             .addAddress("10.77.0.2", 32)
             .addAddress("fd00:7777::2", 128)
+            .addDnsServer(VPN_DNS_ADDRESS)
             .addRoute("0.0.0.0", 0)
             .addRoute("::", 0)
             // Some Android builds do not reliably route raw Go sockets around the VPN
@@ -1383,6 +1384,7 @@ class TcptunVpnService : VpnService() {
         const val LOCAL_SOCKS_HOST = "127.0.0.1"
         const val DEFAULT_SOCKS_PORT = 1080
         const val DEFAULT_VPN_MTU = 1400
+        private const val VPN_DNS_ADDRESS = "10.77.0.1"
         const val DEFAULT_PROBE_TIMEOUT = "120ms"
         const val DEFAULT_FAILURE_THRESHOLD = 1
         const val DEFAULT_POSITIVE_TTL = "30m"
@@ -1447,19 +1449,13 @@ class TcptunVpnService : VpnService() {
         fun startIntent(context: Context, sourcePlan: ProfileRunPlan): Intent {
             val runtimeSettings = readRuntimeSettings(context)
             val plan = sourcePlan.normalized()
-            val effectivePlan = plan.copy(
-                profiles = plan.profiles.map { config ->
-                    config.copy(udp = false)
-                },
-            )
             val config = plan.profiles.first()
-            val effectiveConfig = effectivePlan.profiles.first()
             val localListenAddr = localSocksListenAddr(runtimeSettings)
             return Intent(context, TcptunVpnService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(
                     EXTRA_CONFIG,
-                    effectivePlan.toBridgeJson(
+                    plan.toBridgeJson(
                         localListenAddr,
                         localProxyProtocol = runtimeSettings.localProxyProtocol,
                         socks5Username = runtimeSettings.socksUsername,
@@ -1473,22 +1469,22 @@ class TcptunVpnService : VpnService() {
                         managedRouteRules = RouteRuleStore.load(context),
                     ),
                 )
-                .putExtra("serverHost", effectiveConfig.serverHost)
-                .putExtra("serverPort", effectiveConfig.serverPort)
-                .putExtra("protocol", effectiveConfig.protocol)
-                .putExtra("transport", effectiveConfig.transport)
-                .putExtra("token", effectiveConfig.token)
-                .putExtra("sni", effectiveConfig.sni)
-                .putExtra("path", effectiveConfig.path)
-                .putExtra("tls", effectiveConfig.tls)
-                .putExtra("tlsInsecure", effectiveConfig.tlsInsecure)
-                .putExtra("tunnelSecurity", effectiveConfig.tunnelSecurity)
-                .putExtra("flow", effectiveConfig.flow)
-                .putExtra("realityPublicKey", effectiveConfig.realityPublicKey)
-                .putExtra("realityShortId", effectiveConfig.realityShortId)
-                .putExtra("realityFingerprint", effectiveConfig.realityFingerprint)
-                .putExtra("realitySpiderX", effectiveConfig.realitySpiderX)
-                .putExtra("mux", effectiveConfig.mux)
+                .putExtra("serverHost", config.serverHost)
+                .putExtra("serverPort", config.serverPort)
+                .putExtra("protocol", config.protocol)
+                .putExtra("transport", config.transport)
+                .putExtra("token", config.token)
+                .putExtra("sni", config.sni)
+                .putExtra("path", config.path)
+                .putExtra("tls", config.tls)
+                .putExtra("tlsInsecure", config.tlsInsecure)
+                .putExtra("tunnelSecurity", config.tunnelSecurity)
+                .putExtra("flow", config.flow)
+                .putExtra("realityPublicKey", config.realityPublicKey)
+                .putExtra("realityShortId", config.realityShortId)
+                .putExtra("realityFingerprint", config.realityFingerprint)
+                .putExtra("realitySpiderX", config.realitySpiderX)
+                .putExtra("mux", config.mux)
                 .putExtra("udp", config.udp)
                 .putExtra("upstreamProtocol", runtimeSettings.localProxyProtocol)
                 .putExtra(EXTRA_PROFILE_CONFIG, config.toJson().toString())

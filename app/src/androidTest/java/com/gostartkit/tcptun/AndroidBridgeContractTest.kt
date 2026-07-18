@@ -680,6 +680,11 @@ class AndroidBridgeContractTest {
         assertEquals("tun", rules.getJSONObject(0).getJSONArray("inbound").getString(0))
         assertEquals("auto", rules.getJSONObject(1).getString("outbound"))
         assertEquals("tun", rules.getJSONObject(1).getJSONArray("inbound").getString(0))
+        val dns = root.getJSONObject("dns")
+        assertEquals("1.1.1.1", dns.getJSONArray("servers").getString(0))
+        assertEquals("prefer_ipv4", dns.getString("strategy"))
+        assertTrue(dns.getJSONObject("fake_ip").getBoolean("enabled"))
+        assertEquals("198.18.0.0/15", dns.getJSONObject("fake_ip").getString("ipv4_range"))
 
         assertEngineStarts(config)
     }
@@ -765,7 +770,38 @@ class AndroidBridgeContractTest {
     }
 
     @Test
-    fun tcptunGoConfigImportKeepsOnlyOutboundsAndRoute() {
+    fun fullConfigMigratesTcpOnlyDirectFirstForTcpUdpTun() {
+        val prepared = JSONObject(
+            AppConfig(
+                name = "direct-first",
+                rawConfigJson = """{
+                    "outbounds":[
+                        {"tag":"direct","type":"direct","network":["tcp"]},
+                        {"tag":"proxy","type":"direct","network":["tcp"]},
+                        {"tag":"auto","type":"direct-first","primary":"direct","fallback":"proxy","network":["tcp"]}
+                    ],
+                    "route":{
+                        "default_outbound":"auto",
+                        "rules":[{"domain_suffixes":["example.com"],"outbound":"auto"}]
+                    }
+                }""".trimIndent(),
+            ).toBridgeJson(localListenAddr = "127.0.0.1:18092"),
+        )
+
+        assertEquals("proxy", prepared.getJSONObject("route").getString("default_outbound"))
+        val outbounds = prepared.getJSONArray("outbounds")
+        assertEquals(2, outbounds.getJSONObject(0).getJSONArray("network").length())
+        assertEquals(2, outbounds.getJSONObject(1).getJSONArray("network").length())
+        val rules = prepared.getJSONObject("route").getJSONArray("rules")
+        assertEquals("tcp", rules.getJSONObject(0).getJSONArray("network").getString(0))
+        assertEquals("auto", rules.getJSONObject(1).getString("outbound"))
+        assertEquals("tun", rules.getJSONObject(1).getJSONArray("inbound").getString(0))
+
+        assertEngineStarts(prepared.toString())
+    }
+
+    @Test
+    fun tcptunGoConfigImportKeepsOutboundsRouteAndDns() {
         val raw = """
             {
               "log": {"level": "info"},
@@ -794,7 +830,7 @@ class AndroidBridgeContractTest {
         val stored = JSONObject(imported.rawConfigJson)
         assertFalse(stored.has("inbounds"))
         assertFalse(stored.has("log"))
-        assertFalse(stored.has("dns"))
+        assertTrue(stored.has("dns"))
         assertFalse(stored.has("discovery"))
         assertTrue(stored.has("outbounds"))
         assertTrue(stored.has("route"))
@@ -804,6 +840,7 @@ class AndroidBridgeContractTest {
                 .getJSONObject(0).getJSONArray("inbound").getString(0),
         )
         val prepared = JSONObject(imported.toBridgeJson(localListenAddr = "127.0.0.1:1080"))
+        assertTrue(prepared.getJSONObject("dns").getJSONObject("fake_ip").getBoolean("enabled"))
         val inbounds = prepared.getJSONArray("inbounds")
         assertEquals(1, inbounds.length())
         assertEquals("android-vpn", inbounds.getJSONObject(0).getString("tag"))

@@ -72,6 +72,7 @@ class LiveConnectivityTest {
                 }
 
                 verifyExactOutbound(context)
+                verifyTunDnsAndFakeIp()
                 assertEquals(
                     204,
                     fetchHttpsStatus(
@@ -133,6 +134,17 @@ class LiveConnectivityTest {
             "outbound TCP probe failed: ${tcping.results.single().error}",
             tcping.results.single().elapsedMs != null,
         )
+    }
+
+    private fun verifyTunDnsAndFakeIp() {
+        val result = runShell(
+            "/system/bin/curl -4 -sS -o /dev/null --connect-timeout 10 --max-time 20 " +
+                "-w '%{remote_ip}|%{http_code}' https://www.cloudflare.com/",
+        ).trim()
+        val parts = result.substringAfterLast('\n').split('|')
+        assertEquals("unexpected curl result: $result", 2, parts.size)
+        assertTrue("DNS did not return a fake IPv4 address: $result", parts[0].startsWith("198.18."))
+        assertTrue("TUN request failed after fake-IP restoration: $result", parts[1].toIntOrNull() in 200..399)
     }
 
     private fun connectThroughSocks(port: Int, host: String, targetPort: Int): Socket {
@@ -210,9 +222,11 @@ class LiveConnectivityTest {
         assertFalse("unexpected HTTP status $status", status >= 400)
     }
 
-    private fun runShell(command: String) {
+    private fun runShell(command: String): String {
         val descriptor = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
-        ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { it.readBytes() }
+        return ParcelFileDescriptor.AutoCloseInputStream(descriptor).use {
+            String(it.readBytes(), Charsets.UTF_8)
+        }
     }
 
     private fun waitUntil(label: String, timeoutMillis: Long = 30_000, condition: () -> Boolean) {

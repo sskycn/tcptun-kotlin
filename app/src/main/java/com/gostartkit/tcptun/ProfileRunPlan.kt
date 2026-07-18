@@ -125,11 +125,10 @@ internal fun ProfileRunPlan.toBridgeJson(
             ),
         )
     }
-    val acceptsUdp = plan.profiles.any(AppConfig::udp)
     val inbound = JSONObject(
         singleProfileRoots.getValue(plan.profiles.first().id).getJSONArray("inbounds").getJSONObject(0).toString(),
     )
-        .put("network", JSONArray().put("tcp").apply { if (acceptsUdp) put("udp") })
+        .put("network", JSONArray().apply { AndroidTunNetworks.forEach(::put) })
     val outbounds = JSONArray()
     plan.profiles.forEach { profile ->
         val outbound = JSONObject(
@@ -142,7 +141,7 @@ internal fun ProfileRunPlan.toBridgeJson(
         JSONObject()
             .put("tag", BalancedOutboundTag)
             .put("type", "balance")
-            .put("network", JSONArray().put("tcp").apply { if (acceptsUdp) put("udp") })
+            .put("network", JSONArray().apply { AndroidTunNetworks.forEach(::put) })
             .put("affinity_ttl", "10m")
             .put(
                 "members",
@@ -199,7 +198,7 @@ internal fun ProfileRunPlan.toBridgeJson(
                 .put("outbound", targetTag),
         )
         if (targetProfile != null) {
-            route.put("network", JSONArray().apply { targetProfile.effectiveTunnelNetworks().forEach(::put) })
+            route.put("network", JSONArray().apply { AndroidTunNetworks.forEach(::put) })
         }
         rules.put(route)
     }
@@ -217,6 +216,6 @@ internal fun ProfileRunPlan.toBridgeJson(
         .put("inbounds", JSONArray().put(inbound))
         .put("outbounds", outbounds)
         .put("route", JSONObject().put("default_outbound", BalancedOutboundTag).put("rules", rules))
-        .put("dns", JSONObject())
+        .put("dns", defaultNativeTunDnsConfig())
         .toString()
 }

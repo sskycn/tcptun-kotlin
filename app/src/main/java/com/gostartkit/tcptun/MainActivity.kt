@@ -2032,7 +2032,7 @@ private fun SettingsPage(onBack: () -> Unit) {
                             saveSettings(settings.copy(powerSavingMode = checked))
                         }
                         Text(
-                            stringResource(R.string.native_tun_tcp_only_note),
+                            stringResource(R.string.native_tun_capabilities_note),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.primary,
                         )
@@ -2079,7 +2079,7 @@ private fun SettingsPage(onBack: () -> Unit) {
                         DiagnosticsLine(stringResource(R.string.positive_ttl), settings.positiveTtl)
                         DiagnosticsLine(stringResource(R.string.negative_ttl), settings.negativeTtl)
                         DiagnosticsLine(stringResource(R.string.socks_auth), if (settings.socksUsername.isNotEmpty() || settings.socksPassword.isNotEmpty()) stringResource(R.string.enabled) else stringResource(R.string.disabled))
-                        DiagnosticsLine(stringResource(R.string.vpn_traffic_mode), stringResource(R.string.tcp_only))
+                        DiagnosticsLine(stringResource(R.string.vpn_traffic_mode), stringResource(R.string.tcp_udp))
                         DiagnosticsLine(stringResource(R.string.diag_power_saving), if (diagnostics.powerSavingMode) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                     }
                 }
@@ -2814,7 +2814,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                             }
                             ToggleRow(stringResource(R.string.field_mux), config.mux) { config = config.copy(mux = it) }
                             Text(
-                                stringResource(R.string.native_tun_tcp_only_note),
+                                stringResource(R.string.native_tun_capabilities_note),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.primary,
                             )
