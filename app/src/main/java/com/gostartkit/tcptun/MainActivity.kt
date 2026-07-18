@@ -112,8 +112,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
@@ -1375,7 +1377,8 @@ private fun ProfileQrCodeDialog(
 ) {
     val colors = MaterialTheme.colorScheme
     val uri = remember(profile) { requireNotNull(ProfileUriCodec.encodeForQr(profile)) }
-    val bitmap = remember(uri) { generateQrCodeBitmap(uri, 768) }
+    // Higher target size keeps modules large after denser payloads + on-screen scaling.
+    val bitmap = remember(uri) { generateQrCodeBitmap(uri, 1024) }
     val profileMeta = listOf(profile.label(), profile.maskedAddress())
         .filter { it.isNotBlank() }
         .joinToString(" · ")
@@ -1442,13 +1445,15 @@ private fun ProfileQrCodeDialog(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
+                // Flat pure-white stage (no elevation shadow under the code) for cleaner captures.
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 4.dp),
                     shape = QrCardShape,
                     color = Color.White,
-                    shadowElevation = 2.dp,
+                    shadowElevation = 0.dp,
+                    tonalElevation = 0.dp,
                 ) {
                     Image(
                         bitmap = bitmap.asImageBitmap(),
@@ -1456,10 +1461,14 @@ private fun ProfileQrCodeDialog(
                             R.string.profile_qr_code_description,
                             profile.name,
                         ),
+                        contentScale = ContentScale.Fit,
+                        // Nearest-neighbor keeps module edges crisp when Compose scales the bitmap.
+                        filterQuality = FilterQuality.None,
                         modifier = Modifier
                             .fillMaxWidth()
                             .aspectRatio(1f)
-                            .padding(20.dp),
+                            // Extra light margin beyond the encoded quiet zone helps camera framing.
+                            .padding(24.dp),
                     )
                 }
 

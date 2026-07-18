@@ -14,7 +14,7 @@
     <string name="profile_qr_code_hint">Scan with TcpTun to import this profile</string>
     <string name="scan_qr_code">Scan QR code</string>
     <string name="scan_profile_qr_code">Scan profile QR code</string>
-    <string name="scan_qr_instruction">Place a profile QR code inside the frame</string>
+    <string name="scan_qr_instruction">Hold on the QR code — the camera zooms, focuses until sharp, then scans. Tap to focus manually.</string>
     <string name="scan_qr_loading">Preparing QR code scanner…</string>
     <string name="camera_permission_required">Camera access is required to scan a profile QR code.</string>
     <string name="grant_camera_permission">Allow camera</string>

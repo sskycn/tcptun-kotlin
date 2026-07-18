@@ -1,11 +1,17 @@
 package com.tcptun.client
 
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.net.Uri
 import androidbridge.Androidbridge
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.king.wechat.qrcode.WeChatQRCodeDetector
+import org.opencv.android.Utils
+import org.opencv.core.Mat
+import org.opencv.imgproc.Imgproc
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -534,6 +540,39 @@ class AndroidBridgeContractTest {
         assertEquals(profile.token, decoded.token)
         assertEquals(profile.protocol, decoded.protocol)
         assertEquals(profile.name, decoded.name)
+    }
+
+    @Test
+    fun twoStageScannerLocatesAndDecodesCandidateCrop() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val payload = "t1|two-stage-scanner-contract"
+        val qr = generateQrCodeBitmap(payload, 320)
+        val cameraFrame = Bitmap.createBitmap(1280, 720, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(Color.WHITE)
+            Canvas(this).drawBitmap(
+                qr,
+                (width - qr.width) / 2f,
+                (height - qr.height) / 2f,
+                null,
+            )
+        }
+        val rgba = Mat()
+        val gray = Mat()
+        try {
+            Utils.bitmapToMat(cameraFrame, rgba)
+            Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
+            WeChatQrEngine.initialize(context).getOrThrow()
+
+            val result = WeChatQrEngine.locateAndDecode(gray, decode = true)
+
+            assertEquals(payload, result.text)
+            assertTrue(result.focus != null)
+        } finally {
+            gray.release()
+            rgba.release()
+            cameraFrame.recycle()
+            qr.recycle()
+        }
     }
 
     @Test

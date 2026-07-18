@@ -166,6 +166,97 @@ class ProfileDeepLinkTest {
     }
 
     @Test
+    fun compactQrOmitsTcptunConfigGeneratedDefaults() {
+        // Mirrors fixed fields from `tcptun config <protocol>` client outbounds.
+        AppConfig.Protocols.forEach { protocol ->
+            val profile = AppConfig(
+                name = "$protocol-reality",
+                serverHost = "edge.example.com",
+                serverPort = "9443",
+                protocol = protocol,
+                transport = "raw",
+                token = "00000000-0000-4000-8000-000000000000",
+                tunnelSecurity = "reality",
+                sni = "example.com",
+                realityPublicKey = "abcdefghijklmnopqrstuvwxyz012345",
+                realityShortId = "a65f93c1dbc5d54a",
+                realityFingerprint = "chrome",
+                realitySpiderX = "/",
+                flow = if (protocol == "vless") "xtls-rprx-vision" else "",
+                mux = false,
+                tunnelNetwork = "tcp,udp",
+                udp = true,
+            )
+            val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
+            assertTrue("$protocol payload", qrPayload.startsWith("t1|"))
+            val bodyParts = qrPayload.split('#', limit = 2).first().split('|')
+            // Fixed generated defaults omitted:
+            assertFalse("$protocol should omit security=reality", bodyParts.contains("r"))
+            assertFalse(qrPayload.contains("|gchrome"))
+            assertFalse(qrPayload.contains("|x/"))
+            assertFalse(qrPayload.contains("|m1"))
+            assertFalse(bodyParts.any { it.startsWith("N") })
+            assertFalse(qrPayload.contains("|fxtls"))
+            // Variable / required fields kept:
+            assertTrue(qrPayload.contains("|kabcdefghijklmnopqrstuvwxyz012345"))
+            assertTrue(qrPayload.contains("|da65f93c1dbc5d54a"))
+            assertTrue(qrPayload.contains("|sexample.com"))
+
+            val decoded = ProfileUriCodec.decode(qrPayload).getOrThrow()
+            assertEquals(protocol, decoded.protocol)
+            assertEquals("reality", decoded.tunnelSecurity)
+            assertEquals("chrome", decoded.realityFingerprint)
+            assertEquals("a65f93c1dbc5d54a", decoded.realityShortId)
+            assertEquals("/", decoded.realitySpiderX)
+            assertEquals(profile.realityPublicKey, decoded.realityPublicKey)
+            assertEquals(profile.sni, decoded.sni)
+            assertFalse(decoded.mux)
+            assertTrue(decoded.udp)
+            assertEquals("raw", decoded.transport)
+            if (protocol == "vless") {
+                assertEquals("xtls-rprx-vision", decoded.flow)
+            }
+        }
+    }
+
+    @Test
+    fun compactQrKeepsExplicitNonDefaults() {
+        val profile = AppConfig(
+            name = "vless-tls",
+            serverHost = "edge.example.com",
+            serverPort = "443",
+            protocol = "vless",
+            transport = "ws",
+            token = "00000000-0000-4000-8000-000000000000",
+            tls = true,
+            sni = "edge.example.com",
+            path = "/tunnel",
+            mux = true,
+            tunnelNetwork = "tcp",
+            udp = false,
+        )
+        val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
+        // Non-default security=tls must be explicit (generated default is reality).
+        assertTrue(
+            qrPayload.split('#', limit = 2).first().split('|').contains("t"),
+        )
+        assertTrue(qrPayload.contains("|yw"))
+        assertTrue(qrPayload.contains("|p/tunnel"))
+        assertTrue(qrPayload.contains("|m1"))
+        assertTrue(qrPayload.contains("|Ntcp"))
+
+        val decoded = ProfileUriCodec.decode(qrPayload).getOrThrow()
+        assertEquals("vless", decoded.protocol)
+        assertEquals("", decoded.tunnelSecurity)
+        assertTrue(decoded.tls)
+        assertEquals("ws", decoded.transport)
+        assertEquals("/tunnel", decoded.path)
+        assertTrue(decoded.mux)
+        assertEquals("tcp", decoded.tunnelNetwork)
+        assertFalse(decoded.udp)
+    }
+
+    @Test
     fun compactQrPayloadRoundTripsRealityAndEscapedName() {
         val profile = AppConfig(
             name = "edge|prod #1",
@@ -201,6 +292,8 @@ class ProfileDeepLinkTest {
         assertFalse(decoded.mux)
         assertEquals("tcp", decoded.tunnelNetwork)
         assertFalse(decoded.udp)
+        // chrome / / are generated defaults and may be omitted then refilled.
+        assertEquals("chrome", decoded.realityFingerprint)
     }
 
     @Test

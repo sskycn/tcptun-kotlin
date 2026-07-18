@@ -42,8 +42,14 @@ object ProfileUriCodec {
 
     /**
      * Compact text encoding for QR codes.
-     * Format: t1|&lt;proto&gt;|&lt;token&gt;|&lt;host&gt;|&lt;port&gt;|&lt;sec&gt;[|opts...][#name]
-     * Defaults are omitted; falls back to the plain URI when compact is not shorter.
+     * Format: t1|&lt;proto&gt;|&lt;token&gt;|&lt;host&gt;|&lt;port&gt;[|&lt;sec&gt;][|opts...][#name]
+     *
+     * Defaults mirror the fixed fields of `tcptun config &lt;protocol&gt;` client outbounds
+     * (raw + reality + chrome + spx=/ + network tcp,udp + mux off; vless also flow vision).
+     * Variable fields (credential, host/port, sni, pbk, short_id, …) are always encoded when set.
+     * Decode fills omitted defaults; does not depend on runtime zero-value behavior.
+     *
+     * Falls back to the plain URI when compact is not shorter.
      */
     fun encodeForQr(config: AppConfig): String? {
         val plain = encode(config) ?: return null
@@ -441,6 +447,17 @@ object ProfileUriCodec {
     private const val CompactDefaultPath = "/proxy"
     private const val CompactDefaultUpstream = "socks5"
     private const val CompactDefaultNetwork = "tcp,udp"
+    /**
+     * Fixed fields from `tcptun config <protocol>` client outbounds
+     * ([generatedRealityPair] / [tunnelOutboundTemplate] after Mux cleared):
+     * raw transport, tcp+udp, reality, chrome, spider_x=/, mux off.
+     * short_id / public_key / sni / credential are generated per run and are never defaulted.
+     */
+    private const val CompactDefaultSecurity = "r"
+    private const val CompactDefaultFingerprint = "chrome"
+    private const val CompactDefaultSpiderX = "/"
+    private const val CompactDefaultVlessFlow = "xtls-rprx-vision"
+    private val CompactSecurityCodes = setOf("n", "t", "r")
 
     private val CompactProtocols = mapOf(
         "native" to "n",
@@ -483,9 +500,13 @@ object ProfileUriCodec {
             escapeCompactField(token),
             escapeCompactField(host),
             port,
-            security,
         )
+        // security=reality is fixed in generated client outbounds.
+        if (security != CompactDefaultSecurity) {
+            parts += security
+        }
 
+        // transport.type=raw is fixed in the generator template.
         val transport = config.transport.trim().lowercase().ifBlank { "raw" }
         if (transport != "raw") {
             val transportCode = CompactTransports[transport] ?: return null
@@ -497,20 +518,34 @@ object ProfileUriCodec {
         }
 
         putCompactIfNotBlank(parts, "s", config.sni)
-        putCompactIfNotBlank(parts, "f", config.flow)
+        val flow = config.flow.trim()
+        if (flow.isNotBlank() && !(protocol == "vless" && flow == CompactDefaultVlessFlow)) {
+            parts += "f${escapeCompactField(flow)}"
+        }
         if (security == "r") {
             putCompactIfNotBlank(parts, "k", config.realityPublicKey)
+            // short_id is random in config generation — always encode when set.
             putCompactIfNotBlank(parts, "d", config.realityShortId)
-            putCompactIfNotBlank(parts, "g", config.realityFingerprint)
-            putCompactIfNotBlank(parts, "x", config.realitySpiderX)
+            val fingerprint = config.realityFingerprint.trim()
+            if (fingerprint.isNotBlank() &&
+                !fingerprint.equals(CompactDefaultFingerprint, ignoreCase = true)
+            ) {
+                parts += "g${escapeCompactField(fingerprint)}"
+            }
+            val spiderX = config.realitySpiderX.trim()
+            if (spiderX.isNotBlank() && spiderX != CompactDefaultSpiderX) {
+                parts += "x${escapeCompactField(spiderX)}"
+            }
         }
         if (config.tlsInsecure) parts += "i"
-        if (!config.mux) parts += "m0"
+        // Generated client sets Mux=nil (off). Only encode when enabled.
+        if (config.mux) parts += "m1"
         putCompactIfNotBlank(parts, "M", config.muxMode.trim().lowercase())
         if (config.muxMaxSessions > 0) parts += "S${config.muxMaxSessions}"
         if (config.muxMaxStreamsPerSession > 0) parts += "P${config.muxMaxStreamsPerSession}"
         if (config.muxWarmSpare > 0) parts += "W${config.muxWarmSpare}"
 
+        // network=[tcp,udp] is fixed on generated client outbounds.
         val networks = config.effectiveTunnelNetworks().joinToString(",")
         if (networks != CompactDefaultNetwork) {
             parts += "N${escapeCompactField(networks)}"
@@ -531,7 +566,7 @@ object ProfileUriCodec {
         val body = if (hashIndex >= 0) raw.substring(0, hashIndex) else raw
         val encodedName = if (hashIndex >= 0) raw.substring(hashIndex + 1) else ""
         val parts = body.split('|')
-        if (parts.size < 6) error("invalid compact profile payload")
+        if (parts.size < 5) error("invalid compact profile payload")
         if (parts[0] != CompactPayloadVersion) error("unsupported compact profile version")
 
         val protocol = CompactProtocolsByCode[parts[1]]
@@ -539,12 +574,18 @@ object ProfileUriCodec {
         val token = unescapeCompactField(parts[2])
         val host = unescapeCompactField(parts[3]).trim()
         val port = parts[4].trim()
-        val securityCode = parts[5]
         if (host.isBlank()) error("missing server host")
         val portNumber = port.toIntOrNull()
         if (portNumber == null || portNumber !in 1..65535) error("missing or invalid server port")
         if (protocol != "native" && token.isBlank()) error("missing $protocol credential")
-        if (securityCode !in setOf("n", "t", "r")) error("unsupported compact security: $securityCode")
+
+        var optionIndex = 5
+        // Omitting security means reality (generated client outbound default).
+        var securityCode = CompactDefaultSecurity
+        if (optionIndex < parts.size && parts[optionIndex] in CompactSecurityCodes) {
+            securityCode = parts[optionIndex]
+            optionIndex += 1
+        }
 
         var transport = "raw"
         var path = CompactDefaultPath
@@ -555,7 +596,8 @@ object ProfileUriCodec {
         var realityFingerprint = ""
         var realitySpiderX = ""
         var tlsInsecure = false
-        var mux = true
+        // Generated client clears Mux → off unless m1 is present.
+        var mux = false
         var muxMode = ""
         var muxMaxSessions = 0
         var muxMaxStreamsPerSession = 0
@@ -563,12 +605,13 @@ object ProfileUriCodec {
         var tunnelNetwork = ""
         var upstreamProtocol = CompactDefaultUpstream
 
-        for (index in 6 until parts.size) {
+        for (index in optionIndex until parts.size) {
             val part = parts[index]
             if (part.isEmpty()) error("invalid compact profile option")
             when {
                 part == "i" -> tlsInsecure = true
                 part == "m0" -> mux = false
+                part == "m1" || part == "m" -> mux = true
                 part.startsWith("y") -> {
                     val code = part.removePrefix("y")
                     transport = CompactTransportsByCode[code]
@@ -606,6 +649,16 @@ object ProfileUriCodec {
                 }
                 else -> error("unsupported compact profile option: $part")
             }
+        }
+
+        // Fill fixed generated defaults; never invent short_id/public_key/sni.
+        if (securityCode == "r") {
+            if (realityFingerprint.isBlank()) realityFingerprint = CompactDefaultFingerprint
+            if (realitySpiderX.isBlank()) realitySpiderX = CompactDefaultSpiderX
+        }
+        // Generated vless+reality clients always set vision flow.
+        if (protocol == "vless" && securityCode == "r" && flow.isBlank()) {
+            flow = CompactDefaultVlessFlow
         }
 
         val networks = parseNetworks(tunnelNetwork.ifBlank { null })
