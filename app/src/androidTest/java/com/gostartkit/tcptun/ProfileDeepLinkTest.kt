@@ -118,6 +118,92 @@ class ProfileDeepLinkTest {
     }
 
     @Test
+    fun compactQrPayloadRoundTripsAdvancedFieldsAndStaysShorter() {
+        AppConfig.Protocols.forEach { protocol ->
+            val profile = AppConfig(
+                id = "source-$protocol",
+                name = "$protocol compact edge",
+                serverHost = "edge.example.com",
+                serverPort = "443",
+                protocol = protocol,
+                transport = if (protocol == "vmess") "ws" else "raw",
+                token = "00000000-0000-4000-8000-000000000000",
+                tls = true,
+                sni = "edge.example.com",
+                path = if (protocol == "vmess") "/ray" else "/proxy",
+                mux = true,
+                muxMode = "group",
+                muxMaxSessions = 4,
+                muxMaxStreamsPerSession = 128,
+                muxWarmSpare = 1,
+                tunnelNetwork = "tcp,udp",
+                udp = true,
+            )
+            val plain = requireNotNull(ProfileUriCodec.encode(profile))
+            val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
+            assertTrue("$protocol should use compact QR payload", qrPayload.startsWith("t1|"))
+            assertTrue(
+                "$protocol compact payload should be shorter than plain URI",
+                qrPayload.length < plain.length,
+            )
+
+            val decoded = ProfileUriCodec.decode(qrPayload).getOrThrow()
+            assertEquals(protocol, decoded.protocol)
+            assertEquals(profile.serverHost, decoded.serverHost)
+            assertEquals(profile.serverPort, decoded.serverPort)
+            assertEquals(profile.token, decoded.token)
+            assertEquals(profile.sni, decoded.sni)
+            assertEquals(profile.transport, decoded.transport)
+            assertEquals(profile.mux, decoded.mux)
+            assertEquals(profile.muxMode, decoded.muxMode)
+            assertEquals(profile.muxMaxSessions, decoded.muxMaxSessions)
+            assertEquals(profile.muxMaxStreamsPerSession, decoded.muxMaxStreamsPerSession)
+            assertEquals(profile.muxWarmSpare, decoded.muxWarmSpare)
+            assertEquals(profile.name, decoded.name)
+            assertTrue(decoded.udp)
+            assertNull(decoded.validate())
+        }
+    }
+
+    @Test
+    fun compactQrPayloadRoundTripsRealityAndEscapedName() {
+        val profile = AppConfig(
+            name = "edge|prod #1",
+            serverHost = "www.microsoft.com",
+            serverPort = "443",
+            protocol = "vless",
+            transport = "raw",
+            token = "00000000-0000-4000-8000-000000000000",
+            tunnelSecurity = "reality",
+            sni = "www.microsoft.com",
+            flow = "xtls-rprx-vision",
+            realityPublicKey = "abcdefghijklmnopqrstuvwxyz012345",
+            realityShortId = "abcd1234",
+            realityFingerprint = "chrome",
+            realitySpiderX = "/",
+            mux = false,
+            tlsInsecure = false,
+            tunnelNetwork = "tcp",
+            udp = false,
+        )
+        val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
+        assertTrue(qrPayload.startsWith("t1|"))
+        assertTrue(qrPayload.contains("%7C") || qrPayload.contains("%23") || qrPayload.contains('#'))
+
+        val decoded = ProfileUriCodec.decode(qrPayload).getOrThrow()
+        assertEquals(profile.name, decoded.name)
+        assertEquals("reality", decoded.tunnelSecurity)
+        assertEquals(profile.realityPublicKey, decoded.realityPublicKey)
+        assertEquals(profile.realityShortId, decoded.realityShortId)
+        assertEquals(profile.realityFingerprint, decoded.realityFingerprint)
+        assertEquals(profile.realitySpiderX, decoded.realitySpiderX)
+        assertEquals(profile.flow, decoded.flow)
+        assertFalse(decoded.mux)
+        assertEquals("tcp", decoded.tunnelNetwork)
+        assertFalse(decoded.udp)
+    }
+
+    @Test
     fun everyGoProtocolUriRoundTripsAdvancedFields() {
         AppConfig.Protocols.forEach { protocol ->
             val profile = AppConfig(

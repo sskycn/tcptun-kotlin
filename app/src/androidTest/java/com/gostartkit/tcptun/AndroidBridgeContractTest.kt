@@ -522,11 +522,18 @@ class AndroidBridgeContractTest {
             token = "wechat-qr-secret",
             protocol = "native",
         )
-        val expectedUri = requireNotNull(ProfileUriCodec.encode(profile))
-        val bitmap = generateQrCodeBitmap(expectedUri, 768)
+        val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
+        assertTrue(qrPayload.startsWith("t1|"))
+        val bitmap = generateQrCodeBitmap(qrPayload, 768)
 
         WeChatQRCodeDetector.init(context)
-        assertEquals(expectedUri, WeChatQRCodeDetector.detectAndDecode(bitmap).firstOrNull())
+        val scanned = WeChatQRCodeDetector.detectAndDecode(bitmap).firstOrNull()
+        assertEquals(qrPayload, scanned)
+        val decoded = ProfileUriCodec.decode(requireNotNull(scanned)).getOrThrow()
+        assertEquals(profile.serverHost, decoded.serverHost)
+        assertEquals(profile.token, decoded.token)
+        assertEquals(profile.protocol, decoded.protocol)
+        assertEquals(profile.name, decoded.name)
     }
 
     @Test

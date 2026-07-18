@@ -1374,7 +1374,7 @@ private fun ProfileQrCodeDialog(
     onDismiss: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
-    val uri = remember(profile) { requireNotNull(ProfileUriCodec.encode(profile)) }
+    val uri = remember(profile) { requireNotNull(ProfileUriCodec.encodeForQr(profile)) }
     val bitmap = remember(uri) { generateQrCodeBitmap(uri, 768) }
     val profileMeta = listOf(profile.label(), profile.maskedAddress())
         .filter { it.isNotBlank() }

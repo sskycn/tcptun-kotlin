@@ -13,6 +13,7 @@ object ProfileUriCodec {
         val trimmed = raw.trim()
         return runCatching {
             when {
+                isCompactProfilePayload(trimmed) -> decodeCompactProfile(trimmed)
                 ProfileDeepLinkCodec.isSupportedLink(trimmed) -> {
                     val profileUri = ProfileDeepLinkCodec.decode(trimmed).getOrThrow()
                     decode(profileUri).getOrThrow()
@@ -37,6 +38,17 @@ object ProfileUriCodec {
             "vmess" -> encodeVMess(config)
             else -> null
         }
+    }
+
+    /**
+     * Compact text encoding for QR codes.
+     * Format: t1|&lt;proto&gt;|&lt;token&gt;|&lt;host&gt;|&lt;port&gt;|&lt;sec&gt;[|opts...][#name]
+     * Defaults are omitted; falls back to the plain URI when compact is not shorter.
+     */
+    fun encodeForQr(config: AppConfig): String? {
+        val plain = encode(config) ?: return null
+        val compact = encodeCompactProfile(config) ?: return plain
+        return if (compact.length < plain.length) compact else plain
     }
 
     private fun decodeAuthorityProfile(protocol: String, raw: String): AppConfig {
@@ -425,6 +437,253 @@ object ProfileUriCodec {
 
     private const val AndroidVpnInboundTag = "android-vpn"
     private const val TcptunUriVersion = "1"
+    private const val CompactPayloadVersion = "t1"
+    private const val CompactDefaultPath = "/proxy"
+    private const val CompactDefaultUpstream = "socks5"
+    private const val CompactDefaultNetwork = "tcp,udp"
+
+    private val CompactProtocols = mapOf(
+        "native" to "n",
+        "vless" to "v",
+        "trojan" to "t",
+        "vmess" to "m",
+    )
+    private val CompactProtocolsByCode = CompactProtocols.entries.associate { (protocol, code) -> code to protocol }
+    private val CompactTransports = mapOf(
+        "ws" to "w",
+        "h2" to "h",
+        "h3" to "q",
+    )
+    private val CompactTransportsByCode = CompactTransports.entries.associate { (transport, code) -> code to transport }
+
+    private fun isCompactProfilePayload(value: String): Boolean {
+        return value.startsWith("$CompactPayloadVersion|")
+    }
+
+    private fun encodeCompactProfile(config: AppConfig): String? {
+        if (config.rawConfigJson.isNotBlank()) return null
+        val protocol = config.protocol.trim().lowercase()
+        val protocolCode = CompactProtocols[protocol] ?: return null
+        val host = config.serverHost.trim()
+        val port = config.serverPort.trim()
+        if (host.isBlank() || port.isBlank()) return null
+        val portNumber = port.toIntOrNull() ?: return null
+        if (portNumber !in 1..65535) return null
+        val token = config.token.trim()
+        if (protocol != "native" && token.isBlank()) return null
+
+        val security = when {
+            config.tunnelSecurity == "reality" -> "r"
+            config.tls -> "t"
+            else -> "n"
+        }
+        val parts = mutableListOf(
+            CompactPayloadVersion,
+            protocolCode,
+            escapeCompactField(token),
+            escapeCompactField(host),
+            port,
+            security,
+        )
+
+        val transport = config.transport.trim().lowercase().ifBlank { "raw" }
+        if (transport != "raw") {
+            val transportCode = CompactTransports[transport] ?: return null
+            parts += "y$transportCode"
+            val path = config.path.trim().ifBlank { CompactDefaultPath }
+            if (path != CompactDefaultPath) {
+                parts += "p${escapeCompactField(path)}"
+            }
+        }
+
+        putCompactIfNotBlank(parts, "s", config.sni)
+        putCompactIfNotBlank(parts, "f", config.flow)
+        if (security == "r") {
+            putCompactIfNotBlank(parts, "k", config.realityPublicKey)
+            putCompactIfNotBlank(parts, "d", config.realityShortId)
+            putCompactIfNotBlank(parts, "g", config.realityFingerprint)
+            putCompactIfNotBlank(parts, "x", config.realitySpiderX)
+        }
+        if (config.tlsInsecure) parts += "i"
+        if (!config.mux) parts += "m0"
+        putCompactIfNotBlank(parts, "M", config.muxMode.trim().lowercase())
+        if (config.muxMaxSessions > 0) parts += "S${config.muxMaxSessions}"
+        if (config.muxMaxStreamsPerSession > 0) parts += "P${config.muxMaxStreamsPerSession}"
+        if (config.muxWarmSpare > 0) parts += "W${config.muxWarmSpare}"
+
+        val networks = config.effectiveTunnelNetworks().joinToString(",")
+        if (networks != CompactDefaultNetwork) {
+            parts += "N${escapeCompactField(networks)}"
+        }
+        val upstream = config.upstreamProtocol.trim().lowercase().ifBlank { CompactDefaultUpstream }
+        if (upstream != CompactDefaultUpstream) {
+            parts += "u${escapeCompactField(upstream)}"
+        }
+
+        val body = parts.joinToString("|")
+        val name = config.name.trim().ifBlank { host }
+        return if (name == host) body else "$body#${escapeCompactField(name)}"
+    }
+
+    private fun decodeCompactProfile(raw: String): AppConfig {
+        if (raw.length > MaxProfileUriLength) error("compact profile payload too long")
+        val hashIndex = raw.indexOf('#')
+        val body = if (hashIndex >= 0) raw.substring(0, hashIndex) else raw
+        val encodedName = if (hashIndex >= 0) raw.substring(hashIndex + 1) else ""
+        val parts = body.split('|')
+        if (parts.size < 6) error("invalid compact profile payload")
+        if (parts[0] != CompactPayloadVersion) error("unsupported compact profile version")
+
+        val protocol = CompactProtocolsByCode[parts[1]]
+            ?: error("unsupported compact protocol: ${parts[1]}")
+        val token = unescapeCompactField(parts[2])
+        val host = unescapeCompactField(parts[3]).trim()
+        val port = parts[4].trim()
+        val securityCode = parts[5]
+        if (host.isBlank()) error("missing server host")
+        val portNumber = port.toIntOrNull()
+        if (portNumber == null || portNumber !in 1..65535) error("missing or invalid server port")
+        if (protocol != "native" && token.isBlank()) error("missing $protocol credential")
+        if (securityCode !in setOf("n", "t", "r")) error("unsupported compact security: $securityCode")
+
+        var transport = "raw"
+        var path = CompactDefaultPath
+        var sni = ""
+        var flow = ""
+        var realityPublicKey = ""
+        var realityShortId = ""
+        var realityFingerprint = ""
+        var realitySpiderX = ""
+        var tlsInsecure = false
+        var mux = true
+        var muxMode = ""
+        var muxMaxSessions = 0
+        var muxMaxStreamsPerSession = 0
+        var muxWarmSpare = 0
+        var tunnelNetwork = ""
+        var upstreamProtocol = CompactDefaultUpstream
+
+        for (index in 6 until parts.size) {
+            val part = parts[index]
+            if (part.isEmpty()) error("invalid compact profile option")
+            when {
+                part == "i" -> tlsInsecure = true
+                part == "m0" -> mux = false
+                part.startsWith("y") -> {
+                    val code = part.removePrefix("y")
+                    transport = CompactTransportsByCode[code]
+                        ?: error("unsupported compact transport: $code")
+                }
+                part.startsWith("p") -> path = unescapeCompactField(part.removePrefix("p")).ifBlank { CompactDefaultPath }
+                part.startsWith("s") -> sni = unescapeCompactField(part.removePrefix("s"))
+                part.startsWith("f") -> flow = unescapeCompactField(part.removePrefix("f"))
+                part.startsWith("k") -> realityPublicKey = unescapeCompactField(part.removePrefix("k"))
+                part.startsWith("d") -> realityShortId = unescapeCompactField(part.removePrefix("d"))
+                part.startsWith("g") -> realityFingerprint = unescapeCompactField(part.removePrefix("g"))
+                part.startsWith("x") -> realitySpiderX = unescapeCompactField(part.removePrefix("x"))
+                part.startsWith("M") -> muxMode = unescapeCompactField(part.removePrefix("M")).trim().lowercase()
+                part.startsWith("S") -> {
+                    muxMaxSessions = part.removePrefix("S").toIntOrNull()
+                        ?: error("invalid mux max sessions")
+                }
+                part.startsWith("P") -> {
+                    muxMaxStreamsPerSession = part.removePrefix("P").toIntOrNull()
+                        ?: error("invalid mux max streams")
+                }
+                part.startsWith("W") -> {
+                    muxWarmSpare = part.removePrefix("W").toIntOrNull()
+                        ?: error("invalid mux warm spares")
+                }
+                part.startsWith("N") -> {
+                    tunnelNetwork = unescapeCompactField(part.removePrefix("N")).trim().lowercase()
+                    parseNetworks(tunnelNetwork) // validate
+                }
+                part.startsWith("u") -> {
+                    upstreamProtocol = unescapeCompactField(part.removePrefix("u"))
+                        .trim()
+                        .lowercase()
+                        .ifBlank { CompactDefaultUpstream }
+                }
+                else -> error("unsupported compact profile option: $part")
+            }
+        }
+
+        val networks = parseNetworks(tunnelNetwork.ifBlank { null })
+        val udp = if (networks != null) "udp" in networks else true
+        val name = if (encodedName.isNotBlank()) {
+            unescapeCompactField(encodedName).ifBlank { host }
+        } else {
+            host
+        }
+
+        return AppConfig(
+            id = UUID.randomUUID().toString(),
+            name = name,
+            serverHost = host,
+            serverPort = port,
+            protocol = protocol,
+            transport = transport,
+            token = token,
+            sni = sni,
+            path = path.ifBlank { CompactDefaultPath },
+            tls = securityCode == "t",
+            tlsInsecure = tlsInsecure,
+            tunnelSecurity = if (securityCode == "r") "reality" else "",
+            flow = flow,
+            realityPublicKey = realityPublicKey,
+            realityShortId = realityShortId,
+            realityFingerprint = realityFingerprint,
+            realitySpiderX = realitySpiderX,
+            mux = mux,
+            muxMode = muxMode,
+            muxMaxSessions = muxMaxSessions,
+            muxMaxStreamsPerSession = muxMaxStreamsPerSession,
+            muxWarmSpare = muxWarmSpare,
+            tunnelNetwork = networks?.joinToString(",").orEmpty(),
+            udp = udp,
+            upstreamProtocol = upstreamProtocol,
+        )
+    }
+
+    private fun putCompactIfNotBlank(parts: MutableList<String>, prefix: String, value: String) {
+        val trimmed = value.trim()
+        if (trimmed.isNotBlank()) parts += prefix + escapeCompactField(trimmed)
+    }
+
+    private fun escapeCompactField(value: String): String {
+        if (value.none { it == '%' || it == '|' || it == '#' }) return value
+        return buildString(value.length + 8) {
+            for (ch in value) {
+                when (ch) {
+                    '%' -> append("%25")
+                    '|' -> append("%7C")
+                    '#' -> append("%23")
+                    else -> append(ch)
+                }
+            }
+        }
+    }
+
+    private fun unescapeCompactField(value: String): String {
+        if (!value.contains('%')) return value
+        val out = StringBuilder(value.length)
+        var index = 0
+        while (index < value.length) {
+            val ch = value[index]
+            if (ch == '%' && index + 2 < value.length) {
+                val hex = value.substring(index + 1, index + 3)
+                val decoded = hex.toIntOrNull(16)
+                if (decoded != null) {
+                    out.append(decoded.toChar())
+                    index += 3
+                    continue
+                }
+            }
+            out.append(ch)
+            index += 1
+        }
+        return out.toString()
+    }
 
     private fun encodeComponent(value: String): String {
         return URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
