@@ -24,13 +24,26 @@ class VpnServiceLifecycleTest {
         val context = instrumentation.targetContext
         val originalSettings = TcptunVpnService.readRuntimeSettings(context)
         val socksPort = availablePort()
+        val directTarget = InetAddress.getAllByName("www.qq.com")
+            .first { it.address.size == 4 }
+            .hostAddress
+            .orEmpty()
         val profile = AppConfig(
             id = "vpn-service-lifecycle",
             name = "VPN service lifecycle",
             udp = false,
             rawConfigJson = """{
                 "outbounds":[{"tag":"direct","type":"direct","network":["tcp"]}],
-                "route":{"default_outbound":"direct"}
+                "route":{
+                    "default_outbound":"direct",
+                    "rules":[{
+                        "app":{
+                            "platforms":["android"],
+                            "attributes":{"packages":["${context.packageName}"]}
+                        },
+                        "outbound":"direct"
+                    }]
+                }
             }""".trimIndent(),
         )
 
@@ -57,10 +70,11 @@ class VpnServiceLifecycleTest {
                 assertTrue(TcptunState.logs.none { it.contains("restarting tcptun bridge transaction: underlying network") })
                 Socket().use { socket ->
                     socket.connect(InetSocketAddress(InetAddress.getByName("127.0.0.1"), socksPort), 2_000)
+                    socket.soTimeout = 5_000
+                    assertSocks5Connect(socket, directTarget, 80)
                 }
-
                 context.startService(TcptunVpnService.stopIntent(context))
-                waitUntil("VPN reaches Stopped") {
+                waitUntil("VPN reaches Stopped promptly", timeoutMillis = 5_000) {
                     TcptunState.status == "Stopped" && !HevSocks5Tunnel.isRunning()
                 }
                 assertEquals("Stopped", TcptunState.diagnostics.bridgeStatus)
@@ -91,5 +105,24 @@ class VpnServiceLifecycleTest {
 
     private fun availablePort(): Int = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use {
         it.localPort
+    }
+
+    private fun assertSocks5Connect(socket: Socket, host: String, port: Int) {
+        val input = socket.getInputStream()
+        val output = socket.getOutputStream()
+        output.write(byteArrayOf(0x05, 0x01, 0x00))
+        output.flush()
+        assertEquals(0x05, input.read())
+        assertEquals(0x00, input.read())
+
+        val address = InetAddress.getByName(host).address
+        val addressType = if (address.size == 4) 0x01 else 0x04
+        output.write(byteArrayOf(0x05, 0x01, 0x00, addressType.toByte()))
+        output.write(address)
+        output.write(byteArrayOf((port ushr 8).toByte(), port.toByte()))
+        output.flush()
+
+        assertEquals(0x05, input.read())
+        assertEquals("SOCKS direct connect failed", 0x00, input.read())
     }
 }

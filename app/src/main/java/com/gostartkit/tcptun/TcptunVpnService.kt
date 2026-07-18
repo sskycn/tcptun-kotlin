@@ -29,6 +29,7 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
@@ -120,8 +121,9 @@ class TcptunVpnService : VpnService() {
     private val lifecycleGeneration = AtomicInteger()
     private val monitorGeneration = AtomicInteger()
     private val bridgeRestartRequestGeneration = AtomicInteger()
+    private val teardownInProgress = AtomicBoolean()
     private val bridgeReadyWaiter = AtomicReference<BridgeReadyWaiter?>(null)
-    private var tun: android.os.ParcelFileDescriptor? = null
+    @Volatile private var tun: android.os.ParcelFileDescriptor? = null
     @Volatile private var bridgeConfigJson: String? = null
     @Volatile private var runningPlan: ProfileRunPlan? = null
     @Volatile private var monitorThread: Thread? = null
@@ -597,7 +599,7 @@ class TcptunVpnService : VpnService() {
             .onFailure { err -> TcptunState.appendLog("set underlying network failed: ${err.message}") }
         if (tun != null && !stopping) {
             requestDenseHealthCheck(reason)
-            if (!initialSelection) requestBridgeRestart(reason)
+            if (!initialSelection && TcptunState.status == "Running") requestBridgeRestart(reason)
         }
     }
 
@@ -606,7 +608,25 @@ class TcptunVpnService : VpnService() {
         ProfileStore.clearActive(this)
         TcptunState.clearTcping()
         lifecycleGeneration.incrementAndGet()
+        stopping = true
+        bridgeRestartRequestGeneration.incrementAndGet()
+        bridgeReadyWaiter.getAndSet(null)?.future?.completeExceptionally(
+            IllegalStateException("tcptun stop requested"),
+        )
+        // A health-triggered bridge/tunnel restart may already occupy the
+        // single lifecycle executor. Close the TUN at request time so Stop is
+        // never queued behind that work while traffic keeps the native
+        // runtimes waiting on each other.
+        closeTunForStop()
         lifecycleExecutor.execute { stopVpn() }
+    }
+
+    private fun closeTunForStop() {
+        val activeTun = tun ?: return
+        tun = null
+        TcptunState.appendLog("closing VPN TUN")
+        runCatching { activeTun.close() }
+            .onFailure { err -> TcptunState.appendLog("VPN TUN close failed: ${err.message}") }
     }
 
     override fun onRevoke() {
@@ -616,55 +636,64 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun stopVpn(setStopped: Boolean = true, clearSavedConfig: Boolean = true, stopSelfService: Boolean = true) {
-        if (stopping) return
+        if (!teardownInProgress.compareAndSet(false, true)) return
         stopping = true
-        bridgeRestartRequestGeneration.incrementAndGet()
-        if (setStopped) {
-            TcptunState.setStatus("Stopping")
-        }
-        stopBridgeMonitor()
-        unregisterUnderlyingNetworkCallback()
-        if (clearSavedConfig) {
-            clearDesiredRunningConfig(this)
-        }
-        runCatching { HevSocks5Tunnel.stop() }
-        appIdentityProvider.clear()
-        runCatching { tun?.close() }
-        tun = null
-        tunnelMtu = DEFAULT_VPN_MTU
-        tunnelUdpEnabled = true
-        tunnelSocksPort = DEFAULT_SOCKS_PORT
-        tunnelSocksUsername = ""
-        tunnelSocksPassword = ""
-        activeSocksPort = DEFAULT_SOCKS_PORT
-        activeSocksUsername = ""
-        activeSocksPassword = ""
-        runningPlan = null
-        stopBridge()
-        TcptunState.updateDiagnostics {
-            it.copy(
-                bridgeStatus = "Stopped",
-                bridgeActiveConnections = 0,
-                bridgeMuxSources = 0,
-                bridgeMuxSessions = 0,
-                bridgeMuxStreams = 0,
-                localProxyReachable = false,
-                localProxyAddress = defaultLocalSocksConnectAddr(),
-                localProxyPort = DEFAULT_SOCKS_PORT,
-                socketProtectEnabled = false,
-            )
-        }
-        if (setStopped) {
-            TcptunState.setStatus("Stopped")
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
-        }
-        if (stopSelfService) {
-            stopSelf()
+        try {
+            bridgeRestartRequestGeneration.incrementAndGet()
+            if (setStopped) {
+                TcptunState.setStatus("Stopping")
+            }
+            stopBridgeMonitor()
+            unregisterUnderlyingNetworkCallback()
+            if (clearSavedConfig) {
+                clearDesiredRunningConfig(this)
+            }
+            // Stop accepting packets before waiting for either userspace
+            // runtime. requestStopVpn normally closes it immediately, while
+            // this call covers teardown paths such as startup failures.
+            closeTunForStop()
+            TcptunState.appendLog("stopping tcptun bridge")
+            stopBridge()
+            TcptunState.appendLog("stopping hev-socks5-tunnel")
+            runCatching { HevSocks5Tunnel.stop() }
+                .onFailure { err -> TcptunState.appendLog("hev-socks5-tunnel stop failed: ${err.message}") }
+            appIdentityProvider.clear()
+            tunnelMtu = DEFAULT_VPN_MTU
+            tunnelUdpEnabled = true
+            tunnelSocksPort = DEFAULT_SOCKS_PORT
+            tunnelSocksUsername = ""
+            tunnelSocksPassword = ""
+            activeSocksPort = DEFAULT_SOCKS_PORT
+            activeSocksUsername = ""
+            activeSocksPassword = ""
+            runningPlan = null
+            TcptunState.updateDiagnostics {
+                it.copy(
+                    bridgeStatus = "Stopped",
+                    bridgeActiveConnections = 0,
+                    bridgeMuxSources = 0,
+                    bridgeMuxSessions = 0,
+                    bridgeMuxStreams = 0,
+                    localProxyReachable = false,
+                    localProxyAddress = defaultLocalSocksConnectAddr(),
+                    localProxyPort = DEFAULT_SOCKS_PORT,
+                    socketProtectEnabled = false,
+                )
+            }
+            if (setStopped) {
+                TcptunState.setStatus("Stopped")
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+            if (stopSelfService) {
+                stopSelf()
+            }
+        } finally {
+            teardownInProgress.set(false)
         }
     }
 
@@ -791,9 +820,11 @@ class TcptunVpnService : VpnService() {
         TcptunState.appendLog("restarting tcptun bridge transaction: $reason")
         TcptunState.updateDiagnostics { it.copy(lastRestartReason = reason, bridgeStatus = "Restarting") }
         try {
-            synchronized(tunnelLock) { HevSocks5Tunnel.stop() }
             stopBridge()
+            if (stopping) return
+            synchronized(tunnelLock) { HevSocks5Tunnel.stop() }
             Thread.sleep(BRIDGE_RESTART_DELAY_MS)
+            if (stopping) return
             startBridge(configJson, runningPlan ?: error("running profile plan is unavailable"))
             synchronized(tunnelLock) {
                 val hevConfig = writeHevConfig(
@@ -836,6 +867,7 @@ class TcptunVpnService : VpnService() {
             runCatching { HevSocks5Tunnel.stop() }
                 .onFailure { err -> TcptunState.appendLog("hev-socks5-tunnel stop failed: ${err.message}") }
             Thread.sleep(TUNNEL_RESTART_DELAY_MS)
+            if (stopping) return
             val hevConfig = writeHevConfig(
                 tunnelMtu,
                 tunnelUdpEnabled,
