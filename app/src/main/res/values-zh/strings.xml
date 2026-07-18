@@ -65,7 +65,7 @@
     <string name="flow_analysis_current">当前分析</string>
     <string name="flow_analysis_events">最近事件</string>
     <string name="flow_analysis_dropped">由于消费端繁忙，Bridge 已丢弃 %1$d 条较早事件。</string>
-    <string name="flow_analysis_select_hint">请在“设置 → 流量分析”中选择应用。</string>
+    <string name="flow_analysis_select_hint">请在上方选择要分析的应用。</string>
     <string name="flow_analysis_empty">尚未收到成功访问的目标。</string>
     <string name="flow_analysis_event_summary">%1$s · %2$s · 端口 %3$d · %4$s</string>
     <string name="flow_analysis_original_ip">原始 IP：%1$s</string>

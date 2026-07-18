@@ -66,7 +66,7 @@
     <string name="flow_analysis_current">Current analysis</string>
     <string name="flow_analysis_events">Recent events</string>
     <string name="flow_analysis_dropped">The bridge dropped %1$d older events because the consumer was busy.</string>
-    <string name="flow_analysis_select_hint">Select an app under Settings → Traffic analysis.</string>
+    <string name="flow_analysis_select_hint">Select an app above to start traffic analysis.</string>
     <string name="flow_analysis_empty">No successful destinations have been reported yet.</string>
     <string name="flow_analysis_event_summary">%1$s · %2$s · port %3$d · %4$s</string>
     <string name="flow_analysis_original_ip">Original IP: %1$s</string>

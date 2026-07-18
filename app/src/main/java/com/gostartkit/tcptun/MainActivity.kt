@@ -1880,11 +1880,6 @@ private fun SettingsPage(onBack: () -> Unit) {
     val vpnState by TcptunState.state.collectAsState()
     val diagnostics = vpnState.diagnostics
     val mtuOptions = listOf("1280", "1360", "1400", "1500")
-    val installedApps = remember { loadInstalledRouteApps(context) }
-    val flowAnalysisDisabled = stringResource(R.string.flow_analysis_disabled)
-    val flowAppOptions = listOf(flowAnalysisDisabled) + installedApps.map(InstalledRouteApp::displayName)
-    val selectedFlowApp = installedApps.firstOrNull { it.packageName == settings.flowAnalysisApp }?.displayName
-        ?: settings.flowAnalysisApp.ifBlank { flowAnalysisDisabled }
 
     fun saveSettings(next: RuntimeSettings) {
         val before = settings
@@ -1895,10 +1890,7 @@ private fun SettingsPage(onBack: () -> Unit) {
         failureThresholdText = settings.failureThreshold.toString()
         positiveTtlText = settings.positiveTtl
         negativeTtlText = settings.negativeTtl
-        if (settings.flowAnalysisApp != before.flowAnalysisApp) {
-            applyFlowAnalysisSettings(context)
-        }
-        if (settings.copy(flowAnalysisApp = before.flowAnalysisApp) != before) {
+        if (settings != before) {
             settingsDirty = true
         }
     }
@@ -1931,43 +1923,6 @@ private fun SettingsPage(onBack: () -> Unit) {
             contentPadding = ListContentPadding,
             verticalArrangement = Arrangement.spacedBy(ListItemSpacing),
         ) {
-            item {
-                SettingsCard {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        SectionTitle(
-                            icon = Icons.Rounded.Hub,
-                            title = stringResource(R.string.flow_analysis),
-                        )
-                        ChoiceRow(
-                            title = stringResource(R.string.flow_analysis_app),
-                            value = selectedFlowApp,
-                            options = flowAppOptions,
-                            enabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
-                        ) { selected ->
-                            val packageName = installedApps
-                                .firstOrNull { it.displayName == selected }
-                                ?.packageName
-                                .orEmpty()
-                            saveSettings(settings.copy(flowAnalysisApp = packageName))
-                        }
-                        Text(
-                            stringResource(R.string.flow_analysis_note),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-                            Text(
-                                stringResource(R.string.flow_analysis_android_10_required),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                    }
-                }
-            }
             item {
                 SettingsCard {
                     Column(
@@ -2146,7 +2101,6 @@ private fun SettingsPage(onBack: () -> Unit) {
                         DiagnosticsLine(stringResource(R.string.negative_ttl), settings.negativeTtl)
                         DiagnosticsLine(stringResource(R.string.socks_auth), if (settings.socksUsername.isNotEmpty() || settings.socksPassword.isNotEmpty()) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.vpn_traffic_mode), stringResource(R.string.tcp_udp))
-                        DiagnosticsLine(stringResource(R.string.flow_analysis_app), selectedFlowApp)
                         DiagnosticsLine(stringResource(R.string.diag_power_saving), if (diagnostics.powerSavingMode) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                     }
                 }
@@ -2159,11 +2113,25 @@ private fun SettingsPage(onBack: () -> Unit) {
 private fun FlowAnalysisPage(onBack: () -> Unit) {
     val context = LocalContext.current
     val runtimeState by TcptunState.state.collectAsState()
-    val selectedPackage = TcptunVpnService.readRuntimeSettings(context).flowAnalysisApp
+    var settings by remember { mutableStateOf(TcptunVpnService.readRuntimeSettings(context)) }
     val installedApps = remember { loadInstalledRouteApps(context) }
+    val flowAnalysisDisabled = stringResource(R.string.flow_analysis_disabled)
+    val flowAppOptions = listOf(flowAnalysisDisabled) + installedApps.map(InstalledRouteApp::displayName)
+    val selectedPackage = settings.flowAnalysisApp
     val selectedAppLabel = installedApps.firstOrNull { it.packageName == selectedPackage }?.displayName
-        ?: selectedPackage
+        ?: selectedPackage.ifBlank { flowAnalysisDisabled }
     val events = runtimeState.flowEvents.asReversed()
+
+    fun selectFlowApp(selected: String) {
+        val packageName = installedApps
+            .firstOrNull { it.displayName == selected }
+            ?.packageName
+            .orEmpty()
+        if (packageName == selectedPackage) return
+        TcptunVpnService.writeRuntimeSettings(context, settings.copy(flowAnalysisApp = packageName))
+        settings = TcptunVpnService.readRuntimeSettings(context)
+        applyFlowAnalysisSettings(context)
+    }
 
     LaunchedEffect(selectedPackage) {
         TcptunState.setFlowAnalysisApp(selectedPackage)
@@ -2193,12 +2161,20 @@ private fun FlowAnalysisPage(onBack: () -> Unit) {
                 SettingsCard {
                     Column(
                         modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         SectionTitle(Icons.Rounded.Hub, stringResource(R.string.flow_analysis_current))
-                        DiagnosticsLine(
-                            stringResource(R.string.flow_analysis_app),
-                            selectedAppLabel.ifBlank { stringResource(R.string.flow_analysis_disabled) },
+                        ChoiceRow(
+                            title = stringResource(R.string.flow_analysis_app),
+                            value = selectedAppLabel,
+                            options = flowAppOptions,
+                            enabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
+                            onChange = ::selectFlowApp,
+                        )
+                        Text(
+                            stringResource(R.string.flow_analysis_note),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         DiagnosticsLine(stringResource(R.string.flow_analysis_events), events.size.toString())
                         if (runtimeState.flowDroppedEvents > 0) {

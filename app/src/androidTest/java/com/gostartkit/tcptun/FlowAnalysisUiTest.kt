@@ -27,10 +27,10 @@ class FlowAnalysisUiTest {
     }
 
     @Test
-    fun settingsExposeSingleAppAnalysisSelector() {
+    fun flowAnalysisPageExposesSingleAppSelector() {
         val activity = composeRule.activity
         composeRule.onNodeWithContentDescription(activity.getString(R.string.more_options)).performClick()
-        composeRule.onNodeWithText(activity.getString(R.string.settings)).performClick()
+        composeRule.onNodeWithText(activity.getString(R.string.flow_analysis)).performClick()
 
         composeRule.onNodeWithText(activity.getString(R.string.flow_analysis)).assertIsDisplayed()
         composeRule.onNodeWithText(activity.getString(R.string.flow_analysis_app)).assertIsDisplayed()
