@@ -5,6 +5,8 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import com.google.zxing.qrcode.encoder.Encoder
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -141,10 +143,16 @@ class ProfileDeepLinkTest {
             )
             val plain = requireNotNull(ProfileUriCodec.encode(profile))
             val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
-            assertTrue("$protocol should use compact QR payload", qrPayload.startsWith("t1|"))
+            assertTrue("$protocol should use binary QR payload", qrPayload.startsWith("T2:"))
+            assertTrue(qrPayload.all { it in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:" })
             assertTrue(
                 "$protocol compact payload should be shorter than plain URI",
                 qrPayload.length < plain.length,
+            )
+            assertTrue(
+                "$protocol compact payload should use a lower QR version",
+                Encoder.encode(qrPayload, ErrorCorrectionLevel.M).version.versionNumber <
+                    Encoder.encode(plain, ErrorCorrectionLevel.M).version.versionNumber,
             )
 
             val decoded = ProfileUriCodec.decode(qrPayload).getOrThrow()
@@ -178,7 +186,7 @@ class ProfileDeepLinkTest {
                 token = "00000000-0000-4000-8000-000000000000",
                 tunnelSecurity = "reality",
                 sni = "example.com",
-                realityPublicKey = "abcdefghijklmnopqrstuvwxyz012345",
+                realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
                 realityShortId = "a65f93c1dbc5d54a",
                 realityFingerprint = "chrome",
                 realitySpiderX = "/",
@@ -188,19 +196,9 @@ class ProfileDeepLinkTest {
                 udp = true,
             )
             val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
-            assertTrue("$protocol payload", qrPayload.startsWith("t1|"))
-            val bodyParts = qrPayload.split('#', limit = 2).first().split('|')
-            // Fixed generated defaults omitted:
-            assertFalse("$protocol should omit security=reality", bodyParts.contains("r"))
-            assertFalse(qrPayload.contains("|gchrome"))
-            assertFalse(qrPayload.contains("|x/"))
-            assertFalse(qrPayload.contains("|m1"))
-            assertFalse(bodyParts.any { it.startsWith("N") })
-            assertFalse(qrPayload.contains("|fxtls"))
-            // Variable / required fields kept:
-            assertTrue(qrPayload.contains("|kabcdefghijklmnopqrstuvwxyz012345"))
-            assertTrue(qrPayload.contains("|da65f93c1dbc5d54a"))
-            assertTrue(qrPayload.contains("|sexample.com"))
+            assertTrue("$protocol payload", qrPayload.startsWith("T2:"))
+            assertTrue(qrPayload.all { it in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:" })
+            assertTrue(qrPayload.length < requireNotNull(ProfileUriCodec.encode(profile)).length)
 
             val decoded = ProfileUriCodec.decode(qrPayload).getOrThrow()
             assertEquals(protocol, decoded.protocol)
@@ -236,14 +234,7 @@ class ProfileDeepLinkTest {
             udp = false,
         )
         val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
-        // Non-default security=tls must be explicit (generated default is reality).
-        assertTrue(
-            qrPayload.split('#', limit = 2).first().split('|').contains("t"),
-        )
-        assertTrue(qrPayload.contains("|yw"))
-        assertTrue(qrPayload.contains("|p/tunnel"))
-        assertTrue(qrPayload.contains("|m1"))
-        assertTrue(qrPayload.contains("|Ntcp"))
+        assertTrue(qrPayload.startsWith("T2:"))
 
         val decoded = ProfileUriCodec.decode(qrPayload).getOrThrow()
         assertEquals("vless", decoded.protocol)
@@ -268,18 +259,18 @@ class ProfileDeepLinkTest {
             tunnelSecurity = "reality",
             sni = "www.microsoft.com",
             flow = "xtls-rprx-vision",
-            realityPublicKey = "abcdefghijklmnopqrstuvwxyz012345",
+            realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
             realityShortId = "abcd1234",
-            realityFingerprint = "chrome",
-            realitySpiderX = "/",
+            realityFingerprint = "firefox",
+            realitySpiderX = "/crawl",
             mux = false,
             tlsInsecure = false,
             tunnelNetwork = "tcp",
             udp = false,
         )
         val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
-        assertTrue(qrPayload.startsWith("t1|"))
-        assertTrue(qrPayload.contains("%7C") || qrPayload.contains("%23") || qrPayload.contains('#'))
+        assertTrue(qrPayload.startsWith("T2:"))
+        assertTrue(qrPayload.all { it in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:" })
 
         val decoded = ProfileUriCodec.decode(qrPayload).getOrThrow()
         assertEquals(profile.name, decoded.name)
@@ -292,8 +283,6 @@ class ProfileDeepLinkTest {
         assertFalse(decoded.mux)
         assertEquals("tcp", decoded.tunnelNetwork)
         assertFalse(decoded.udp)
-        // chrome / / are generated defaults and may be omitted then refilled.
-        assertEquals("chrome", decoded.realityFingerprint)
     }
 
     @Test

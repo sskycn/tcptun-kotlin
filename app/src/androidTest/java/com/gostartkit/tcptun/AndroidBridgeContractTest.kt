@@ -526,7 +526,7 @@ class AndroidBridgeContractTest {
             protocol = "native",
         )
         val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
-        assertTrue(qrPayload.startsWith("t1|"))
+        assertTrue(qrPayload.startsWith("T2:"))
         val bitmap = generateQrCodeBitmap(qrPayload, 768)
 
         val scanner = BarcodeScanning.getClient(
