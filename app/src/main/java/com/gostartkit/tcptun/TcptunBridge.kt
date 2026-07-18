@@ -21,6 +21,7 @@ internal fun validateTcptunConfig(configJson: String) {
 
 interface TcptunBridge {
     fun configure(configJson: String)
+    fun setTun(fd: Int, mtu: Int)
     fun start(disabledOutboundTags: List<String>): Long
     fun startOutbound(tag: String)
     fun stopOutbound(tag: String, force: Boolean, timeoutMillis: Long)
@@ -73,6 +74,15 @@ class ReflectionTcptunBridge : TcptunBridge {
 
     override fun configure(configJson: String) {
         invokeEngine("configure", arrayOf(String::class.java), configJson)
+    }
+
+    override fun setTun(fd: Int, mtu: Int) {
+        invokeEngine(
+            "setTun",
+            arrayOf(Long::class.javaPrimitiveType!!, Long::class.javaPrimitiveType!!),
+            fd.toLong(),
+            mtu.toLong(),
+        )
     }
 
     override fun start(disabledOutboundTags: List<String>): Long {

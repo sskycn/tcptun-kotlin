@@ -79,8 +79,15 @@ internal class AndroidAppIdentityProvider(
 
     fun identify(flowJson: String): String? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
-        val proxy = parseProxyFlowSource(flowJson) ?: return null
-        val original = resolveOriginalFlow(proxy) ?: return null
+        val flow = runCatching { JSONObject(flowJson) }.getOrNull() ?: return null
+        val network = flow.optString("network")
+        val source = parseProxyFlowSource(network, flow.optString("source")) ?: return null
+        val destination = parseProxyFlowSource(network, flow.optString("destination")) ?: return null
+        val original = OriginalFlow(
+            protocol = source.protocol,
+            local = InetSocketAddress(source.address, source.port),
+            remote = InetSocketAddress(destination.address, destination.port),
+        )
         val uid = runCatching {
             connectivity.getConnectionOwnerUid(original.protocol, original.local, original.remote)
         }.getOrDefault(Process.INVALID_UID)
@@ -90,24 +97,6 @@ internal class AndroidAppIdentityProvider(
 
     fun clear() {
         identities.clear()
-    }
-
-    private fun resolveOriginalFlow(proxy: ProxyFlowSource): OriginalFlow? {
-        val raw = runCatching {
-            HevSocks5Tunnel.resolveOriginalFlow(proxy.protocol, proxy.address.address, proxy.port)
-        }.getOrNull()?.takeIf { it.isNotBlank() } ?: return null
-        val json = runCatching { JSONObject(raw) }.getOrNull() ?: return null
-        val protocol = json.optInt("protocol")
-        if (protocol != OsConstants.IPPROTO_TCP && protocol != OsConstants.IPPROTO_UDP) return null
-        val local = socketAddress(json, "local") ?: return null
-        val remote = socketAddress(json, "remote") ?: return null
-        return OriginalFlow(protocol, local, remote)
-    }
-
-    private fun socketAddress(json: JSONObject, prefix: String): InetSocketAddress? {
-        val address = json.optString("${prefix}_address").takeIf(String::isNotBlank) ?: return null
-        val port = json.optInt("${prefix}_port", -1).takeIf { it in 0..65535 } ?: return null
-        return runCatching { InetSocketAddress(InetAddress.getByName(address), port) }.getOrNull()
     }
 
     private fun identityForUid(uid: Int): String? {

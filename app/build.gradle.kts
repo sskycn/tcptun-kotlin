@@ -88,11 +88,6 @@ android {
     buildFeatures {
         compose = true
     }
-    externalNativeBuild {
-        ndkBuild {
-            path = file("src/main/jni/Android.mk")
-        }
-    }
 }
 
 dependencies {

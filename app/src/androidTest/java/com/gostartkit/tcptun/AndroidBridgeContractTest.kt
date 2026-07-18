@@ -677,7 +677,9 @@ class AndroidBridgeContractTest {
         assertEquals("15m", autoOutbound.getString("negative_ttl"))
         val rules = root.getJSONObject("route").getJSONArray("rules")
         assertEquals("proxy", rules.getJSONObject(0).getString("outbound"))
+        assertEquals("tun", rules.getJSONObject(0).getJSONArray("inbound").getString(0))
         assertEquals("auto", rules.getJSONObject(1).getString("outbound"))
+        assertEquals("tun", rules.getJSONObject(1).getJSONArray("inbound").getString(0))
 
         assertEngineStarts(config)
     }
@@ -797,7 +799,7 @@ class AndroidBridgeContractTest {
         assertTrue(stored.has("outbounds"))
         assertTrue(stored.has("route"))
         assertEquals(
-            "android-vpn",
+            "tun",
             stored.getJSONObject("route").getJSONArray("rules")
                 .getJSONObject(0).getJSONArray("inbound").getString(0),
         )
@@ -817,7 +819,7 @@ class AndroidBridgeContractTest {
         assertFalse(proxy.getJSONObject("transport").has("tls"))
         val ruleInbound = prepared.getJSONObject("route").getJSONArray("rules")
             .getJSONObject(0).getJSONArray("inbound")
-        assertEquals("android-vpn", ruleInbound.getString(0))
+        assertEquals("tun", ruleInbound.getString(0))
 
         assertEngineStarts(prepared.toString())
     }
@@ -918,6 +920,17 @@ class AndroidBridgeContractTest {
     private fun withAvailableInboundPorts(config: String): String {
         val root = JSONObject(config)
         val inbounds = root.getJSONArray("inbounds")
+        val standaloneInboundTag = inbounds.getJSONObject(0).getString("tag")
+        root.optJSONObject("route")?.optJSONArray("rules")?.let { rules ->
+            for (ruleIndex in 0 until rules.length()) {
+                val tags = rules.optJSONObject(ruleIndex)?.optJSONArray("inbound") ?: continue
+                for (tagIndex in 0 until tags.length()) {
+                    if (tags.optString(tagIndex) == AndroidTunInboundTag) {
+                        tags.put(tagIndex, standaloneInboundTag)
+                    }
+                }
+            }
+        }
         val reservations = List(inbounds.length()) {
             ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
         }

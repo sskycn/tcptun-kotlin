@@ -15,15 +15,11 @@ import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.EOFException
-import java.net.DatagramPacket
-import java.net.DatagramSocket
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.nio.ByteBuffer
-import java.security.SecureRandom
 
 /**
  * Opt-in end-to-end test for a real profile. Pass the profile through the
@@ -33,7 +29,7 @@ import java.security.SecureRandom
 @RunWith(AndroidJUnit4::class)
 class LiveConnectivityTest {
     @Test
-    fun profileSupportsTcpUdpAndRepeatedVpnLifecycle() {
+    fun profileSupportsTcpAndRepeatedVpnLifecycle() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val encodedProfile = InstrumentationRegistry.getArguments().getString(PROFILE_ARGUMENT).orEmpty()
@@ -47,7 +43,6 @@ class LiveConnectivityTest {
         }
         assertNull("live profile is invalid", profile.validate())
         assertTrue("live profile must enable TCP", "tcp" in profile.effectiveTunnelNetworks())
-        assertTrue("live profile must enable UDP", "udp" in profile.effectiveTunnelNetworks())
 
         val originalSettings = TcptunVpnService.readRuntimeSettings(context)
         val socksPort = availablePort()
@@ -56,7 +51,7 @@ class LiveConnectivityTest {
         TcptunVpnService.writeRuntimeSettings(
             context,
             originalSettings.copy(
-                udpEnabled = true,
+                udpEnabled = false,
                 powerSavingMode = false,
                 socksPort = socksPort,
                 socksListenAll = false,
@@ -73,7 +68,9 @@ class LiveConnectivityTest {
                 TcptunState.clearLogs()
                 ContextCompat.startForegroundService(context, TcptunVpnService.startIntent(context, profile))
                 waitUntil("VPN cycle ${cycle + 1} reaches Running") { TcptunState.status == "Running" }
-                assertTrue("native packet engine is not running", HevSocks5Tunnel.isRunning())
+                waitUntil("native TUN bridge reaches Running") {
+                    TcptunState.diagnostics.bridgeStatus == "Running"
+                }
 
                 verifyExactOutbound(context)
                 assertEquals(
@@ -101,17 +98,15 @@ class LiveConnectivityTest {
                     443,
                     IO_TIMEOUT_MS,
                 )
-                verifyUdpDns(socksPort)
-
                 context.startService(TcptunVpnService.stopIntent(context))
                 waitUntil("VPN cycle ${cycle + 1} reaches Stopped", 15_000) {
-                    TcptunState.status == "Stopped" && !HevSocks5Tunnel.isRunning()
+                    TcptunState.status == "Stopped"
                 }
                 Thread.sleep(300)
             }
         } finally {
             context.startService(TcptunVpnService.stopIntent(context))
-            waitUntil("VPN cleanup", 10_000) { !HevSocks5Tunnel.isRunning() }
+            waitUntil("VPN cleanup", 10_000) { TcptunState.status != "Stopping" }
             TcptunVpnService.writeRuntimeSettings(context, originalSettings)
             runShell("appops set ${context.packageName} ACTIVATE_VPN default")
         }
@@ -163,51 +158,8 @@ class LiveConnectivityTest {
         }
     }
 
-    private fun verifyUdpDns(socksPort: Int) {
-        DatagramSocket(0, loopbackV4()).use { datagram ->
-            datagram.soTimeout = IO_TIMEOUT_MS
-            Socket().use { control ->
-                control.soTimeout = IO_TIMEOUT_MS
-                control.connect(InetSocketAddress(loopbackV4(), socksPort), CONNECT_TIMEOUT_MS)
-                val input = control.getInputStream()
-                val output = control.getOutputStream()
-                output.write(byteArrayOf(5, 1, 0))
-                output.flush()
-                val greeting = readExactly(input, 2)
-                check(greeting[0].toInt() == 5 && greeting[1].toInt() == 0) { "SOCKS authentication failed" }
-                output.write(socksRequest(command = 3, host = "127.0.0.1", port = datagram.localPort))
-                output.flush()
-                val relay = readSocksReply(control)
-                val relayAddress = if (relay.address.isAnyLocalAddress) loopbackV4() else relay.address
-
-                val transactionId = SecureRandom().nextInt(0x10000)
-                val dnsQuery = dnsQuery(transactionId, "example.com")
-                val header = socksUdpHeader("1.1.1.1", 53)
-                val payload = header + dnsQuery
-                datagram.send(DatagramPacket(payload, payload.size, relayAddress, relay.port))
-
-                val buffer = ByteArray(4096)
-                val response = DatagramPacket(buffer, buffer.size)
-                datagram.receive(response)
-                val dnsOffset = socksUdpPayloadOffset(response.data, response.length)
-                assertTrue("SOCKS UDP DNS response is too short", response.length - dnsOffset >= 12)
-                val responseId = ((response.data[dnsOffset].toInt() and 0xff) shl 8) or
-                    (response.data[dnsOffset + 1].toInt() and 0xff)
-                assertEquals("DNS transaction ID mismatch", transactionId, responseId)
-                val flags = ((response.data[dnsOffset + 2].toInt() and 0xff) shl 8) or
-                    (response.data[dnsOffset + 3].toInt() and 0xff)
-                assertTrue("DNS response bit is not set", flags and 0x8000 != 0)
-                assertEquals("DNS query returned an error", 0, flags and 0x000f)
-            }
-        }
-    }
-
     private fun socksRequest(command: Int, host: String, port: Int): ByteArray {
         return byteArrayOf(5, command.toByte(), 0) + socksAddress(host, port)
-    }
-
-    private fun socksUdpHeader(host: String, port: Int): ByteArray {
-        return byteArrayOf(0, 0, 0) + socksAddress(host, port)
     }
 
     private fun socksAddress(host: String, port: Int): ByteArray {
@@ -242,31 +194,6 @@ class LiveConnectivityTest {
         val portBytes = readExactly(input, 2)
         val port = ((portBytes[0].toInt() and 0xff) shl 8) or (portBytes[1].toInt() and 0xff)
         return InetSocketAddress(address, port)
-    }
-
-    private fun socksUdpPayloadOffset(bytes: ByteArray, length: Int): Int {
-        require(length >= 4 && bytes[2].toInt() == 0) { "invalid SOCKS UDP response" }
-        return when (bytes[3].toInt() and 0xff) {
-            1 -> 10
-            4 -> 22
-            3 -> 7 + (bytes[4].toInt() and 0xff)
-            else -> error("unsupported SOCKS UDP address type")
-        }
-    }
-
-    private fun dnsQuery(transactionId: Int, host: String): ByteArray {
-        val labels = host.split('.')
-        val question = labels.fold(ByteArray(0)) { result, label ->
-            result + byteArrayOf(label.length.toByte()) + label.toByteArray(Charsets.US_ASCII)
-        } + byteArrayOf(0, 0, 1, 0, 1)
-        return ByteBuffer.allocate(12).apply {
-            putShort(transactionId.toShort())
-            putShort(0x0100.toShort())
-            putShort(1)
-            putShort(0)
-            putShort(0)
-            putShort(0)
-        }.array() + question
     }
 
     private fun readExactly(input: java.io.InputStream, size: Int): ByteArray {

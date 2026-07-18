@@ -120,7 +120,7 @@
     <string name="negative_ttl">失败缓存时间</string>
     <string name="duration_error">请输入 120ms、10s 或 30m 等时长。</string>
     <string name="failure_threshold_error">请输入 1 到 100 之间的值。</string>
-    <string name="direct_first_note">对生成的配置先尝试 TCP 直连，直连失败时回落到隧道。UDP 仍使用隧道；完整 JSON 配置保留自身路由。</string>
+    <string name="direct_first_note">对生成的配置先尝试 TCP 直连，直连失败时回落到隧道；完整 JSON 配置保留自身路由。</string>
     <string name="route_management">路由管理</string>
     <string name="route_management_note">规则优先从上到下匹配，并可指定任意连接；未命中流量使用活动连接动态池。离开页面时应用变更。</string>
     <string name="route_rules_count">已启用 %1$d 条规则</string>
@@ -160,10 +160,12 @@
     <string name="seconds_value">%1$d 秒</string>
     <string name="recent_restart_reason">最近重启原因</string>
     <string name="transparent_proxy_settings">透明代理参数</string>
-    <string name="enable_udp_relay">启用 UDP 转发</string>
     <string name="power_saving_mode">省电模式</string>
-    <string name="power_saving_note">省电模式会关闭 UDP 转发，使用更长的 bridge 心跳/重试参数，并降低空闲健康检查频率。</string>
-    <string name="runtime_settings_note">编辑时会先保存设置；返回时如果有变更，正在运行的 VPN 会重启一次以应用设置。关闭 UDP 可用于判断断流是否和 QUIC/UDP 路径有关。</string>
+    <string name="power_saving_note">省电模式会使用更长的 bridge 心跳/重试参数，并降低空闲健康检查频率。</string>
+    <string name="runtime_settings_note">编辑时会先保存设置；返回时如果有变更，正在运行的 VPN 会重启一次以应用设置。</string>
+    <string name="native_tun_tcp_only_note">原生 TUN 第一阶段仅支持 TCP；UDP、DNS 拦截和 fake-IP 暂未提供。</string>
+    <string name="vpn_traffic_mode">VPN 流量模式</string>
+    <string name="tcp_only">仅 TCP</string>
     <string name="current_effective">当前生效</string>
     <string name="back">返回</string>
     <string name="logs">日志</string>
@@ -210,5 +212,5 @@
     <string name="field_udp">UDP</string>
     <string name="full_config_mode">完整 tcptun-go JSON</string>
     <string name="full_config_json">tcptun-go 配置 JSON</string>
-    <string name="full_config_note">保留 tcptun-go 支持的全部字段；运行时仅注入 android-vpn SOCKS5 入站以接收 VPN 流量。</string>
+    <string name="full_config_note">保留 tcptun-go 支持的全部字段；VPN 流量通过 tag 为 tun 的原生 TUN 入站进入，本地代理监听仍独立保留。</string>
 </resources>

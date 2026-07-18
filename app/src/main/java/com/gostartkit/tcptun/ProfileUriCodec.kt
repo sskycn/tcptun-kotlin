@@ -203,7 +203,7 @@ object ProfileUriCodec {
                     val rule = rules.optJSONObject(ruleIndex) ?: continue
                     val inboundTags = rule.optJSONArray("inbound") ?: continue
                     if (inboundTags.length() > 0) {
-                        rule.put("inbound", JSONArray().put(AndroidVpnInboundTag))
+                        rule.put("inbound", JSONArray().put(AndroidTunInboundTag))
                     }
                 }
             }
@@ -436,7 +436,6 @@ object ProfileUriCodec {
         return if (arr.length() > 0) arr.optString(0) else ""
     }
 
-    private const val AndroidVpnInboundTag = "android-vpn"
     private const val TcptunUriVersion = "1"
     private const val CompactPayloadPrefix = "T2:"
     private const val CompactDefaultPath = "/proxy"

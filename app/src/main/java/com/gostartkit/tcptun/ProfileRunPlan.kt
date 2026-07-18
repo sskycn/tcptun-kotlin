@@ -178,7 +178,7 @@ internal fun ProfileRunPlan.toBridgeJson(
     if (allowDirectFirst || activeRules.isNotEmpty()) {
         rules.put(
             JSONObject()
-                .put("inbound", JSONArray().put("local"))
+                .put("inbound", JSONArray().put(AndroidTunInboundTag))
                 .put("network", JSONArray().put("tcp"))
                 .put("domains", JSONArray().put("connectivitycheck.gstatic.com").put("cp.cloudflare.com"))
                 .put("outbound", BalancedOutboundTag),
@@ -195,7 +195,7 @@ internal fun ProfileRunPlan.toBridgeJson(
         }
         val route = rule.putMatchCondition(
             JSONObject()
-                .put("inbound", JSONArray().put("local"))
+                .put("inbound", JSONArray().put(AndroidTunInboundTag))
                 .put("outbound", targetTag),
         )
         if (targetProfile != null) {
@@ -206,7 +206,7 @@ internal fun ProfileRunPlan.toBridgeJson(
     if (allowDirectFirst) {
         rules.put(
             JSONObject()
-                .put("inbound", JSONArray().put("local"))
+                .put("inbound", JSONArray().put(AndroidTunInboundTag))
                 .put("network", JSONArray().put("tcp"))
                 .put("outbound", "auto"),
         )

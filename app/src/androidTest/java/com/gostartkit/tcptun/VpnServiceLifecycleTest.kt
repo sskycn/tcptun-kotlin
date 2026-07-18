@@ -8,7 +8,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.net.InetAddress
@@ -66,8 +65,9 @@ class VpnServiceLifecycleTest {
                 TcptunState.clearLogs()
                 ContextCompat.startForegroundService(context, TcptunVpnService.startIntent(context, profile))
                 waitUntil("VPN reaches Running") { TcptunState.status == "Running" }
-                assertTrue(HevSocks5Tunnel.isRunning())
-                assertTrue(TcptunState.logs.none { it.contains("restarting tcptun bridge transaction: underlying network") })
+                waitUntil("native TUN bridge reaches Running") {
+                    TcptunState.diagnostics.bridgeStatus == "Running"
+                }
                 Socket().use { socket ->
                     socket.connect(InetSocketAddress(InetAddress.getByName("127.0.0.1"), socksPort), 2_000)
                     socket.soTimeout = 5_000
@@ -75,14 +75,14 @@ class VpnServiceLifecycleTest {
                 }
                 context.startService(TcptunVpnService.stopIntent(context))
                 waitUntil("VPN reaches Stopped promptly", timeoutMillis = 5_000) {
-                    TcptunState.status == "Stopped" && !HevSocks5Tunnel.isRunning()
+                    TcptunState.status == "Stopped"
                 }
                 assertEquals("Stopped", TcptunState.diagnostics.bridgeStatus)
                 Thread.sleep(300)
             }
         } finally {
             context.startService(TcptunVpnService.stopIntent(context))
-            waitUntil("VPN cleanup", timeoutMillis = 10_000) { !HevSocks5Tunnel.isRunning() }
+            waitUntil("VPN cleanup", timeoutMillis = 10_000) { TcptunState.status != "Stopping" }
             TcptunVpnService.writeRuntimeSettings(context, originalSettings)
             runShell("appops set ${context.packageName} ACTIVATE_VPN default")
         }

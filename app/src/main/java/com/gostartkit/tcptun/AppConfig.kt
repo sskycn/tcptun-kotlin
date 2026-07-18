@@ -6,6 +6,7 @@ import org.json.JSONObject
 import java.util.UUID
 
 internal const val DefaultLocalProxyProtocol = "socks5"
+internal const val AndroidTunInboundTag = "tun"
 internal val LocalProxyProtocols = listOf(DefaultLocalProxyProtocol, "mixed")
 
 internal fun normalizeLocalProxyProtocol(value: String): String {
@@ -204,7 +205,7 @@ data class AppConfig(
         if (allowDirectFirst || activeManagedRules.any { it.outbound == ManagedRouteOutbound.Direct }) {
             rules.put(
                 JSONObject()
-                    .put("inbound", JSONArray().put("local"))
+                    .put("inbound", JSONArray().put(AndroidTunInboundTag))
                     .put("network", JSONArray().put("tcp"))
                     .put(
                         "domains",
@@ -219,7 +220,7 @@ data class AppConfig(
             rules.put(
                 rule.putMatchCondition(
                     JSONObject()
-                        .put("inbound", JSONArray().put("local"))
+                        .put("inbound", JSONArray().put(AndroidTunInboundTag))
                         .put("outbound", rule.outbound.tag),
                 ),
             )
@@ -227,7 +228,7 @@ data class AppConfig(
         if (allowDirectFirst) {
             rules.put(
                 JSONObject()
-                    .put("inbound", JSONArray().put("local"))
+                    .put("inbound", JSONArray().put(AndroidTunInboundTag))
                     .put("network", JSONArray().put("tcp"))
                     .put("outbound", "auto"),
             )
@@ -283,12 +284,16 @@ data class AppConfig(
             .put("username", socks5Username)
             .put("password", socks5Password)
         val inbounds = JSONArray().put(androidInbound)
-        val replacedInboundTags = mutableSetOf(AndroidVpnInboundTag)
+        val replacedInboundTags = mutableSetOf(AndroidVpnInboundTag, AndroidTunInboundTag)
         root.optJSONArray("inbounds")?.let { existing ->
             for (index in 0 until existing.length()) {
                 val inbound = existing.optJSONObject(index) ?: continue
                 val tag = inbound.optString("tag").trim()
-                if (tag == AndroidVpnInboundTag || inboundConflictsWithAndroidListener(inbound, listenHost, listenPort)) {
+                if (
+                    tag == AndroidVpnInboundTag ||
+                    tag == AndroidTunInboundTag ||
+                    inboundConflictsWithAndroidListener(inbound, listenHost, listenPort)
+                ) {
                     if (tag.isNotBlank()) replacedInboundTags += tag
                 } else {
                     migrateInboundToAddressArray(inbound)
@@ -433,7 +438,7 @@ data class AppConfig(
             for (tagIndex in 0 until tags.length()) {
                 val tag = tags.optString(tagIndex).trim()
                 if (tag.isBlank()) continue
-                remapped += if (tag in replacedTags) AndroidVpnInboundTag else tag
+                remapped += if (tag in replacedTags) AndroidTunInboundTag else tag
             }
             rule.put("inbound", JSONArray().apply { remapped.forEach(::put) })
         }

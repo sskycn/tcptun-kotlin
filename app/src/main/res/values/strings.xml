@@ -121,7 +121,7 @@
     <string name="negative_ttl">Negative TTL</string>
     <string name="duration_error">Use a duration such as 120ms, 10s, or 30m.</string>
     <string name="failure_threshold_error">Use a value from 1 to 100.</string>
-    <string name="direct_first_note">For generated profiles, try direct TCP connections first and fall back to the tunnel when direct access fails. UDP continues to use the tunnel. Full JSON profiles keep their own routing.</string>
+    <string name="direct_first_note">For generated profiles, try direct TCP connections first and fall back to the tunnel when direct access fails. Full JSON profiles keep their own routing.</string>
     <string name="route_management">Route management</string>
     <string name="route_management_note">Rules are evaluated first from top to bottom and can target any connection. Unmatched traffic uses the active dynamic pool. Changes apply when you leave this page.</string>
     <string name="route_rules_count">%1$d enabled rules</string>
@@ -161,10 +161,12 @@
     <string name="seconds_value">%1$ds</string>
     <string name="recent_restart_reason">Last restart reason</string>
     <string name="transparent_proxy_settings">Transparent proxy settings</string>
-    <string name="enable_udp_relay">Enable UDP relay</string>
     <string name="power_saving_mode">Power saving mode</string>
-    <string name="power_saving_note">Power saving mode disables UDP relay, uses longer bridge heartbeat/retry timers, and lowers idle health-check frequency.</string>
-    <string name="runtime_settings_note">Settings are saved while editing. When you go back, the running VPN restarts once to apply changed settings. Disable UDP to check whether disconnects are related to QUIC/UDP routing.</string>
+    <string name="power_saving_note">Power saving mode uses longer bridge heartbeat/retry timers and lowers idle health-check frequency.</string>
+    <string name="runtime_settings_note">Settings are saved while editing. When you go back, the running VPN restarts once to apply changed settings.</string>
+    <string name="native_tun_tcp_only_note">Native TUN phase 1 is TCP-only. UDP, DNS interception, and fake-IP are not available yet.</string>
+    <string name="vpn_traffic_mode">VPN traffic mode</string>
+    <string name="tcp_only">TCP-only</string>
     <string name="current_effective">Current effective settings</string>
     <string name="back">Back</string>
     <string name="logs">Logs</string>
@@ -211,5 +213,5 @@
     <string name="field_udp">UDP</string>
     <string name="full_config_mode">Full tcptun-go JSON</string>
     <string name="full_config_json">tcptun-go configuration JSON</string>
-    <string name="full_config_note">All tcptun-go fields are preserved. At runtime the app injects an android-vpn SOCKS5 inbound for VPN traffic.</string>
+    <string name="full_config_note">All tcptun-go fields are preserved. VPN traffic enters through the native TUN inbound tagged tun; the local proxy listener remains available separately.</string>
 </resources>

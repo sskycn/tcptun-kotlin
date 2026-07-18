@@ -5,9 +5,9 @@ This repository contains the Android VPN client for `sskycn/tcptun`.
 The Android app owns the VPN side:
 
 ```text
-Android apps -> VpnService TUN -> hev-socks5-tunnel
-             -> local SOCKS5/mixed proxy -> tcptun gomobile bridge
-             -> remote tcptun server
+Android apps -> VpnService TUN -> tcptun gomobile native TUN inbound
+                                  -> selected tcptun outbound
+Local clients -> SOCKS5/mixed listener -> selected tcptun outbound
 ```
 
 Android itself connects to the local proxy through `127.0.0.1:1080`. The listener protocol is
@@ -49,6 +49,7 @@ func (e *Engine) SetStatusCallback(cb StatusCallback)
 func (e *Engine) SetSocketProtector(p SocketProtector)
 func (e *Engine) SetAppIdentityProvider(provider AppIdentityProvider)
 func (e *Engine) Configure(configJson string) error
+func (e *Engine) SetTun(fd int64, mtu int64) error
 func (e *Engine) StartConfiguredSessionWithDisabledOutbounds(disabledTagsJson string) (int64, error)
 func (e *Engine) StartOutbound(tag string) error
 func (e *Engine) StopOutbound(tag string, force bool, timeoutMillis int64) error
@@ -78,8 +79,9 @@ member. Failed checks increase only that member's balance penalty; a successful
 check clears the penalty so a recovered member can immediately re-enter
 selection. `OutboundsStatusJSON` reports `health`, `failures`, `latency_ms`,
 `last_observed_at_ms`, and `last_succeeded_at_ms` without exposing credentials.
-The service first calls `Configure`, which has no runtime side effects, and then
-starts the configured session with every inactive profile tag disabled from its
+The service installs `SocketProtector` and `AppIdentityProvider`, calls `Configure`,
+passes a duplicate of the `VpnService` TUN to `SetTun`, and then starts the
+configured session with every inactive profile tag disabled from its
 first state. Later profile row taps call `StartOutbound` or `StopOutbound` without recreating the Android
 VPN interface or local listener. A rule bound to a stopped profile remains
 authoritative and becomes usable again as soon as that profile is started.
@@ -119,15 +121,15 @@ or with a non-increasing sequence and folds accepted events into one immutable
 `StateFlow` snapshot consumed by Compose.
 
 VPN startup is transactional: the service starts the Engine, waits for
-`state=core_ready`, establishes the Android TUN, then starts tun2socks. Only after
-all three steps succeed is `Running` published. Failure rolls back tun2socks, the
-TUN descriptor, and the Engine in reverse order. Stop and `onRevoke()` use the same
-idempotent teardown; `onDestroy()` finally calls `Engine.Close()`.
+`state=core_ready` after establishing the Android TUN and passing it to the Go
+Engine. Only then is `Running` published. The Engine owns only its duplicated fd;
+the service retains the original `ParcelFileDescriptor`. Stop first waits for
+`Engine.Stop()` and then closes the original descriptor. Every VPN restart creates
+a new TUN and calls `SetTun` again. `onDestroy()` finally calls `Engine.Close()`.
 
-`SetAppIdentityProvider` is backed by a native flow registry on Android 10 and
-newer. Before each SOCKS request, `hev-socks5-tunnel` associates its loopback
-source endpoint with the original TUN flow. The provider resolves that original
-TCP/UDP tuple with `ConnectivityManager.getConnectionOwnerUid`, maps the UID to
+`SetAppIdentityProvider` uses the source and destination tuple reported directly
+by the native TUN inbound on Android 10 and newer. The provider resolves that
+TCP tuple with `ConnectivityManager.getConnectionOwnerUid`, maps the UID to
 installed package names, and returns a local-only app identity to tcptun-go.
 Managed app rules use the multi-valued `attributes.packages` matcher so shared
 UID packages are handled conservatively. On Android 9 and older, app identity is
@@ -138,8 +140,8 @@ default routes and lets tcptun-go select an outbound per flow.
 Profiles can also store a complete strict tcptun-go JSON document. The app
 preserves all supported `log`, `inbounds`, `outbounds`, `route`, and `dns`
 fields, removes the retired top-level `discovery` field from older saved
-configs, then injects/replaces one `android-vpn` SOCKS5 inbound at runtime so
-the TUN adapter uses the configured local port, UDP mode, and auth.
+configs. VPN rules use the platform inbound tag `tun`; a separate `android-vpn`
+SOCKS5/mixed inbound remains available for local or LAN proxy clients.
 
 Build the AAR through this Kotlin project wrapper:
 
@@ -283,18 +285,19 @@ vless://00000000-0000-4000-8000-000000000000@203.0.113.10:443?security=reality&e
 - Independently started local profiles with add, edit, delete, and share actions; active structured profiles form one dynamically weighted, session-affine pool.
 - URI import/export for native, VLESS, VMess, and Trojan profiles, including REALITY `pbk`, `sid`, `fp`, `spx`, `flow`, and `sni`.
 - Protocol and transport selection UI.
-- Optional token, SNI, path, TLS, TLS insecure, REALITY short ID, mux, upstream protocol, and UDP UI.
+- Optional token, SNI, path, TLS, TLS insecure, REALITY short ID, mux, and upstream protocol UI.
 - IPv4/IPv6 default routes send all VPN traffic into tcptun-go; explicit rules run first and unmatched traffic uses the balanced active-profile pool.
 - Status display: `Stopped`, `Starting`, `Running`, `Error`.
 - Recent log display.
-- Native `hev-socks5-tunnel` forwarding from TUN to local SOCKS5/mixed proxy.
+- Native tcptun-go TUN forwarding without tun2socks.
 - Runtime reflection bridge to gomobile AAR.
-- In-app diagnostics for VPN, underlying network, bridge state, local proxy reachability, MTU, UDP, and socket protect.
-- Runtime MTU and UDP test-mode settings.
+- In-app diagnostics for VPN, underlying network, bridge state, local proxy reachability, MTU, TCP-only mode, and socket protect.
+- Runtime MTU settings.
 - Strict tcptun-go topology config and cached TCP direct-first routing.
-- Android 10+ per-app outbound routing for TCP and UDP flows.
+- Android 10+ per-app outbound routing for TCP flows.
 - Import, edit, persist, share, and run complete strict tcptun-go JSON profiles.
 
 ## Not yet supported
 
 - Building the Go AAR from Gradle automatically.
+- Native TUN UDP forwarding, DNS interception, and fake-IP.
