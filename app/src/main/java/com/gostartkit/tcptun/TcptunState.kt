@@ -43,6 +43,9 @@ data class TcptunRuntimeState(
     val tcping: TcpingProgress = TcpingProgress(),
     val profileHealth: Map<String, ProfileHealth> = emptyMap(),
     val logs: List<String> = emptyList(),
+    val flowAnalysisApp: String = "",
+    val flowEvents: List<FlowAnalysisEvent> = emptyList(),
+    val flowDroppedEvents: Long = 0,
     val profileStateRevision: Long = 0,
 )
 
@@ -125,6 +128,7 @@ internal data class BridgeStatusEvent(
 
 object TcptunState {
     private const val MAX_LOGS = 80
+    private const val MAX_FLOW_EVENTS = 256
     private const val LOG_TAG = "TcpTun"
 
     private val _state = MutableStateFlow(TcptunRuntimeState())
@@ -138,6 +142,8 @@ object TcptunState {
     private var bridgeEpoch = 0L
     private var bridgeSessionId = -1L
     private var bridgeSequence = -1L
+    private var flowSessionId = -1L
+    private var flowSequence = -1L
     private var tcpingRequestId = 0L
 
     @Synchronized
@@ -145,6 +151,8 @@ object TcptunState {
         bridgeEpoch += 1
         bridgeSessionId = -1L
         bridgeSequence = -1L
+        flowSessionId = -1L
+        flowSequence = -1L
         val current = _state.value
         _state.value = current.copy(
             diagnostics = current.diagnostics.copy(
@@ -164,6 +172,47 @@ object TcptunState {
             ),
         )
         return bridgeEpoch
+    }
+
+    @Synchronized
+    fun setFlowAnalysisApp(packageName: String) {
+        val normalized = packageName.trim()
+        val current = _state.value
+        if (normalized == current.flowAnalysisApp) return
+        flowSessionId = -1L
+        flowSequence = -1L
+        _state.value = current.copy(
+            flowAnalysisApp = normalized,
+            flowEvents = emptyList(),
+            flowDroppedEvents = 0,
+        )
+    }
+
+    @Synchronized
+    internal fun applyBridgeFlowEvent(epoch: Long, eventJson: String): FlowAnalysisEvent? {
+        if (epoch != bridgeEpoch) return null
+        val event = parseFlowAnalysisEvent(eventJson) ?: return null
+        val current = _state.value
+        if (current.flowAnalysisApp.isBlank() || event.appId != current.flowAnalysisApp) return null
+        if (
+            event.sessionId < flowSessionId ||
+            (event.sessionId == flowSessionId && event.sequence <= flowSequence)
+        ) {
+            return null
+        }
+        flowSessionId = event.sessionId
+        flowSequence = event.sequence
+        _state.value = current.copy(
+            flowEvents = (current.flowEvents + event).takeLast(MAX_FLOW_EVENTS),
+            flowDroppedEvents = maxOf(current.flowDroppedEvents, event.droppedEvents),
+        )
+        return event
+    }
+
+    @Synchronized
+    fun clearFlowEvents() {
+        val current = _state.value
+        _state.value = current.copy(flowEvents = emptyList(), flowDroppedEvents = 0)
     }
 
     @Synchronized

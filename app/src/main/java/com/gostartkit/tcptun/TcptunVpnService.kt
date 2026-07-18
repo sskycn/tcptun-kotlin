@@ -46,11 +46,15 @@ data class RuntimeSettings(
     val negativeTtl: String = TcptunVpnService.DEFAULT_NEGATIVE_TTL,
     val socksUsername: String = "",
     val socksPassword: String = "",
+    val flowAnalysisApp: String = "",
 )
 
 private val DurationPattern = Regex("^(?:\\d+(?:\\.\\d+)?(?:ns|us|µs|μs|ms|s|m|h))+$")
+private val AndroidPackageNamePattern = Regex("^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+$")
 
 internal fun isValidDuration(value: String): Boolean = DurationPattern.matches(value.trim())
+internal fun normalizeFlowAnalysisApp(value: String): String =
+    value.trim().takeIf(AndroidPackageNamePattern::matches).orEmpty()
 
 private data class UpstreamProbeTarget(
     val label: String,
@@ -116,6 +120,7 @@ class TcptunVpnService : VpnService() {
     private val bridgeReadyWaiter = AtomicReference<BridgeReadyWaiter?>(null)
     @Volatile private var tun: android.os.ParcelFileDescriptor? = null
     @Volatile private var bridgeConfigJson: String? = null
+    @Volatile private var activeBridgeEpoch = 0L
     @Volatile private var runningPlan: ProfileRunPlan? = null
     @Volatile private var monitorThread: Thread? = null
     private val connectivity by lazy { getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager }
@@ -164,6 +169,7 @@ class TcptunVpnService : VpnService() {
             }
             ACTION_TCPING_OUTBOUNDS -> requestOutboundTcping(intent)
             ACTION_APPLY_RUNTIME_SETTINGS -> requestRuntimeSettingsRestart("runtime settings changed")
+            ACTION_UPDATE_FLOW_ANALYSIS -> requestFlowAnalysisUpdate()
             ACTION_REFRESH_CLIENT_IPS -> refreshBridgeClientIps()
             else -> requestRestoreLastRunningConfig()
         }
@@ -660,6 +666,7 @@ class TcptunVpnService : VpnService() {
         mtu: Int,
     ) {
         val epoch = TcptunState.beginBridgeSession()
+        activeBridgeEpoch = epoch
         val waiter = BridgeReadyWaiter(epoch)
         bridgeReadyWaiter.getAndSet(waiter)?.future?.completeExceptionally(
             IllegalStateException("superseded by a newer tcptun start"),
@@ -668,6 +675,7 @@ class TcptunVpnService : VpnService() {
         bridge.setStatusCallback { eventJson -> onBridgeStatusEvent(epoch, eventJson) }
         bridge.setSocketProtector { fd -> protect(fd) }
         bridge.setAppIdentityProvider(appIdentityProvider::identify)
+        configureFlowAnalysis(readRuntimeSettings(this).flowAnalysisApp, epoch)
         TcptunState.applyBridgeStatusEvent(epoch, bridge.statusJson())
         val sessionId = synchronized(bridgeLock) {
             bridge.configure(configJson)
@@ -694,6 +702,20 @@ class TcptunVpnService : VpnService() {
             bridgeConfigJson = null
             runCatching { bridge.stop() }
                 .onFailure { err -> TcptunState.appendLog("tcptun engine stop failed: ${err.message}") }
+        }
+        activeBridgeEpoch = 0L
+    }
+
+    private fun configureFlowAnalysis(packageName: String, epoch: Long) {
+        val normalized = normalizeFlowAnalysisApp(packageName)
+        TcptunState.setFlowAnalysisApp(normalized)
+        appIdentityProvider.setFlowAnalysisApp(normalized)
+        if (normalized.isBlank()) {
+            bridge.setFlowAnalysisApp("")
+            bridge.clearFlowCallback()
+        } else {
+            bridge.setFlowCallback { eventJson -> TcptunState.applyBridgeFlowEvent(epoch, eventJson) }
+            bridge.setFlowAnalysisApp(normalized)
         }
     }
 
@@ -799,6 +821,27 @@ class TcptunVpnService : VpnService() {
             name = "TcptunRuntimeSettingsApply"
             isDaemon = true
             start()
+        }
+    }
+
+    private fun requestFlowAnalysisUpdate() {
+        lifecycleExecutor.execute {
+            val packageName = readRuntimeSettings(this).flowAnalysisApp
+            val epoch = activeBridgeEpoch
+            TcptunState.setFlowAnalysisApp(packageName)
+            if (epoch <= 0 || bridgeConfigJson == null || tun == null || stopping) {
+                TcptunState.appendLog("flow analysis saved: ${packageName.ifBlank { "disabled" }}")
+                return@execute
+            }
+            runCatching {
+                synchronized(bridgeLock) {
+                    configureFlowAnalysis(packageName, epoch)
+                }
+            }.onSuccess {
+                TcptunState.appendLog("flow analysis switched without VPN restart: ${packageName.ifBlank { "disabled" }}")
+            }.onFailure { err ->
+                TcptunState.appendLog("flow analysis update failed: ${err.message}")
+            }
         }
     }
 
@@ -1345,6 +1388,7 @@ class TcptunVpnService : VpnService() {
         const val ACTION_UPDATE_OUTBOUNDS = "com.tcptun.client.UPDATE_OUTBOUNDS"
         const val ACTION_TCPING_OUTBOUNDS = "com.tcptun.client.TCPING_OUTBOUNDS"
         const val ACTION_APPLY_RUNTIME_SETTINGS = "com.tcptun.client.APPLY_RUNTIME_SETTINGS"
+        const val ACTION_UPDATE_FLOW_ANALYSIS = "com.tcptun.client.UPDATE_FLOW_ANALYSIS"
         const val ACTION_REFRESH_CLIENT_IPS = "com.tcptun.client.REFRESH_CLIENT_IPS"
         const val EXTRA_CONFIG = "config"
         private const val EXTRA_PROFILE_PLAN = "profilePlan"
@@ -1404,6 +1448,7 @@ class TcptunVpnService : VpnService() {
         private const val KEY_RUNTIME_NEGATIVE_TTL = "runtimeNegativeTtl"
         private const val KEY_RUNTIME_SOCKS_USERNAME = "runtimeSocksUsername"
         private const val KEY_RUNTIME_SOCKS_PASSWORD = "runtimeSocksPassword"
+        private const val KEY_RUNTIME_FLOW_ANALYSIS_APP = "runtimeFlowAnalysisApp"
         @Volatile private var denseHealthCheckUntilMs = 0L
         private val UPSTREAM_PROBE_TARGETS = listOf(
             UpstreamProbeTarget("Google 204", "connectivitycheck.gstatic.com", path = "/generate_204", expectedStatus = 204),
@@ -1454,6 +1499,10 @@ class TcptunVpnService : VpnService() {
             return Intent(context, TcptunVpnService::class.java).setAction(ACTION_APPLY_RUNTIME_SETTINGS)
         }
 
+        fun updateFlowAnalysisIntent(context: Context): Intent {
+            return Intent(context, TcptunVpnService::class.java).setAction(ACTION_UPDATE_FLOW_ANALYSIS)
+        }
+
         fun tcpingOutboundsIntent(
             context: Context,
             requestId: Long,
@@ -1502,6 +1551,9 @@ class TcptunVpnService : VpnService() {
                     .orEmpty().trim().takeIf(::isValidDuration).orEmpty().ifBlank { DEFAULT_NEGATIVE_TTL },
                 socksUsername = prefs.getString(KEY_RUNTIME_SOCKS_USERNAME, "").orEmpty(),
                 socksPassword = prefs.getString(KEY_RUNTIME_SOCKS_PASSWORD, "").orEmpty(),
+                flowAnalysisApp = normalizeFlowAnalysisApp(
+                    prefs.getString(KEY_RUNTIME_FLOW_ANALYSIS_APP, "").orEmpty(),
+                ),
             )
         }
 
@@ -1513,6 +1565,7 @@ class TcptunVpnService : VpnService() {
             val normalizedFailureThreshold = settings.failureThreshold.coerceIn(1, MAX_FAILURE_THRESHOLD)
             val normalizedPositiveTtl = settings.positiveTtl.trim().takeIf(::isValidDuration) ?: DEFAULT_POSITIVE_TTL
             val normalizedNegativeTtl = settings.negativeTtl.trim().takeIf(::isValidDuration) ?: DEFAULT_NEGATIVE_TTL
+            val normalizedFlowAnalysisApp = normalizeFlowAnalysisApp(settings.flowAnalysisApp)
             val normalizedSettings = settings.copy(
                 powerSavingMode = normalizedPowerSavingMode,
                 socksPort = normalizedSocksPort,
@@ -1525,6 +1578,7 @@ class TcptunVpnService : VpnService() {
                 negativeTtl = normalizedNegativeTtl,
                 socksUsername = settings.socksUsername,
                 socksPassword = settings.socksPassword,
+                flowAnalysisApp = normalizedFlowAnalysisApp,
             )
             context.applicationContext.getSharedPreferences(RUNTIME_PREFS, Context.MODE_PRIVATE)
                 .edit()
@@ -1541,7 +1595,9 @@ class TcptunVpnService : VpnService() {
                 .putString(KEY_RUNTIME_NEGATIVE_TTL, normalizedNegativeTtl)
                 .putString(KEY_RUNTIME_SOCKS_USERNAME, settings.socksUsername)
                 .putString(KEY_RUNTIME_SOCKS_PASSWORD, settings.socksPassword)
+                .putString(KEY_RUNTIME_FLOW_ANALYSIS_APP, normalizedFlowAnalysisApp)
                 .apply()
+            TcptunState.setFlowAnalysisApp(normalizedFlowAnalysisApp)
             TcptunState.updateDiagnostics {
                 it.copy(
                     mtu = settings.mtu.coerceIn(1280, 1500),
@@ -1550,7 +1606,7 @@ class TcptunVpnService : VpnService() {
                     localProxyPort = normalizedSocksPort,
                 )
             }
-            TcptunState.appendLog("runtime settings saved: proxy=${normalizedSettings.localProxyProtocol}://${localSocksListenAddr(normalizedSettings)} mtu=${normalizedSettings.mtu} direct-first=${normalizedSettings.directFirst} probe-timeout=${normalizedSettings.probeTimeout} failure-threshold=${normalizedSettings.failureThreshold} positive-ttl=${normalizedSettings.positiveTtl} negative-ttl=${normalizedSettings.negativeTtl}")
+            TcptunState.appendLog("runtime settings saved: proxy=${normalizedSettings.localProxyProtocol}://${localSocksListenAddr(normalizedSettings)} mtu=${normalizedSettings.mtu} direct-first=${normalizedSettings.directFirst} probe-timeout=${normalizedSettings.probeTimeout} failure-threshold=${normalizedSettings.failureThreshold} positive-ttl=${normalizedSettings.positiveTtl} negative-ttl=${normalizedSettings.negativeTtl} flow-analysis=${normalizedFlowAnalysisApp.ifBlank { "disabled" }}")
         }
 
         fun localSocksListenAddr(settings: RuntimeSettings): String {

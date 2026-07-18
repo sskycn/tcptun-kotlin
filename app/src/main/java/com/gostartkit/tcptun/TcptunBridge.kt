@@ -39,6 +39,9 @@ interface TcptunBridge {
     fun clearSocketProtector()
     fun setAppIdentityProvider(onIdentify: (String) -> String?)
     fun clearAppIdentityProvider()
+    fun setFlowAnalysisApp(packageName: String)
+    fun setFlowCallback(onFlow: (String) -> Unit)
+    fun clearFlowCallback()
 }
 
 /** Owns exactly one gomobile Engine for the lifetime of one VpnService. */
@@ -71,6 +74,7 @@ class ReflectionTcptunBridge : TcptunBridge {
     private var statusCallback: Any? = null
     private var socketProtector: Any? = null
     private var appIdentityProvider: Any? = null
+    private var flowCallback: Any? = null
 
     override fun configure(configJson: String) {
         invokeEngine("configure", arrayOf(String::class.java), configJson)
@@ -156,6 +160,7 @@ class ReflectionTcptunBridge : TcptunBridge {
         statusCallback = null
         socketProtector = null
         appIdentityProvider = null
+        flowCallback = null
     }
 
     override fun status(): String = (invokeEngine("status") as? String).orEmpty()
@@ -224,6 +229,28 @@ class ReflectionTcptunBridge : TcptunBridge {
     override fun clearAppIdentityProvider() {
         clearCallback("androidbridge.AppIdentityProvider", "setAppIdentityProvider")
         appIdentityProvider = null
+    }
+
+    override fun setFlowAnalysisApp(packageName: String) {
+        invokeEngine("setFlowAnalysisApp", arrayOf(String::class.java), packageName.trim())
+    }
+
+    override fun setFlowCallback(onFlow: (String) -> Unit) {
+        val callbackClass = callbackClass("androidbridge.FlowCallback")
+            ?: throw IllegalStateException("androidbridge.FlowCallback is unavailable. Rebuild app/libs/androidbridge.aar.")
+        val callback = Proxy.newProxyInstance(callbackClass.classLoader, arrayOf(callbackClass)) { _, method, args ->
+            if (method.name.equals("onFlow", ignoreCase = true) && !args.isNullOrEmpty()) {
+                onFlow(args[0].toString())
+            }
+            null
+        }
+        flowCallback = callback
+        invokeEngine("setFlowCallback", arrayOf(callbackClass), callback)
+    }
+
+    override fun clearFlowCallback() {
+        clearCallback("androidbridge.FlowCallback", "setFlowCallback")
+        flowCallback = null
     }
 
     private fun callbackClass(name: String): Class<*>? {

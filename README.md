@@ -147,6 +147,18 @@ unavailable and app rules simply do not match; ordinary routing continues.
 Android per-app VPN filtering is not used: the VPN still captures IPv4 and IPv6
 default routes and lets tcptun-go select an outbound per flow.
 
+Traffic analysis can select one installed app on Android 10 or newer. The
+service installs the app identity provider before startup, then configures
+`SetFlowAnalysisApp` and `FlowCallback`. Changing or clearing the selected app
+uses a dedicated service action and updates the running Engine without
+restarting the VPN. The provider cache follows the selected package for shared
+UID handling, while Android still defensively rejects callbacks whose `app.id`
+belongs to the previous selection. Successful TCP connections and first
+successful UDP sends are folded into a session/sequence-ordered, 256-item in-memory list.
+The Material 3 traffic analysis page shows restored domains or literal IPs,
+ports, outbound tags, route reasons, and bridge drop counts. Events are never
+persisted and are cleared when the selected app changes or the process exits.
+
 Profiles can also store a complete strict tcptun-go JSON document. The app
 preserves all supported `log`, `inbounds`, `outbounds`, `route`, and `dns`
 fields, removes the retired top-level `discovery` field from older saved
@@ -306,6 +318,7 @@ vless://00000000-0000-4000-8000-000000000000@203.0.113.10:443?security=reality&e
 - Strict tcptun-go topology config and cached TCP direct-first routing.
 - Native TUN TCP/UDP forwarding with in-tunnel DNS interception and fake-IP restoration.
 - Android 10+ per-app outbound routing for TCP and UDP flows.
+- Android 10+ single-app successful destination analysis through `SetFlowAnalysisApp` and `FlowCallback`.
 - Import, edit, persist, share, and run complete strict tcptun-go JSON profiles.
 
 ## Not yet supported

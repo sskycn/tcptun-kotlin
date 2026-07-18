@@ -137,6 +137,8 @@ import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.net.Inet4Address
 import java.net.Inet6Address
+import java.text.DateFormat
+import java.util.Date
 import java.util.UUID
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -502,6 +504,7 @@ internal fun TcptunScreen(
     var showIpInformation by remember { mutableStateOf(false) }
     var showDiagnostics by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var showFlowAnalysis by remember { mutableStateOf(false) }
     var showRouteManagement by remember { mutableStateOf(false) }
     var showQrScanner by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
@@ -717,6 +720,8 @@ internal fun TcptunScreen(
         SettingsPage(
             onBack = { showSettings = false },
         )
+    } else if (showFlowAnalysis) {
+        FlowAnalysisPage(onBack = { showFlowAnalysis = false })
     } else if (showRouteManagement) {
         RouteManagementPage(
             onBack = { showRouteManagement = false },
@@ -742,6 +747,7 @@ internal fun TcptunScreen(
                 TopBar(
                     title = stringResource(R.string.profiles_title),
                     onRouteManagement = { showRouteManagement = true },
+                    onFlowAnalysis = { showFlowAnalysis = true },
                     onSettings = { showSettings = true },
                 )
             },
@@ -1033,6 +1039,7 @@ private fun ConfirmProfileImportDialog(
 private fun TopBar(
     title: String,
     onRouteManagement: () -> Unit,
+    onFlowAnalysis: () -> Unit,
     onSettings: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -1064,6 +1071,20 @@ private fun TopBar(
                     shape = MenuShape,
                     containerColor = colors.surfaceContainer,
                 ) {
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Icon(Icons.Rounded.Hub, contentDescription = null)
+                        },
+                        text = { Text(stringResource(R.string.flow_analysis)) },
+                        onClick = {
+                            menuExpanded = false
+                            onFlowAnalysis()
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = colors.onSurface,
+                            leadingIconColor = colors.onSurfaceVariant,
+                        ),
+                    )
                     DropdownMenuItem(
                         leadingIcon = {
                             Icon(Icons.AutoMirrored.Rounded.AltRoute, contentDescription = null)
@@ -1859,6 +1880,11 @@ private fun SettingsPage(onBack: () -> Unit) {
     val vpnState by TcptunState.state.collectAsState()
     val diagnostics = vpnState.diagnostics
     val mtuOptions = listOf("1280", "1360", "1400", "1500")
+    val installedApps = remember { loadInstalledRouteApps(context) }
+    val flowAnalysisDisabled = stringResource(R.string.flow_analysis_disabled)
+    val flowAppOptions = listOf(flowAnalysisDisabled) + installedApps.map(InstalledRouteApp::displayName)
+    val selectedFlowApp = installedApps.firstOrNull { it.packageName == settings.flowAnalysisApp }?.displayName
+        ?: settings.flowAnalysisApp.ifBlank { flowAnalysisDisabled }
 
     fun saveSettings(next: RuntimeSettings) {
         val before = settings
@@ -1869,7 +1895,10 @@ private fun SettingsPage(onBack: () -> Unit) {
         failureThresholdText = settings.failureThreshold.toString()
         positiveTtlText = settings.positiveTtl
         negativeTtlText = settings.negativeTtl
-        if (settings != before) {
+        if (settings.flowAnalysisApp != before.flowAnalysisApp) {
+            applyFlowAnalysisSettings(context)
+        }
+        if (settings.copy(flowAnalysisApp = before.flowAnalysisApp) != before) {
             settingsDirty = true
         }
     }
@@ -1902,6 +1931,43 @@ private fun SettingsPage(onBack: () -> Unit) {
             contentPadding = ListContentPadding,
             verticalArrangement = Arrangement.spacedBy(ListItemSpacing),
         ) {
+            item {
+                SettingsCard {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        SectionTitle(
+                            icon = Icons.Rounded.Hub,
+                            title = stringResource(R.string.flow_analysis),
+                        )
+                        ChoiceRow(
+                            title = stringResource(R.string.flow_analysis_app),
+                            value = selectedFlowApp,
+                            options = flowAppOptions,
+                            enabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
+                        ) { selected ->
+                            val packageName = installedApps
+                                .firstOrNull { it.displayName == selected }
+                                ?.packageName
+                                .orEmpty()
+                            saveSettings(settings.copy(flowAnalysisApp = packageName))
+                        }
+                        Text(
+                            stringResource(R.string.flow_analysis_note),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                            Text(
+                                stringResource(R.string.flow_analysis_android_10_required),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                }
+            }
             item {
                 SettingsCard {
                     Column(
@@ -2080,9 +2146,160 @@ private fun SettingsPage(onBack: () -> Unit) {
                         DiagnosticsLine(stringResource(R.string.negative_ttl), settings.negativeTtl)
                         DiagnosticsLine(stringResource(R.string.socks_auth), if (settings.socksUsername.isNotEmpty() || settings.socksPassword.isNotEmpty()) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.vpn_traffic_mode), stringResource(R.string.tcp_udp))
+                        DiagnosticsLine(stringResource(R.string.flow_analysis_app), selectedFlowApp)
                         DiagnosticsLine(stringResource(R.string.diag_power_saving), if (diagnostics.powerSavingMode) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FlowAnalysisPage(onBack: () -> Unit) {
+    val context = LocalContext.current
+    val runtimeState by TcptunState.state.collectAsState()
+    val selectedPackage = TcptunVpnService.readRuntimeSettings(context).flowAnalysisApp
+    val installedApps = remember { loadInstalledRouteApps(context) }
+    val selectedAppLabel = installedApps.firstOrNull { it.packageName == selectedPackage }?.displayName
+        ?: selectedPackage
+    val events = runtimeState.flowEvents.asReversed()
+
+    LaunchedEffect(selectedPackage) {
+        TcptunState.setFlowAnalysisApp(selectedPackage)
+    }
+    BackHandler(onBack = onBack)
+
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            AppTopBar(
+                title = stringResource(R.string.flow_analysis),
+                onBack = onBack,
+                actions = {
+                    TextButton(onClick = TcptunState::clearFlowEvents, enabled = events.isNotEmpty()) {
+                        Text(stringResource(R.string.clear))
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = ListContentPadding,
+            verticalArrangement = Arrangement.spacedBy(ListItemSpacing),
+        ) {
+            item {
+                SettingsCard {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        SectionTitle(Icons.Rounded.Hub, stringResource(R.string.flow_analysis_current))
+                        DiagnosticsLine(
+                            stringResource(R.string.flow_analysis_app),
+                            selectedAppLabel.ifBlank { stringResource(R.string.flow_analysis_disabled) },
+                        )
+                        DiagnosticsLine(stringResource(R.string.flow_analysis_events), events.size.toString())
+                        if (runtimeState.flowDroppedEvents > 0) {
+                            Text(
+                                stringResource(R.string.flow_analysis_dropped, runtimeState.flowDroppedEvents),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                }
+            }
+            when {
+                Build.VERSION.SDK_INT < Build.VERSION_CODES.Q -> item {
+                    FlowAnalysisEmptyState(stringResource(R.string.flow_analysis_android_10_required))
+                }
+                selectedPackage.isBlank() -> item {
+                    FlowAnalysisEmptyState(stringResource(R.string.flow_analysis_select_hint))
+                }
+                events.isEmpty() -> item {
+                    FlowAnalysisEmptyState(stringResource(R.string.flow_analysis_empty))
+                }
+                else -> items(
+                    items = events,
+                    key = { event -> "${event.sessionId}:${event.sequence}" },
+                ) { event ->
+                    FlowAnalysisEventCard(event)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FlowAnalysisEmptyState(message: String) {
+    SettingsCard {
+        Text(
+            message,
+            modifier = Modifier.fillMaxWidth().padding(24.dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+private fun FlowAnalysisEventCard(event: FlowAnalysisEvent) {
+    val timeLabel = remember(event.timestampMs) {
+        event.timestampMs.takeIf { it > 0 }
+            ?.let { DateFormat.getTimeInstance(DateFormat.MEDIUM).format(Date(it)) }
+            .orEmpty()
+    }
+    SettingsCard {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Text(
+                    event.displayDestination,
+                    modifier = Modifier.weight(1f).padding(end = 12.dp),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    timeLabel,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                stringResource(
+                    R.string.flow_analysis_event_summary,
+                    event.network.uppercase(),
+                    event.type,
+                    event.port,
+                    event.outboundTag.ifBlank { stringResource(R.string.none) },
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            if (event.domain.isNotBlank() && event.originalIp.isNotBlank()) {
+                Text(
+                    stringResource(R.string.flow_analysis_original_ip, event.originalIp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (event.routeReason.isNotBlank()) {
+                Text(
+                    stringResource(R.string.flow_analysis_route, event.routeReason),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -2846,13 +3063,23 @@ private fun EditTopBar(title: String, onBack: () -> Unit, onSave: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ChoiceRow(title: String, value: String, options: List<String>, onChange: (String) -> Unit) {
+private fun ChoiceRow(
+    title: String,
+    value: String,
+    options: List<String>,
+    enabled: Boolean = true,
+    onChange: (String) -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
+    ExposedDropdownMenuBox(
+        expanded = expanded && enabled,
+        onExpandedChange = { if (enabled) expanded = !expanded },
+    ) {
         OutlinedTextField(
             value = value,
             onValueChange = {},
             readOnly = true,
+            enabled = enabled,
             label = { Text(title) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier
@@ -3036,6 +3263,16 @@ private fun applyRuntimeSettings(context: Context) {
         context.startService(TcptunVpnService.applyRuntimeSettingsIntent(context))
     }.onFailure { err ->
         TcptunState.appendLog("runtime settings apply request failed: ${err.message}")
+    }
+}
+
+private fun applyFlowAnalysisSettings(context: Context) {
+    val status = TcptunState.status
+    if (status != "Starting" && status != "Running") return
+    runCatching {
+        context.startService(TcptunVpnService.updateFlowAnalysisIntent(context))
+    }.onFailure { err ->
+        TcptunState.appendLog("flow analysis update request failed: ${err.message}")
     }
 }
 

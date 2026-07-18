@@ -43,6 +43,22 @@ class AndroidBridgeContractTest {
     }
 
     @Test
+    fun currentBridgeExposesFlowAnalysisContract() {
+        val engine = Androidbridge.newEngine()
+        try {
+            engine.javaClass.getMethod("setFlowAnalysisApp", String::class.java)
+            engine.javaClass.getMethod("flowAnalysisApp")
+            engine.javaClass.getMethod("setFlowCallback", Class.forName("androidbridge.FlowCallback"))
+            engine.setFlowAnalysisApp("com.example.target")
+            assertEquals("com.example.target", engine.flowAnalysisApp())
+            engine.setFlowCallback(null)
+            assertTrue(runCatching { engine.setFlowAnalysisApp("bad package") }.isFailure)
+        } finally {
+            engine.close()
+        }
+    }
+
+    @Test
     fun currentBridgeExposesPerServiceEngineLifecycle() {
         val engine = Androidbridge.newEngine()
         try {

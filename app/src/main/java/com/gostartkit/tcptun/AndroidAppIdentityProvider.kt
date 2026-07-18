@@ -64,6 +64,28 @@ internal fun parseProxyFlowSource(network: String, sourceValue: String): ProxyFl
     return ProxyFlowSource(protocol, address, port)
 }
 
+internal fun androidAppIdentityJson(uid: Int, packages: List<String>, flowAnalysisApp: String): String? {
+    val normalizedPackages = packages.map(String::trim).filter(String::isNotBlank).distinct().sorted()
+    if (normalizedPackages.isEmpty()) return null
+    val analysisApp = flowAnalysisApp.trim().takeIf(normalizedPackages::contains)
+    return JSONObject()
+        .apply {
+            if (analysisApp != null) {
+                put("id", analysisApp)
+            } else if (normalizedPackages.size == 1) {
+                put("id", normalizedPackages.single())
+            }
+            put("platform", "android")
+            put(
+                "attributes",
+                JSONObject()
+                    .put("uid", JSONArray().put(uid.toString()))
+                    .put("packages", JSONArray().apply { normalizedPackages.forEach(::put) }),
+            )
+        }
+        .toString()
+}
+
 private data class OriginalFlow(
     val protocol: Int,
     val local: InetSocketAddress,
@@ -76,6 +98,14 @@ internal class AndroidAppIdentityProvider(
 ) {
     private val packageManager = context.applicationContext.packageManager
     private val identities = ConcurrentHashMap<Int, String?>()
+    @Volatile private var flowAnalysisApp: String = ""
+
+    fun setFlowAnalysisApp(packageName: String) {
+        val normalized = packageName.trim()
+        if (normalized == flowAnalysisApp) return
+        flowAnalysisApp = normalized
+        identities.clear()
+    }
 
     fun identify(flowJson: String): String? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
@@ -101,23 +131,7 @@ internal class AndroidAppIdentityProvider(
 
     private fun identityForUid(uid: Int): String? {
         val packages = packageManager.getPackagesForUid(uid)
-            ?.map(String::trim)
-            ?.filter(String::isNotBlank)
-            ?.distinct()
-            ?.sorted()
             .orEmpty()
-        if (packages.isEmpty()) return null
-        return JSONObject()
-            .apply {
-                if (packages.size == 1) put("id", packages.single())
-                put("platform", "android")
-                put(
-                    "attributes",
-                    JSONObject()
-                        .put("uid", JSONArray().put(uid.toString()))
-                        .put("packages", JSONArray().apply { packages.forEach(::put) }),
-                )
-            }
-            .toString()
+        return androidAppIdentityJson(uid, packages.toList(), flowAnalysisApp)
     }
 }
