@@ -37,6 +37,7 @@ data class RuntimeSettings(
     val udpEnabled: Boolean = true,
     val powerSavingMode: Boolean = false,
     val socksPort: Int = TcptunVpnService.DEFAULT_SOCKS_PORT,
+    val localProxyProtocol: String = DefaultLocalProxyProtocol,
     val socksListenAll: Boolean = false,
     val routeExternalSources: Boolean = false,
     val directFirst: Boolean = false,
@@ -1556,6 +1557,7 @@ class TcptunVpnService : VpnService() {
         private const val KEY_RUNTIME_UDP_ENABLED = "runtimeUdpEnabled"
         private const val KEY_RUNTIME_POWER_SAVING = "runtimePowerSaving"
         private const val KEY_RUNTIME_SOCKS_PORT = "runtimeSocksPort"
+        private const val KEY_RUNTIME_LOCAL_PROXY_PROTOCOL = "runtimeLocalProxyProtocol"
         private const val KEY_RUNTIME_SOCKS_LISTEN_ALL = "runtimeSocksListenAll"
         private const val KEY_RUNTIME_ROUTE_EXTERNAL_SOURCES = "runtimeRouteExternalSources"
         private const val KEY_RUNTIME_DIRECT_FIRST = "runtimeDirectFirst"
@@ -1597,6 +1599,7 @@ class TcptunVpnService : VpnService() {
                     EXTRA_CONFIG,
                     effectivePlan.toBridgeJson(
                         localListenAddr,
+                        localProxyProtocol = runtimeSettings.localProxyProtocol,
                         socks5Username = runtimeSettings.socksUsername,
                         socks5Password = runtimeSettings.socksPassword,
                         routeExternalSources = runtimeSettings.routeExternalSources,
@@ -1625,7 +1628,7 @@ class TcptunVpnService : VpnService() {
                 .putExtra("realitySpiderX", effectiveConfig.realitySpiderX)
                 .putExtra("mux", effectiveConfig.mux)
                 .putExtra("udp", config.udp)
-                .putExtra("upstreamProtocol", effectiveConfig.upstreamProtocol)
+                .putExtra("upstreamProtocol", runtimeSettings.localProxyProtocol)
                 .putExtra(EXTRA_PROFILE_CONFIG, config.toJson().toString())
                 .putExtra(EXTRA_PROFILE_PLAN, plan.toJson().toString())
         }
@@ -1675,6 +1678,9 @@ class TcptunVpnService : VpnService() {
                 udpEnabled = prefs.getBoolean(KEY_RUNTIME_UDP_ENABLED, true) && !powerSavingMode,
                 powerSavingMode = powerSavingMode,
                 socksPort = socksPort,
+                localProxyProtocol = normalizeLocalProxyProtocol(
+                    prefs.getString(KEY_RUNTIME_LOCAL_PROXY_PROTOCOL, DefaultLocalProxyProtocol).orEmpty(),
+                ),
                 socksListenAll = prefs.getBoolean(KEY_RUNTIME_SOCKS_LISTEN_ALL, false),
                 routeExternalSources = prefs.getBoolean(KEY_RUNTIME_ROUTE_EXTERNAL_SOURCES, false),
                 directFirst = prefs.getBoolean(KEY_RUNTIME_DIRECT_FIRST, false),
@@ -1695,6 +1701,7 @@ class TcptunVpnService : VpnService() {
             val normalizedPowerSavingMode = settings.powerSavingMode
             val normalizedUdpEnabled = settings.udpEnabled && !normalizedPowerSavingMode
             val normalizedSocksPort = settings.socksPort.coerceIn(1, 65535)
+            val normalizedLocalProxyProtocol = normalizeLocalProxyProtocol(settings.localProxyProtocol)
             val normalizedProbeTimeout = settings.probeTimeout.trim().takeIf(::isValidDuration) ?: DEFAULT_PROBE_TIMEOUT
             val normalizedFailureThreshold = settings.failureThreshold.coerceIn(1, MAX_FAILURE_THRESHOLD)
             val normalizedPositiveTtl = settings.positiveTtl.trim().takeIf(::isValidDuration) ?: DEFAULT_POSITIVE_TTL
@@ -1703,6 +1710,7 @@ class TcptunVpnService : VpnService() {
                 udpEnabled = normalizedUdpEnabled,
                 powerSavingMode = normalizedPowerSavingMode,
                 socksPort = normalizedSocksPort,
+                localProxyProtocol = normalizedLocalProxyProtocol,
                 routeExternalSources = settings.routeExternalSources,
                 directFirst = settings.directFirst,
                 probeTimeout = normalizedProbeTimeout,
@@ -1718,6 +1726,7 @@ class TcptunVpnService : VpnService() {
                 .putBoolean(KEY_RUNTIME_UDP_ENABLED, normalizedUdpEnabled)
                 .putBoolean(KEY_RUNTIME_POWER_SAVING, normalizedPowerSavingMode)
                 .putInt(KEY_RUNTIME_SOCKS_PORT, normalizedSocksPort)
+                .putString(KEY_RUNTIME_LOCAL_PROXY_PROTOCOL, normalizedLocalProxyProtocol)
                 .putBoolean(KEY_RUNTIME_SOCKS_LISTEN_ALL, settings.socksListenAll)
                 .putBoolean(KEY_RUNTIME_ROUTE_EXTERNAL_SOURCES, settings.routeExternalSources)
                 .putBoolean(KEY_RUNTIME_DIRECT_FIRST, settings.directFirst)
@@ -1737,7 +1746,7 @@ class TcptunVpnService : VpnService() {
                     localProxyPort = normalizedSocksPort,
                 )
             }
-            TcptunState.appendLog("runtime settings saved: socks=${localSocksListenAddr(normalizedSettings)} mtu=${normalizedSettings.mtu} udp=${normalizedSettings.udpEnabled} direct-first=${normalizedSettings.directFirst} probe-timeout=${normalizedSettings.probeTimeout} failure-threshold=${normalizedSettings.failureThreshold} positive-ttl=${normalizedSettings.positiveTtl} negative-ttl=${normalizedSettings.negativeTtl}")
+            TcptunState.appendLog("runtime settings saved: proxy=${normalizedSettings.localProxyProtocol}://${localSocksListenAddr(normalizedSettings)} mtu=${normalizedSettings.mtu} udp=${normalizedSettings.udpEnabled} direct-first=${normalizedSettings.directFirst} probe-timeout=${normalizedSettings.probeTimeout} failure-threshold=${normalizedSettings.failureThreshold} positive-ttl=${normalizedSettings.positiveTtl} negative-ttl=${normalizedSettings.negativeTtl}")
         }
 
         fun localSocksListenAddr(settings: RuntimeSettings): String {

@@ -1915,6 +1915,13 @@ private fun SettingsPage(onBack: () -> Unit) {
                         ChoiceRow("MTU", settings.mtu.toString(), mtuOptions) { value ->
                             saveSettings(settings.copy(mtu = value.toIntOrNull() ?: TcptunVpnService.DEFAULT_VPN_MTU))
                         }
+                        ChoiceRow(
+                            stringResource(R.string.local_proxy_protocol),
+                            settings.localProxyProtocol,
+                            LocalProxyProtocols,
+                        ) { value ->
+                            saveSettings(settings.copy(localProxyProtocol = value))
+                        }
                         val socksPort = socksPortText.toIntOrNull()
                         OutlinedTextField(
                             value = socksPortText,
@@ -2061,6 +2068,7 @@ private fun SettingsPage(onBack: () -> Unit) {
                             title = stringResource(R.string.current_effective),
                         )
                         DiagnosticsLine("MTU", diagnostics.mtu.toString())
+                        DiagnosticsLine(stringResource(R.string.local_proxy_protocol), settings.localProxyProtocol)
                         DiagnosticsLine(stringResource(R.string.socks_listen), TcptunVpnService.localSocksListenAddr(settings))
                         DiagnosticsLine(stringResource(R.string.route_external_sources), if (settings.routeExternalSources) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.direct_first), if (settings.directFirst) stringResource(R.string.enabled) else stringResource(R.string.disabled))
@@ -2771,9 +2779,6 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
                             )
-                            ChoiceRow(stringResource(R.string.field_upstream), config.upstreamProtocol, AppConfig.UpstreamProtocols) {
-                                config = config.copy(upstreamProtocol = it)
-                            }
                             ToggleRow(stringResource(R.string.field_tls), config.tls) { config = config.copy(tls = it) }
                             ToggleRow(stringResource(R.string.field_tls_insecure), config.tlsInsecure) {
                                 config = config.copy(tlsInsecure = it)

@@ -81,6 +81,7 @@ internal fun AppConfig.runtimeOutboundTag(): String {
 
 internal fun ProfileRunPlan.toBridgeJson(
     localListenAddr: String,
+    localProxyProtocol: String = profiles.firstOrNull()?.upstreamProtocol ?: DefaultLocalProxyProtocol,
     verbose: Boolean = false,
     socks5Username: String = "",
     socks5Password: String = "",
@@ -97,6 +98,7 @@ internal fun ProfileRunPlan.toBridgeJson(
     if (rawProfile != null) {
         return rawProfile.toBridgeJson(
             localListenAddr = localListenAddr,
+            localProxyProtocol = localProxyProtocol,
             verbose = verbose,
             socks5Username = socks5Username,
             socks5Password = socks5Password,
@@ -116,6 +118,7 @@ internal fun ProfileRunPlan.toBridgeJson(
         profile.id to JSONObject(
             profile.toBridgeJson(
                 localListenAddr = localListenAddr,
+                localProxyProtocol = localProxyProtocol,
                 verbose = verbose,
                 socks5Username = socks5Username,
                 socks5Password = socks5Password,

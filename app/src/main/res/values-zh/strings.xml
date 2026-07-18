@@ -107,11 +107,12 @@
     <string name="diag_socket_protect">Socket protect</string>
     <string name="diag_health_interval">健康检查间隔</string>
     <string name="diag_power_saving">省电模式</string>
-    <string name="socks_listen">SOCKS 监听</string>
-    <string name="socks_port">SOCKS 端口</string>
+    <string name="socks_listen">本地代理监听</string>
+    <string name="local_proxy_protocol">本地监听协议</string>
+    <string name="socks_port">本地代理端口</string>
     <string name="socks_port_error">请输入 1 到 65535 之间的端口。</string>
     <string name="socks_listen_all">监听所有网卡</string>
-    <string name="route_external_sources">外部 SOCKS 客户端使用路由规则</string>
+    <string name="route_external_sources">外部代理客户端使用路由规则</string>
     <string name="direct_first">直连优先</string>
     <string name="probe_timeout">探测超时</string>
     <string name="failure_threshold">失败阈值</string>
@@ -151,7 +152,7 @@
     <string name="socks_username">SOCKS 用户名</string>
     <string name="socks_password">SOCKS 密码</string>
     <string name="socks_auth">SOCKS 认证</string>
-    <string name="socks_settings_note">默认只监听 127.0.0.1。启用监听所有网卡后会监听 0.0.0.0。外部客户端路由需要 tcptun-go 支持。用户名和密码可留空。</string>
+    <string name="socks_settings_note">本地监听默认使用 SOCKS5；选择 mixed 后可同时接受 SOCKS5 和 HTTP 代理客户端。默认绑定 127.0.0.1，启用监听所有网卡后绑定 0.0.0.0。用户名和密码可留空。</string>
     <string name="seconds_value">%1$d 秒</string>
     <string name="recent_restart_reason">最近重启原因</string>
     <string name="transparent_proxy_settings">透明代理参数</string>

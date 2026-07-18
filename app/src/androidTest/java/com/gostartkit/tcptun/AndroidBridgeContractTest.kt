@@ -232,6 +232,73 @@ class AndroidBridgeContractTest {
     }
 
     @Test
+    fun runtimeLocalProxyProtocolControlsStructuredAndRawAndroidInbounds() {
+        val structured = AppConfig(
+            serverHost = "192.0.2.1",
+            serverPort = "443",
+            token = "local-protocol-test",
+            protocol = "native",
+            upstreamProtocol = "socks5",
+        )
+        val raw = AppConfig(
+            udp = false,
+            rawConfigJson = """{
+                "outbounds":[{"tag":"direct","type":"direct","network":["tcp"]}],
+                "route":{"default_outbound":"direct"}
+            }""".trimIndent(),
+        )
+
+        listOf(structured, raw).forEach { profile ->
+            LocalProxyProtocols.forEach { protocol ->
+                val config = JSONObject(
+                    profile.toBridgeJson(
+                        localListenAddr = "127.0.0.1:1080",
+                        localProxyProtocol = protocol,
+                    ),
+                )
+                assertEquals(
+                    protocol,
+                    config.getJSONArray("inbounds").getJSONObject(0).getString("type"),
+                )
+                assertEngineStarts(config.toString())
+            }
+        }
+    }
+
+    @Test
+    fun startIntentUsesPersistedLocalProxyProtocol() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val originalSettings = TcptunVpnService.readRuntimeSettings(context)
+        val profile = AppConfig(
+            udp = false,
+            rawConfigJson = """{
+                "outbounds":[{"tag":"direct","type":"direct","network":["tcp"]}],
+                "route":{"default_outbound":"direct"}
+            }""".trimIndent(),
+        )
+
+        try {
+            LocalProxyProtocols.forEach { protocol ->
+                TcptunVpnService.writeRuntimeSettings(
+                    context,
+                    originalSettings.copy(localProxyProtocol = protocol),
+                )
+                val config = JSONObject(
+                    TcptunVpnService.startIntent(context, profile)
+                        .getStringExtra(TcptunVpnService.EXTRA_CONFIG)
+                        .orEmpty(),
+                )
+                assertEquals(
+                    protocol,
+                    config.getJSONArray("inbounds").getJSONObject(0).getString("type"),
+                )
+            }
+        } finally {
+            TcptunVpnService.writeRuntimeSettings(context, originalSettings)
+        }
+    }
+
+    @Test
     fun generatedMultiProfileConfigRoutesToStableOutboundTags() {
         val primary = AppConfig(
             id = "00000000-0000-4000-8000-000000000001",

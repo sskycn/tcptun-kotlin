@@ -6,13 +6,14 @@ The Android app owns the VPN side:
 
 ```text
 Android apps -> VpnService TUN -> hev-socks5-tunnel
-             -> 0.0.0.0:1080 mixed proxy -> tcptun gomobile bridge
+             -> local SOCKS5/mixed proxy -> tcptun gomobile bridge
              -> remote tcptun server
 ```
 
-Android itself connects to the mixed proxy through `127.0.0.1:1080`. The Go bridge listens on
-`0.0.0.0:1080`, so other devices on the same reachable network can use the phone IP plus port
-`1080` as a mixed HTTP/SOCKS proxy while the VPN client is running.
+Android itself connects to the local proxy through `127.0.0.1:1080`. The listener protocol is
+configurable as `socks5` (the default) or `mixed`; mixed accepts both SOCKS5 and HTTP proxy clients.
+The listener binds to `127.0.0.1` by default. Enable listening on all interfaces to bind
+`0.0.0.0`, allowing other devices on the same reachable network to use the phone IP and port `1080`.
 
 The Go protocol implementation and gomobile wrapper live in the neighboring `tcptun-go` checkout. This Android project only consumes the generated `app/libs/androidbridge.aar`; `./scripts/build-androidbridge.sh` delegates to `../tcptun-go/scripts/build-androidbridge.sh`.
 
@@ -228,9 +229,10 @@ For VLESS/VMess/Trojan, use the same protocol, transport, token/UUID/password, T
 8. Open a browser and visit a site.
 9. Tap the bottom status line to view recent logs.
 
-To let another device use the running Android client, set that device's HTTP or SOCKS proxy to
-`PHONE_LAN_IP:1080`. The phone and the other device must be on a network that permits inbound
-connections to the phone.
+To let another device use the running Android client, enable listening on all interfaces and set
+that device's SOCKS proxy to `PHONE_LAN_IP:1080`. Select the local `mixed` listener protocol before
+using an HTTP proxy client such as the iOS Wi-Fi proxy setting. The phone and the other device must
+be on a network that permits inbound connections to the phone.
 
 Each row has a share action. Swipe a row to the left to delete it; the snackbar action can undo the deletion. Profiles are saved locally in `SharedPreferences`.
 

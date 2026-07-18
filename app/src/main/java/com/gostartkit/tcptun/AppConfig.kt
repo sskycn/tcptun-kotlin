@@ -5,6 +5,14 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
+internal const val DefaultLocalProxyProtocol = "socks5"
+internal val LocalProxyProtocols = listOf(DefaultLocalProxyProtocol, "mixed")
+
+internal fun normalizeLocalProxyProtocol(value: String): String {
+    return value.trim().lowercase().takeIf { it in LocalProxyProtocols }
+        ?: DefaultLocalProxyProtocol
+}
+
 data class AppConfig(
     val id: String = UUID.randomUUID().toString(),
     val name: String = "proxy",
@@ -83,6 +91,7 @@ data class AppConfig(
 
     fun toBridgeJson(
         localListenAddr: String,
+        localProxyProtocol: String = upstreamProtocol,
         verbose: Boolean = false,
         socks5Username: String = "",
         socks5Password: String = "",
@@ -97,6 +106,7 @@ data class AppConfig(
         if (rawConfigJson.isNotBlank()) {
             return prepareRawConfigForAndroid(
                 localListenAddr = localListenAddr,
+                localProxyProtocol = localProxyProtocol,
                 udpEnabled = udp,
                 socks5Username = socks5Username,
                 socks5Password = socks5Password,
@@ -105,12 +115,13 @@ data class AppConfig(
         }
         val (listenHost, listenPort) = splitHostPort(localListenAddr)
         val normalizedListenAddr = joinHostPort(listenHost, listenPort)
+        val normalizedLocalProxyProtocol = normalizeLocalProxyProtocol(localProxyProtocol)
         val networks = JSONArray().put("tcp").apply {
             if (udp) put("udp")
         }
         val inbound = JSONObject()
             .put("tag", "local")
-            .put("type", upstreamProtocol)
+            .put("type", normalizedLocalProxyProtocol)
             .put("address", JSONArray().put(normalizedListenAddr))
             .put("network", networks)
             .put("username", socks5Username)
@@ -231,6 +242,7 @@ data class AppConfig(
 
     private fun prepareRawConfigForAndroid(
         localListenAddr: String,
+        localProxyProtocol: String,
         udpEnabled: Boolean,
         socks5Username: String,
         socks5Password: String,
@@ -261,9 +273,10 @@ data class AppConfig(
 
         val (listenHost, listenPort) = splitHostPort(localListenAddr)
         val normalizedListenAddr = joinHostPort(listenHost, listenPort)
+        val normalizedLocalProxyProtocol = normalizeLocalProxyProtocol(localProxyProtocol)
         val androidInbound = JSONObject()
             .put("tag", AndroidVpnInboundTag)
-            .put("type", "socks5")
+            .put("type", normalizedLocalProxyProtocol)
             .put("address", JSONArray().put(normalizedListenAddr))
             .put("network", JSONArray().put("tcp").apply { if (udpEnabled) put("udp") })
             .put("username", socks5Username)
@@ -469,7 +482,7 @@ data class AppConfig(
     companion object {
         val Protocols = listOf("native", "vless", "vmess", "trojan")
         val Transports = listOf("raw", "ws", "h2", "h3")
-        val UpstreamProtocols = listOf("socks5", "mixed")
+        val UpstreamProtocols = LocalProxyProtocols
         val MuxModes = listOf("", "group", "quic")
         private const val AndroidVpnInboundTag = "android-vpn"
         private val WildcardHosts = setOf("0.0.0.0", "::", "*")

@@ -108,11 +108,12 @@
     <string name="diag_socket_protect">Socket protect</string>
     <string name="diag_health_interval">Health check interval</string>
     <string name="diag_power_saving">Power saving</string>
-    <string name="socks_listen">SOCKS listen</string>
-    <string name="socks_port">SOCKS port</string>
+    <string name="socks_listen">Local proxy listen</string>
+    <string name="local_proxy_protocol">Local listener protocol</string>
+    <string name="socks_port">Local proxy port</string>
     <string name="socks_port_error">Use a port from 1 to 65535.</string>
     <string name="socks_listen_all">Listen on all interfaces</string>
-    <string name="route_external_sources">Route external SOCKS clients</string>
+    <string name="route_external_sources">Route external proxy clients</string>
     <string name="direct_first">Direct first</string>
     <string name="probe_timeout">Probe timeout</string>
     <string name="failure_threshold">Failure threshold</string>
@@ -152,7 +153,7 @@
     <string name="socks_username">SOCKS username</string>
     <string name="socks_password">SOCKS password</string>
     <string name="socks_auth">SOCKS auth</string>
-    <string name="socks_settings_note">By default the SOCKS listener binds to 127.0.0.1. Enable all interfaces to bind 0.0.0.0. External client routing requires tcptun-go support. Username/password are optional.</string>
+    <string name="socks_settings_note">The local listener uses SOCKS5 by default. Select mixed to accept both SOCKS5 and HTTP proxy clients. It binds to 127.0.0.1 by default; enable all interfaces to bind 0.0.0.0. Username/password are optional.</string>
     <string name="seconds_value">%1$ds</string>
     <string name="recent_restart_reason">Last restart reason</string>
     <string name="transparent_proxy_settings">Transparent proxy settings</string>
