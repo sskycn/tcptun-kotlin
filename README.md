@@ -289,7 +289,7 @@ vless://00000000-0000-4000-8000-000000000000@203.0.113.10:443?security=reality&e
 - IPv4/IPv6 default routes send all VPN traffic into tcptun-go; explicit rules run first and unmatched traffic uses the balanced active-profile pool.
 - Status display: `Stopped`, `Starting`, `Running`, `Error`.
 - Recent log display.
-- Native tcptun-go TUN forwarding without tun2socks.
+- Native tcptun-go TUN forwarding.
 - Runtime reflection bridge to gomobile AAR.
 - In-app diagnostics for VPN, underlying network, bridge state, local proxy reachability, MTU, TCP-only mode, and socket protect.
 - Runtime MTU settings.

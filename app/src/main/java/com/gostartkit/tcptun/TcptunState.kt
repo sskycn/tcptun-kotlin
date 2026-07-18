@@ -31,7 +31,6 @@ data class TcptunDiagnostics(
     val localProxyPort: Int = 1080,
     val lastRestartReason: String = "None",
     val mtu: Int = 1400,
-    val udpEnabled: Boolean = true,
     val powerSavingMode: Boolean = false,
     val healthCheckIntervalSeconds: Long = 15,
     val socketProtectEnabled: Boolean = false,

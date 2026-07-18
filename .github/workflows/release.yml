@@ -22,17 +22,6 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Restore pinned JNI sources
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf app/src/main/jni
-          git clone --no-checkout https://github.com/heiher/hev-socks5-tunnel.git app/src/main/jni
-          git -C app/src/main/jni checkout 67dfba56c0a9254f401447e0751432bd36617d70
-          git -C app/src/main/jni submodule update --init --recursive
-          git -C app/src/main/jni apply --unidiff-zero "$GITHUB_WORKSPACE/.github/patches/hev-socks5-tunnel.patch"
-
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -96,10 +85,6 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.TCPTUN_RELEASE_KEYSTORE_BASE64 }}
         run: printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/tcptun-release.jks"
-
-      - name: Install Android NDK
-        shell: bash
-        run: '"$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865"'
 
       - name: Build signed release APK
         shell: bash

@@ -36,7 +36,6 @@ val appVersionCode = providers.gradleProperty("releaseVersionCode").orNull?.let 
 
 android {
     namespace = "com.tcptun.client"
-    ndkVersion = "29.0.14206865"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1

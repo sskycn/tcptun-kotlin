@@ -51,7 +51,6 @@ class LiveConnectivityTest {
         TcptunVpnService.writeRuntimeSettings(
             context,
             originalSettings.copy(
-                udpEnabled = false,
                 powerSavingMode = false,
                 socksPort = socksPort,
                 socksListenAll = false,

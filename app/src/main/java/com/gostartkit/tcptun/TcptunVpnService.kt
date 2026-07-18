@@ -34,7 +34,6 @@ import java.util.concurrent.atomic.AtomicReference
 
 data class RuntimeSettings(
     val mtu: Int = TcptunVpnService.DEFAULT_VPN_MTU,
-    val udpEnabled: Boolean = false,
     val powerSavingMode: Boolean = false,
     val socksPort: Int = TcptunVpnService.DEFAULT_SOCKS_PORT,
     val localProxyProtocol: String = DefaultLocalProxyProtocol,
@@ -224,10 +223,6 @@ class TcptunVpnService : VpnService() {
                     ?.let { raw -> runCatching { ProfileRunPlan.fromJson(JSONObject(raw)) }.getOrNull() }
                     ?: ProfileRunPlan(listOf(intentProfile)).normalized()
                 val runtimeSettings = readRuntimeSettings(this)
-                // The first native TUN phase forwards TCP only. UDP and DNS
-                // interception remain disabled until the Go TUN inbound grows
-                // packet support.
-                val effectiveUdpEnabled = false
                 activeSocksPort = runtimeSettings.socksPort
                 activeSocksUsername = runtimeSettings.socksUsername
                 activeSocksPassword = runtimeSettings.socksPassword
@@ -237,7 +232,6 @@ class TcptunVpnService : VpnService() {
                         bridgeStatus = "Starting",
                         localProxyReachable = false,
                         mtu = runtimeSettings.mtu,
-                        udpEnabled = effectiveUdpEnabled,
                         powerSavingMode = runtimeSettings.powerSavingMode,
                         localProxyAddress = localSocksConnectAddr(runtimeSettings),
                         localProxyPort = runtimeSettings.socksPort,
@@ -1425,7 +1419,6 @@ class TcptunVpnService : VpnService() {
         private const val KEY_RUNNING_CONFIG_VERSION = "runningConfigVersion"
         private const val RUNNING_CONFIG_VERSION = 3
         private const val KEY_RUNTIME_MTU = "runtimeMtu"
-        private const val KEY_RUNTIME_UDP_ENABLED = "runtimeUdpEnabled"
         private const val KEY_RUNTIME_POWER_SAVING = "runtimePowerSaving"
         private const val KEY_RUNTIME_SOCKS_PORT = "runtimeSocksPort"
         private const val KEY_RUNTIME_LOCAL_PROXY_PROTOCOL = "runtimeLocalProxyProtocol"
@@ -1544,7 +1537,6 @@ class TcptunVpnService : VpnService() {
             val socksPort = prefs.getInt(KEY_RUNTIME_SOCKS_PORT, DEFAULT_SOCKS_PORT).coerceIn(1, 65535)
             return RuntimeSettings(
                 mtu = mtu,
-                udpEnabled = false,
                 powerSavingMode = powerSavingMode,
                 socksPort = socksPort,
                 localProxyProtocol = normalizeLocalProxyProtocol(
@@ -1568,7 +1560,6 @@ class TcptunVpnService : VpnService() {
 
         fun writeRuntimeSettings(context: Context, settings: RuntimeSettings) {
             val normalizedPowerSavingMode = settings.powerSavingMode
-            val normalizedUdpEnabled = false
             val normalizedSocksPort = settings.socksPort.coerceIn(1, 65535)
             val normalizedLocalProxyProtocol = normalizeLocalProxyProtocol(settings.localProxyProtocol)
             val normalizedProbeTimeout = settings.probeTimeout.trim().takeIf(::isValidDuration) ?: DEFAULT_PROBE_TIMEOUT
@@ -1576,7 +1567,6 @@ class TcptunVpnService : VpnService() {
             val normalizedPositiveTtl = settings.positiveTtl.trim().takeIf(::isValidDuration) ?: DEFAULT_POSITIVE_TTL
             val normalizedNegativeTtl = settings.negativeTtl.trim().takeIf(::isValidDuration) ?: DEFAULT_NEGATIVE_TTL
             val normalizedSettings = settings.copy(
-                udpEnabled = normalizedUdpEnabled,
                 powerSavingMode = normalizedPowerSavingMode,
                 socksPort = normalizedSocksPort,
                 localProxyProtocol = normalizedLocalProxyProtocol,
@@ -1592,7 +1582,6 @@ class TcptunVpnService : VpnService() {
             context.applicationContext.getSharedPreferences(RUNTIME_PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putInt(KEY_RUNTIME_MTU, settings.mtu.coerceIn(1280, 1500))
-                .putBoolean(KEY_RUNTIME_UDP_ENABLED, normalizedUdpEnabled)
                 .putBoolean(KEY_RUNTIME_POWER_SAVING, normalizedPowerSavingMode)
                 .putInt(KEY_RUNTIME_SOCKS_PORT, normalizedSocksPort)
                 .putString(KEY_RUNTIME_LOCAL_PROXY_PROTOCOL, normalizedLocalProxyProtocol)
@@ -1609,13 +1598,12 @@ class TcptunVpnService : VpnService() {
             TcptunState.updateDiagnostics {
                 it.copy(
                     mtu = settings.mtu.coerceIn(1280, 1500),
-                    udpEnabled = normalizedUdpEnabled,
                     powerSavingMode = normalizedPowerSavingMode,
                     localProxyAddress = localSocksConnectAddr(normalizedSettings),
                     localProxyPort = normalizedSocksPort,
                 )
             }
-            TcptunState.appendLog("runtime settings saved: proxy=${normalizedSettings.localProxyProtocol}://${localSocksListenAddr(normalizedSettings)} mtu=${normalizedSettings.mtu} udp=${normalizedSettings.udpEnabled} direct-first=${normalizedSettings.directFirst} probe-timeout=${normalizedSettings.probeTimeout} failure-threshold=${normalizedSettings.failureThreshold} positive-ttl=${normalizedSettings.positiveTtl} negative-ttl=${normalizedSettings.negativeTtl}")
+            TcptunState.appendLog("runtime settings saved: proxy=${normalizedSettings.localProxyProtocol}://${localSocksListenAddr(normalizedSettings)} mtu=${normalizedSettings.mtu} direct-first=${normalizedSettings.directFirst} probe-timeout=${normalizedSettings.probeTimeout} failure-threshold=${normalizedSettings.failureThreshold} positive-ttl=${normalizedSettings.positiveTtl} negative-ttl=${normalizedSettings.negativeTtl}")
         }
 
         fun localSocksListenAddr(settings: RuntimeSettings): String {
