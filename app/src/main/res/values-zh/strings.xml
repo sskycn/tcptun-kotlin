@@ -141,6 +141,9 @@
     <string name="route_type_ip">精确 IP 地址</string>
     <string name="route_type_ip_cidr">IP CIDR</string>
     <string name="route_type_ip_range">IP 范围</string>
+    <string name="route_type_app">Android 应用</string>
+    <string name="route_select_app">选择应用</string>
+    <string name="route_app_package">应用包名</string>
     <string name="route_outbound_proxy">动态连接池</string>
     <string name="route_outbound_direct">直接连接</string>
     <string name="route_example_domain">示例：api.example.com</string>
@@ -149,6 +152,7 @@
     <string name="route_example_ip">示例：203.0.113.10</string>
     <string name="route_example_ip_cidr">示例：203.0.113.0/24</string>
     <string name="route_example_ip_range">示例：203.0.113.10-203.0.113.20</string>
+    <string name="route_example_app">需要 Android 10 或更高版本。示例：com.example.app</string>
     <string name="socks_username">SOCKS 用户名</string>
     <string name="socks_password">SOCKS 密码</string>
     <string name="socks_auth">SOCKS 认证</string>

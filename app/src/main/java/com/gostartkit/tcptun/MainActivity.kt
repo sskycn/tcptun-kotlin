@@ -2114,6 +2114,7 @@ private fun RouteManagementPage(onBack: () -> Unit) {
     val context = LocalContext.current
     val profileState = remember { ProfileStore.load(context) }
     val routeProfiles = profileState.profiles.filter { it.rawConfigJson.isBlank() }
+    val installedApps = remember { loadInstalledRouteApps(context) }
     var rules by remember { mutableStateOf(RouteRuleStore.load(context)) }
     var editingRule by remember { mutableStateOf<ManagedRouteRule?>(null) }
     var deleteCandidate by remember { mutableStateOf<ManagedRouteRule?>(null) }
@@ -2227,6 +2228,7 @@ private fun RouteManagementPage(onBack: () -> Unit) {
         ManagedRouteRuleDialog(
             rule = rule,
             profiles = routeProfiles,
+            installedApps = installedApps,
             isNew = rules.none { it.id == rule.id },
             onDismiss = { editingRule = null },
             onSave = { updated ->
@@ -2383,6 +2385,7 @@ private fun RouteRulesEmptyState(onAdd: () -> Unit) {
 private fun ManagedRouteRuleDialog(
     rule: ManagedRouteRule,
     profiles: List<AppConfig>,
+    installedApps: List<InstalledRouteApp>,
     isNew: Boolean,
     onDismiss: () -> Unit,
     onSave: (ManagedRouteRule) -> Unit,
@@ -2394,7 +2397,9 @@ private fun ManagedRouteRuleDialog(
     var outboundProfileId by remember(rule.id) { mutableStateOf(rule.outboundProfileId) }
     var enabled by remember(rule.id) { mutableStateOf(rule.enabled) }
     var invalid by remember(rule.id) { mutableStateOf(false) }
-    val types = ManagedRouteRuleType.entries
+    val types = ManagedRouteRuleType.entries.filter {
+        it != ManagedRouteRuleType.App || Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q || rule.type == it
+    }
     val typeLabels = types.map { routeRuleTypeLabel(it) }
     val directLabel = stringResource(R.string.route_outbound_direct)
     val poolLabel = stringResource(R.string.route_outbound_proxy)
@@ -2407,15 +2412,28 @@ private fun ManagedRouteRuleDialog(
     } else {
         outboundChoices.firstOrNull { it.first == outboundProfileId }?.second ?: poolLabel
     }
+    val appChoices = installedApps.map(InstalledRouteApp::displayName)
+    val selectedAppLabel = installedApps.firstOrNull { it.packageName == value }?.displayName
+        ?: value.ifBlank { stringResource(R.string.route_select_app) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(if (isNew) R.string.add_route_rule else R.string.edit_route_rule)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                ChoiceRow(stringResource(R.string.route_rule_type), typeLabels[type.ordinal], typeLabels) { selected ->
+                ChoiceRow(stringResource(R.string.route_rule_type), routeRuleTypeLabel(type), typeLabels) { selected ->
                     type = types[typeLabels.indexOf(selected).coerceAtLeast(0)]
                     invalid = false
+                }
+                if (type == ManagedRouteRuleType.App && appChoices.isNotEmpty()) {
+                    ChoiceRow(
+                        stringResource(R.string.route_select_app),
+                        selectedAppLabel,
+                        appChoices,
+                    ) { selected ->
+                        value = installedApps.firstOrNull { it.displayName == selected }?.packageName.orEmpty()
+                        invalid = false
+                    }
                 }
                 OutlinedTextField(
                     value = value,
@@ -2423,7 +2441,14 @@ private fun ManagedRouteRuleDialog(
                         value = it
                         invalid = false
                     },
-                    label = { Text(stringResource(R.string.route_rule_value)) },
+                    label = {
+                        Text(
+                            stringResource(
+                                if (type == ManagedRouteRuleType.App) R.string.route_app_package
+                                else R.string.route_rule_value,
+                            ),
+                        )
+                    },
                     supportingText = {
                         Text(
                             if (invalid) stringResource(R.string.invalid_route_rule)
@@ -2490,6 +2515,7 @@ private fun routeRuleTypeLabel(type: ManagedRouteRuleType): String = when (type)
     ManagedRouteRuleType.IP -> stringResource(R.string.route_type_ip)
     ManagedRouteRuleType.IPCidr -> stringResource(R.string.route_type_ip_cidr)
     ManagedRouteRuleType.IPRange -> stringResource(R.string.route_type_ip_range)
+    ManagedRouteRuleType.App -> stringResource(R.string.route_type_app)
 }
 
 @Composable
@@ -2512,6 +2538,7 @@ private fun routeRuleExample(type: ManagedRouteRuleType): String = stringResourc
         ManagedRouteRuleType.IP -> R.string.route_example_ip
         ManagedRouteRuleType.IPCidr -> R.string.route_example_ip_cidr
         ManagedRouteRuleType.IPRange -> R.string.route_example_ip_range
+        ManagedRouteRuleType.App -> R.string.route_example_app
     },
 )
 

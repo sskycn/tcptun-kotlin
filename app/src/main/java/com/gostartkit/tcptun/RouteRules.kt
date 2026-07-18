@@ -13,6 +13,7 @@ enum class ManagedRouteRuleType(val jsonKey: String) {
     IP("ips"),
     IPCidr("ip_cidrs"),
     IPRange("ip_ranges"),
+    App("app"),
 }
 
 enum class ManagedRouteOutbound(val tag: String) {
@@ -50,6 +51,23 @@ data class ManagedRouteRule(
             ManagedRouteRuleType.IP -> isNumericIp(normalized)
             ManagedRouteRuleType.IPCidr -> isValidCidr(normalized)
             ManagedRouteRuleType.IPRange -> isValidIpRange(normalized)
+            ManagedRouteRuleType.App -> isValidPackageName(normalized)
+        }
+    }
+
+    fun putMatchCondition(json: JSONObject): JSONObject {
+        return if (type == ManagedRouteRuleType.App) {
+            json.put(
+                "app",
+                JSONObject()
+                    .put("platforms", JSONArray().put("android"))
+                    .put(
+                        "attributes",
+                        JSONObject().put("packages", JSONArray().put(value)),
+                    ),
+            )
+        } else {
+            json.put(type.jsonKey, JSONArray().put(value))
         }
     }
 }
@@ -126,4 +144,8 @@ private fun isValidIpRange(value: String): Boolean {
     val start = value.substring(0, separator).trim()
     val end = value.substring(separator + 1).trim()
     return isNumericIp(start) && isNumericIp(end) && start.contains(':') == end.contains(':')
+}
+
+private fun isValidPackageName(value: String): Boolean {
+    return value.matches(Regex("[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+"))
 }

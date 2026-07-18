@@ -24,6 +24,10 @@ object HevSocks5Tunnel {
         return TProxyGetStats()
     }
 
+    fun resolveOriginalFlow(protocol: Int, sourceAddress: ByteArray, sourcePort: Int): String? {
+        return TProxyResolveOriginalFlow(protocol, sourceAddress, sourcePort)
+    }
+
     fun writeConfig(
         directory: File,
         socksHost: String,
@@ -80,6 +84,7 @@ object HevSocks5Tunnel {
     private external fun TProxyStopService()
     private external fun TProxyIsRunning(): Boolean
     private external fun TProxyGetStats(): LongArray
+    private external fun TProxyResolveOriginalFlow(protocol: Int, sourceAddress: ByteArray, sourcePort: Int): String?
 }
 
 private fun String.yamlSingleQuoted(): String {

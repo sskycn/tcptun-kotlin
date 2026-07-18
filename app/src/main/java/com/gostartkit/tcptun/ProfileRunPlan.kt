@@ -193,10 +193,11 @@ internal fun ProfileRunPlan.toBridgeJson(
             targetProfile != null -> tags.getValue(targetProfile.id)
             else -> return@forEach
         }
-        val route = JSONObject()
-            .put("inbound", JSONArray().put("local"))
-            .put(rule.type.jsonKey, JSONArray().put(rule.value))
-            .put("outbound", targetTag)
+        val route = rule.putMatchCondition(
+            JSONObject()
+                .put("inbound", JSONArray().put("local"))
+                .put("outbound", targetTag),
+        )
         if (targetProfile != null) {
             route.put("network", JSONArray().apply { targetProfile.effectiveTunnelNetworks().forEach(::put) })
         }

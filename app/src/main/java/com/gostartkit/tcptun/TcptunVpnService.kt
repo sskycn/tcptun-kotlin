@@ -126,6 +126,7 @@ class TcptunVpnService : VpnService() {
     @Volatile private var runningPlan: ProfileRunPlan? = null
     @Volatile private var monitorThread: Thread? = null
     private val connectivity by lazy { getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager }
+    private val appIdentityProvider by lazy { AndroidAppIdentityProvider(this, connectivity) }
     private var underlyingNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private var underlyingNetworkCallbackRegistered = false
     private val underlyingNetworkLock = Any()
@@ -627,6 +628,7 @@ class TcptunVpnService : VpnService() {
             clearDesiredRunningConfig(this)
         }
         runCatching { HevSocks5Tunnel.stop() }
+        appIdentityProvider.clear()
         runCatching { tun?.close() }
         tun = null
         tunnelMtu = DEFAULT_VPN_MTU
@@ -744,6 +746,7 @@ class TcptunVpnService : VpnService() {
         bridge.setLogCallback(TcptunState::appendLog)
         bridge.setStatusCallback { eventJson -> onBridgeStatusEvent(epoch, eventJson) }
         bridge.setSocketProtector { fd -> protect(fd) }
+        bridge.setAppIdentityProvider(appIdentityProvider::identify)
         TcptunState.applyBridgeStatusEvent(epoch, bridge.statusJson())
         val sessionId = synchronized(bridgeLock) {
             bridge.configure(configJson)

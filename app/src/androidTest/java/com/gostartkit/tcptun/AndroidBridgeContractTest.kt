@@ -217,6 +217,11 @@ class AndroidBridgeContractTest {
                         outbound = ManagedRouteOutbound.Proxy,
                         enabled = false,
                     ),
+                    ManagedRouteRule(
+                        type = ManagedRouteRuleType.App,
+                        value = "com.android.chrome",
+                        outbound = ManagedRouteOutbound.Direct,
+                    ),
                 ),
             ),
         )
@@ -225,7 +230,14 @@ class AndroidBridgeContractTest {
         assertEquals("proxy", rules.getJSONObject(0).getString("outbound"))
         assertEquals("direct", rules.getJSONObject(1).getString("outbound"))
         assertEquals("example.com", rules.getJSONObject(1).getJSONArray("domain_suffixes").getString(0))
-        assertEquals(2, rules.length())
+        assertEquals("direct", rules.getJSONObject(2).getString("outbound"))
+        val app = rules.getJSONObject(2).getJSONObject("app")
+        assertEquals("android", app.getJSONArray("platforms").getString(0))
+        assertEquals(
+            "com.android.chrome",
+            app.getJSONObject("attributes").getJSONArray("packages").getString(0),
+        )
+        assertEquals(3, rules.length())
         assertFalse(config.has("discovery"))
 
         assertEngineStarts(config.toString())

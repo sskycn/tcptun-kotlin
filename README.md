@@ -124,11 +124,16 @@ all three steps succeed is `Running` published. Failure rolls back tun2socks, th
 TUN descriptor, and the Engine in reverse order. Stop and `onRevoke()` use the same
 idempotent teardown; `onDestroy()` finally calls `Engine.Close()`.
 
-`SetAppIdentityProvider` is currently left unset. The existing tun2socks hop
-does not carry the originating Android UID to the local Go inbound, so resolving
-the accepted loopback socket would incorrectly identify the client process.
-Android per-app filtering is intentionally not used: the VPN installs IPv4 and
-IPv6 default routes and sends all captured traffic to tcptun-go.
+`SetAppIdentityProvider` is backed by a native flow registry on Android 10 and
+newer. Before each SOCKS request, `hev-socks5-tunnel` associates its loopback
+source endpoint with the original TUN flow. The provider resolves that original
+TCP/UDP tuple with `ConnectivityManager.getConnectionOwnerUid`, maps the UID to
+installed package names, and returns a local-only app identity to tcptun-go.
+Managed app rules use the multi-valued `attributes.packages` matcher so shared
+UID packages are handled conservatively. On Android 9 and older, app identity is
+unavailable and app rules simply do not match; ordinary routing continues.
+Android per-app VPN filtering is not used: the VPN still captures IPv4 and IPv6
+default routes and lets tcptun-go select an outbound per flow.
 
 Profiles can also store a complete strict tcptun-go JSON document. The app
 preserves all supported `log`, `inbounds`, `outbounds`, `route`, and `dns`
@@ -287,6 +292,7 @@ vless://00000000-0000-4000-8000-000000000000@203.0.113.10:443?security=reality&e
 - In-app diagnostics for VPN, underlying network, bridge state, local proxy reachability, MTU, UDP, and socket protect.
 - Runtime MTU and UDP test-mode settings.
 - Strict tcptun-go topology config and cached TCP direct-first routing.
+- Android 10+ per-app outbound routing for TCP and UDP flows.
 - Import, edit, persist, share, and run complete strict tcptun-go JSON profiles.
 
 ## Not yet supported

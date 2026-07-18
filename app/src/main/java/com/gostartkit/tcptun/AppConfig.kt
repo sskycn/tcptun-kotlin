@@ -217,10 +217,11 @@ data class AppConfig(
         }
         activeManagedRules.forEach { rule ->
             rules.put(
-                JSONObject()
-                    .put("inbound", JSONArray().put("local"))
-                    .put(rule.type.jsonKey, JSONArray().put(rule.value))
-                    .put("outbound", rule.outbound.tag),
+                rule.putMatchCondition(
+                    JSONObject()
+                        .put("inbound", JSONArray().put("local"))
+                        .put("outbound", rule.outbound.tag),
+                ),
             )
         }
         if (allowDirectFirst) {

@@ -142,6 +142,9 @@
     <string name="route_type_ip">Exact IP address</string>
     <string name="route_type_ip_cidr">IP CIDR</string>
     <string name="route_type_ip_range">IP range</string>
+    <string name="route_type_app">Android app</string>
+    <string name="route_select_app">Select app</string>
+    <string name="route_app_package">Package name</string>
     <string name="route_outbound_proxy">Dynamic connection pool</string>
     <string name="route_outbound_direct">Direct connection</string>
     <string name="route_example_domain">Example: api.example.com</string>
@@ -150,6 +153,7 @@
     <string name="route_example_ip">Example: 203.0.113.10</string>
     <string name="route_example_ip_cidr">Example: 203.0.113.0/24</string>
     <string name="route_example_ip_range">Example: 203.0.113.10-203.0.113.20</string>
+    <string name="route_example_app">Android 10 or newer. Example: com.example.app</string>
     <string name="socks_username">SOCKS username</string>
     <string name="socks_password">SOCKS password</string>
     <string name="socks_auth">SOCKS auth</string>
