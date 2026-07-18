@@ -3,7 +3,6 @@ package com.tcptun.client
 import android.content.Intent
 import android.net.Uri
 import androidbridge.Androidbridge
-import androidx.core.content.ContextCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.king.wechat.qrcode.WeChatQRCodeDetector
@@ -524,8 +523,7 @@ class AndroidBridgeContractTest {
             protocol = "native",
         )
         val expectedUri = requireNotNull(ProfileUriCodec.encode(profile))
-        val logo = requireNotNull(ContextCompat.getDrawable(context, R.mipmap.ic_launcher))
-        val bitmap = generateQrCodeBitmap(expectedUri, 768, logo)
+        val bitmap = generateQrCodeBitmap(expectedUri, 768)
 
         WeChatQRCodeDetector.init(context)
         assertEquals(expectedUri, WeChatQRCodeDetector.detectAndDecode(bitmap).firstOrNull())

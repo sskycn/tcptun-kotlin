@@ -1,11 +1,7 @@
 package com.tcptun.client
 
 import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.RectF
-import android.graphics.drawable.Drawable
 import org.opencv.OpenCV
 import org.opencv.core.Mat
 import org.opencv.objdetect.QRCodeEncoder
@@ -32,7 +28,6 @@ internal object OpenCvRuntime {
 internal fun generateQrCodeBitmap(
     content: String,
     size: Int,
-    logo: Drawable? = null,
 ): Bitmap {
     require(content.isNotBlank()) { "QR code content must not be blank" }
     require(size > 0) { "QR code size must be positive" }
@@ -72,46 +67,11 @@ internal fun generateQrCodeBitmap(
 
         return Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).apply {
             setPixels(pixels, 0, size, 0, 0, size, size)
-            logo?.let { drawCenteredLogo(this, it) }
         }
     } finally {
         encoded.release()
     }
 }
 
-private fun drawCenteredLogo(bitmap: Bitmap, source: Drawable) {
-    val canvas = Canvas(bitmap)
-    val shortestSide = minOf(bitmap.width, bitmap.height)
-    val backgroundSize = shortestSide * LOGO_BACKGROUND_RATIO
-    val logoSize = (shortestSide * LOGO_RATIO).toInt()
-    val centerX = bitmap.width / 2f
-    val centerY = bitmap.height / 2f
-    val backgroundBounds = RectF(
-        centerX - backgroundSize / 2f,
-        centerY - backgroundSize / 2f,
-        centerX + backgroundSize / 2f,
-        centerY + backgroundSize / 2f,
-    )
-    val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        style = Paint.Style.FILL
-    }
-    canvas.drawRoundRect(
-        backgroundBounds,
-        backgroundSize * LOGO_CORNER_RATIO,
-        backgroundSize * LOGO_CORNER_RATIO,
-        backgroundPaint,
-    )
-
-    val logo = source.constantState?.newDrawable()?.mutate() ?: source.mutate()
-    val left = (bitmap.width - logoSize) / 2
-    val top = (bitmap.height - logoSize) / 2
-    logo.setBounds(left, top, left + logoSize, top + logoSize)
-    logo.draw(canvas)
-}
-
 private const val QUIET_ZONE_MODULES = 4
 private const val BLACK_THRESHOLD = 128
-private const val LOGO_BACKGROUND_RATIO = 0.20f
-private const val LOGO_RATIO = 0.16f
-private const val LOGO_CORNER_RATIO = 0.18f

@@ -11,6 +11,7 @@
     <string name="show_qr_code">生成二维码</string>
     <string name="profile_qr_code">配置二维码</string>
     <string name="profile_qr_code_description">%1$s 的配置二维码</string>
+    <string name="profile_qr_code_hint">使用 TcpTun 扫描即可导入此配置</string>
     <string name="scan_qr_code">扫描二维码</string>
     <string name="scan_profile_qr_code">扫描配置二维码</string>
     <string name="scan_qr_instruction">将配置二维码放入框内</string>

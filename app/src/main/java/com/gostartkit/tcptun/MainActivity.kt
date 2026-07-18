@@ -126,6 +126,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import com.tcptun.client.ui.theme.TcpTunTheme
 import kotlinx.coroutines.CancellationException
@@ -144,6 +145,8 @@ private const val HealthUnknownAnimationIntervalMillis = 500L
 private val CardShape = RoundedCornerShape(16.dp)
 private val CardShapeCompact = RoundedCornerShape(12.dp)
 private val MenuShape = RoundedCornerShape(12.dp)
+private val DialogShape = RoundedCornerShape(28.dp)
+private val QrCardShape = RoundedCornerShape(20.dp)
 private val ListContentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
 private val ListItemSpacing = 8.dp
 
@@ -1370,46 +1373,113 @@ private fun ProfileQrCodeDialog(
     profile: AppConfig,
     onDismiss: () -> Unit,
 ) {
-    val context = LocalContext.current
+    val colors = MaterialTheme.colorScheme
     val uri = remember(profile) { requireNotNull(ProfileUriCodec.encode(profile)) }
-    val logo = remember(context) { ContextCompat.getDrawable(context, R.mipmap.ic_launcher) }
-    val bitmap = remember(uri, logo) { generateQrCodeBitmap(uri, 768, logo) }
+    val bitmap = remember(uri) { generateQrCodeBitmap(uri, 768) }
+    val profileMeta = listOf(profile.label(), profile.maskedAddress())
+        .filter { it.isNotBlank() }
+        .joinToString(" · ")
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Rounded.QrCode2, contentDescription = null) },
-        title = { Text(stringResource(R.string.profile_qr_code)) },
-        text = {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = DialogShape,
+            color = colors.surfaceContainerHigh,
+            tonalElevation = 6.dp,
+        ) {
             Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 28.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Surface(
-                    shape = CardShapeCompact,
+                    modifier = Modifier.size(52.dp),
+                    shape = CircleShape,
+                    color = colors.primaryContainer,
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Rounded.QrCode2,
+                            contentDescription = null,
+                            tint = colors.onPrimaryContainer,
+                            modifier = Modifier.size(28.dp),
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = stringResource(R.string.profile_qr_code),
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = colors.onSurface,
+                    textAlign = TextAlign.Center,
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Text(
+                    text = profile.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = colors.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                )
+
+                if (profileMeta.isNotBlank()) {
+                    Text(
+                        text = profileMeta,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp),
+                    shape = QrCardShape,
                     color = Color.White,
+                    shadowElevation = 2.dp,
                 ) {
                     Image(
                         bitmap = bitmap.asImageBitmap(),
-                        contentDescription = stringResource(R.string.profile_qr_code_description, profile.name),
+                        contentDescription = stringResource(
+                            R.string.profile_qr_code_description,
+                            profile.name,
+                        ),
                         modifier = Modifier
                             .fillMaxWidth()
                             .aspectRatio(1f)
-                            .padding(12.dp),
+                            .padding(20.dp),
                     )
                 }
+
                 Text(
-                    text = profile.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = stringResource(R.string.profile_qr_code_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 20.dp),
                 )
+
+                FilledTonalButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.close))
+                }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.close))
-            }
-        },
-    )
+        }
+    }
 }
 
 @Composable
