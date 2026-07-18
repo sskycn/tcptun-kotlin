@@ -27,8 +27,6 @@ class CompactProfileCodecTest {
             muxMaxSessions = 6,
             muxMaxStreamsPerSession = 256,
             muxWarmSpare = 2,
-            tunnelNetwork = "tcp",
-            udp = false,
             upstreamProtocol = "mixed",
         )
         val plain = requireNotNull(ProfileUriCodec.encode(profile))
@@ -59,8 +57,6 @@ class CompactProfileCodecTest {
         assertEquals(profile.muxMaxSessions, decoded.muxMaxSessions)
         assertEquals(profile.muxMaxStreamsPerSession, decoded.muxMaxStreamsPerSession)
         assertEquals(profile.muxWarmSpare, decoded.muxWarmSpare)
-        assertEquals(profile.tunnelNetwork, decoded.tunnelNetwork)
-        assertEquals(profile.udp, decoded.udp)
         assertEquals(profile.upstreamProtocol, decoded.upstreamProtocol)
         assertNull(decoded.validate())
     }

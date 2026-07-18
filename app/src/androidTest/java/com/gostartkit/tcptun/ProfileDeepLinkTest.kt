@@ -99,13 +99,11 @@ class ProfileDeepLinkTest {
         assertEquals("edge.example.com", profile.sni)
         assertTrue(profile.tls)
         assertTrue(profile.tlsInsecure)
-        assertTrue(profile.udp)
         assertTrue(profile.mux)
         assertEquals("group", profile.muxMode)
         assertEquals(6, profile.muxMaxSessions)
         assertEquals(256, profile.muxMaxStreamsPerSession)
         assertEquals(2, profile.muxWarmSpare)
-        assertEquals("tcp,udp", profile.tunnelNetwork)
         assertNull(profile.validate())
 
         val bridge = JSONObject(profile.toBridgeJson("127.0.0.1:1080"))
@@ -138,8 +136,6 @@ class ProfileDeepLinkTest {
                 muxMaxSessions = 4,
                 muxMaxStreamsPerSession = 128,
                 muxWarmSpare = 1,
-                tunnelNetwork = "tcp,udp",
-                udp = true,
             )
             val plain = requireNotNull(ProfileUriCodec.encode(profile))
             val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
@@ -168,7 +164,6 @@ class ProfileDeepLinkTest {
             assertEquals(profile.muxMaxStreamsPerSession, decoded.muxMaxStreamsPerSession)
             assertEquals(profile.muxWarmSpare, decoded.muxWarmSpare)
             assertEquals(profile.name, decoded.name)
-            assertTrue(decoded.udp)
             assertNull(decoded.validate())
         }
     }
@@ -192,8 +187,6 @@ class ProfileDeepLinkTest {
                 realitySpiderX = "/",
                 flow = if (protocol == "vless") "xtls-rprx-vision" else "",
                 mux = false,
-                tunnelNetwork = "tcp,udp",
-                udp = true,
             )
             val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
             assertTrue("$protocol payload", qrPayload.startsWith("T2:"))
@@ -209,7 +202,6 @@ class ProfileDeepLinkTest {
             assertEquals(profile.realityPublicKey, decoded.realityPublicKey)
             assertEquals(profile.sni, decoded.sni)
             assertFalse(decoded.mux)
-            assertTrue(decoded.udp)
             assertEquals("raw", decoded.transport)
             if (protocol == "vless") {
                 assertEquals("xtls-rprx-vision", decoded.flow)
@@ -230,8 +222,6 @@ class ProfileDeepLinkTest {
             sni = "edge.example.com",
             path = "/tunnel",
             mux = true,
-            tunnelNetwork = "tcp",
-            udp = false,
         )
         val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
         assertTrue(qrPayload.startsWith("T2:"))
@@ -243,8 +233,6 @@ class ProfileDeepLinkTest {
         assertEquals("ws", decoded.transport)
         assertEquals("/tunnel", decoded.path)
         assertTrue(decoded.mux)
-        assertEquals("tcp", decoded.tunnelNetwork)
-        assertFalse(decoded.udp)
     }
 
     @Test
@@ -265,8 +253,6 @@ class ProfileDeepLinkTest {
             realitySpiderX = "/crawl",
             mux = false,
             tlsInsecure = false,
-            tunnelNetwork = "tcp",
-            udp = false,
         )
         val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
         assertTrue(qrPayload.startsWith("T2:"))
@@ -281,8 +267,6 @@ class ProfileDeepLinkTest {
         assertEquals(profile.realitySpiderX, decoded.realitySpiderX)
         assertEquals(profile.flow, decoded.flow)
         assertFalse(decoded.mux)
-        assertEquals("tcp", decoded.tunnelNetwork)
-        assertFalse(decoded.udp)
     }
 
     @Test
@@ -303,8 +287,6 @@ class ProfileDeepLinkTest {
                 muxMaxSessions = 4,
                 muxMaxStreamsPerSession = 128,
                 muxWarmSpare = 1,
-                tunnelNetwork = "tcp,udp",
-                udp = true,
             )
             val encoded = ProfileUriCodec.encode(profile)
             assertNotNull("failed to encode $protocol", encoded)
@@ -314,8 +296,6 @@ class ProfileDeepLinkTest {
             assertEquals(4, decoded.muxMaxSessions)
             assertEquals(128, decoded.muxMaxStreamsPerSession)
             assertEquals(1, decoded.muxWarmSpare)
-            assertEquals("tcp,udp", decoded.tunnelNetwork)
-            assertTrue(decoded.udp)
             assertNull(decoded.validate())
         }
     }

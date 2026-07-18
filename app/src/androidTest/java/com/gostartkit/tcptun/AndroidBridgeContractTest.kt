@@ -253,7 +253,6 @@ class AndroidBridgeContractTest {
             upstreamProtocol = "socks5",
         )
         val raw = AppConfig(
-            udp = false,
             rawConfigJson = """{
                 "outbounds":[{"tag":"direct","type":"direct","network":["tcp"]}],
                 "route":{"default_outbound":"direct"}
@@ -282,7 +281,6 @@ class AndroidBridgeContractTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val originalSettings = TcptunVpnService.readRuntimeSettings(context)
         val profile = AppConfig(
-            udp = false,
             rawConfigJson = """{
                 "outbounds":[{"tag":"direct","type":"direct","network":["tcp"]}],
                 "route":{"default_outbound":"direct"}
@@ -327,7 +325,6 @@ class AndroidBridgeContractTest {
             serverPort = "443",
             token = "secondary-token",
             protocol = "native",
-            udp = false,
         )
         val config = JSONObject(
             ProfileRunPlan(listOf(primary, secondary), activeIds = setOf(primary.id)).toBridgeJson(

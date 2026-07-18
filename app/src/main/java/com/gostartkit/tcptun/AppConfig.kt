@@ -56,8 +56,6 @@ data class AppConfig(
     val muxMaxSessions: Int = 0,
     val muxMaxStreamsPerSession: Int = 0,
     val muxWarmSpare: Int = 0,
-    val tunnelNetwork: String = "",
-    val udp: Boolean = true,
     val upstreamProtocol: String = "socks5",
     val rawConfigJson: String = "",
 ) {
@@ -82,9 +80,6 @@ data class AppConfig(
         if (protocol !in Protocols) return "unsupported protocol: $protocol"
         if (transport !in Transports) return "unsupported transport: $transport"
         if (upstreamProtocol !in UpstreamProtocols) return "unsupported upstream protocol: $upstreamProtocol"
-        val outboundNetworks = runCatching { effectiveTunnelNetworks() }
-            .getOrElse { return it.message ?: "invalid tunnel network" }
-        if (outboundNetworks.isEmpty()) return "tunnel network must not be empty"
         val normalizedMuxMode = muxMode.trim().lowercase()
         if (normalizedMuxMode !in MuxModes) return "unsupported mux mode: $muxMode"
         if (!mux && (normalizedMuxMode.isNotBlank() || muxMaxSessions != 0 || muxMaxStreamsPerSession != 0 || muxWarmSpare != 0)) {
@@ -540,17 +535,6 @@ data class AppConfig(
         return if (trimmed.startsWith("/")) trimmed else "/$trimmed"
     }
 
-    internal fun effectiveTunnelNetworks(): List<String> {
-        if (tunnelNetwork.isBlank()) return if (udp) listOf("tcp", "udp") else listOf("tcp")
-        return tunnelNetwork.split(',').map { value ->
-            value.trim().lowercase().also { network ->
-                require(network in setOf("tcp", "udp")) { "unsupported tunnel network: $network" }
-            }
-        }.also { networks ->
-            require(networks.isNotEmpty() && networks.none(String::isBlank)) { "tunnel network must not be empty" }
-        }.distinct()
-    }
-
     companion object {
         val Protocols = listOf("native", "vless", "vmess", "trojan")
         val Transports = listOf("raw", "ws", "h2", "h3")
@@ -589,8 +573,6 @@ data class AppConfig(
                 muxMaxSessions = obj.optInt("muxMaxSessions", 0),
                 muxMaxStreamsPerSession = obj.optInt("muxMaxStreamsPerSession", 0),
                 muxWarmSpare = obj.optInt("muxWarmSpare", 0),
-                tunnelNetwork = obj.optString("tunnelNetwork"),
-                udp = obj.optBoolean("udp", true),
                 upstreamProtocol = obj.optString("upstreamProtocol", "socks5"),
                 rawConfigJson = obj.optString("rawConfigJson"),
             )
@@ -669,8 +651,6 @@ data class AppConfig(
             .put("muxMaxSessions", muxMaxSessions)
             .put("muxMaxStreamsPerSession", muxMaxStreamsPerSession)
             .put("muxWarmSpare", muxWarmSpare)
-            .put("tunnelNetwork", tunnelNetwork)
-            .put("udp", udp)
             .put("upstreamProtocol", upstreamProtocol)
             .put("rawConfigJson", rawConfigJson)
     }
@@ -786,7 +766,6 @@ object ProfileStore {
             path = prefs.getString("path", "/proxy") ?: "/proxy",
             tls = prefs.getBoolean("tls", false),
             mux = prefs.getBoolean("mux", true),
-            udp = prefs.getBoolean("udp", true),
         )
         return ProfilesState(listOf(profile))
     }

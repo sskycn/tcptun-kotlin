@@ -30,7 +30,6 @@ class VpnServiceLifecycleTest {
         val profile = AppConfig(
             id = "vpn-service-lifecycle",
             name = "VPN service lifecycle",
-            udp = false,
             rawConfigJson = """{
                 "outbounds":[{"tag":"direct","type":"direct","network":["tcp"]}],
                 "route":{

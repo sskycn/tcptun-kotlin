@@ -81,8 +81,7 @@ object ProfileUriCodec {
         val security = uri.getQueryParameter("security").orEmpty().lowercase()
         if (security !in setOf("", "none", "tls", "reality")) error("unsupported security: $security")
         val path = uri.getQueryParameter("path") ?: uri.getQueryParameter("spx") ?: "/proxy"
-        val networks = parseNetworks(uri.getQueryParameter("network"))
-        val udp = if (networks != null) "udp" in networks else uri.getBooleanParameterCompat("udp", false)
+        validateNetworks(uri.getQueryParameter("network"))
         return AppConfig(
             id = UUID.randomUUID().toString(),
             name = uri.fragment?.ifBlank { null } ?: host,
@@ -110,8 +109,6 @@ object ProfileUriCodec {
             muxMaxSessions = uri.getIntParameter("mux_max_sessions"),
             muxMaxStreamsPerSession = uri.getIntParameter("mux_max_streams_per_session"),
             muxWarmSpare = uri.getIntParameter("mux_warm_spares"),
-            tunnelNetwork = networks?.joinToString(",").orEmpty(),
-            udp = udp,
             upstreamProtocol = uri.getQueryParameter("upstream").orEmpty()
                 .ifBlank { uri.getQueryParameter("upstream_protocol").orEmpty() }
                 .ifBlank { "socks5" },
@@ -151,7 +148,7 @@ object ProfileUriCodec {
             }
             else -> "tls"
         }
-        val networks = parseNetworks(obj.optString("tcptun_network").ifBlank { obj.optString("network") })
+        validateNetworks(obj.optString("tcptun_network").ifBlank { obj.optString("network") })
         val mux = when {
             obj.has("tcptun_mux") -> obj.optBoolean("tcptun_mux", false)
             obj.has("mux") -> obj.optBoolean("mux", false)
@@ -183,8 +180,6 @@ object ProfileUriCodec {
                 obj.optInt("mux_max_streams_per_session", 0),
             ),
             muxWarmSpare = obj.optInt("tcptun_mux_warm_spares", obj.optInt("mux_warm_spares", 0)),
-            tunnelNetwork = networks?.joinToString(",").orEmpty(),
-            udp = networks?.contains("udp") ?: obj.optBoolean("udp", false),
             upstreamProtocol = obj.optString("upstream").ifBlank {
                 obj.optString("upstream_protocol", "socks5")
             },
@@ -264,8 +259,6 @@ object ProfileUriCodec {
             muxMaxSessions = obj.optInt("tunnel_mux_max_sessions", 0),
             muxMaxStreamsPerSession = obj.optInt("tunnel_mux_max_streams_per_session", 0),
             muxWarmSpare = obj.optInt("tunnel_mux_warm_spares", 0),
-            tunnelNetwork = obj.optString("tunnel_network"),
-            udp = obj.optBoolean("enable_udp", true),
             upstreamProtocol = obj.optString("upstream_protocol", "socks5").ifBlank { "socks5" },
         )
     }
@@ -291,7 +284,7 @@ object ProfileUriCodec {
             .put("sni", config.sni)
             .put("allowInsecure", config.tlsInsecure)
             .put("tcptun_mux", config.mux)
-            .put("tcptun_network", config.effectiveTunnelNetworks().joinToString(","))
+            .put("tcptun_network", AndroidTunNetworks.joinToString(","))
         putJsonIfNotBlank(obj, "tcptun_mux_mode", config.muxMode)
         if (config.muxMaxSessions > 0) obj.put("tcptun_mux_max_sessions", config.muxMaxSessions)
         if (config.muxMaxStreamsPerSession > 0) {
@@ -327,7 +320,7 @@ object ProfileUriCodec {
         putIfNotBlank(params, "sni", config.sni)
         if (config.tlsInsecure) params["insecure"] = "true"
         if (config.transport != "raw") putIfNotBlank(params, "path", config.path)
-        params["network"] = config.effectiveTunnelNetworks().joinToString(",")
+        params["network"] = AndroidTunNetworks.joinToString(",")
         params["mux"] = config.mux.toString()
         putIfNotBlank(params, "mux_mode", config.muxMode)
         if (config.muxMaxSessions > 0) params["mux_max_sessions"] = config.muxMaxSessions.toString()
@@ -399,15 +392,14 @@ object ProfileUriCodec {
         }
     }
 
-    private fun parseNetworks(value: String?): Set<String>? {
+    private fun validateNetworks(value: String?) {
         val text = value?.trim().orEmpty()
-        if (text.isBlank()) return null
-        return text.split(',').mapTo(linkedSetOf()) { network ->
-            network.trim().lowercase().also {
-                if (it !in setOf("tcp", "udp")) error("unsupported network: $it")
+        if (text.isBlank()) return
+        text.split(',').forEach { value ->
+            val network = value.trim().lowercase()
+            if (network !in setOf("tcp", "udp")) {
+                error("unsupported network: $network")
             }
-        }.also {
-            if (it.isEmpty()) error("network must not be empty")
         }
     }
 
@@ -470,13 +462,7 @@ object ProfileUriCodec {
             config.tls -> 1
             else -> 0
         }
-        val networks = runCatching { config.effectiveTunnelNetworks() }.getOrNull() ?: return null
-        val networkCode = when (networks) {
-            listOf("tcp", "udp"), listOf("udp", "tcp") -> 0
-            listOf("tcp") -> 1
-            listOf("udp") -> 2
-            else -> return null
-        }
+        val networkCode = 0
         val muxModeCode = when (config.muxMode.trim().lowercase()) {
             "" -> 0
             "group" -> 1
@@ -562,11 +548,8 @@ object ProfileUriCodec {
             ?: error("unsupported compact transport")
         val securityCode = (header0 ushr 4) and 0x03
         if (securityCode == 3) error("unsupported compact security")
-        val networkCode = header1 and 0x03
-        val networks = when (networkCode) {
-            0 -> listOf("tcp", "udp")
-            1 -> listOf("tcp")
-            2 -> listOf("udp")
+        when (header1 and 0x03) {
+            0, 1, 2 -> Unit
             else -> error("unsupported compact network")
         }
         val muxMode = when ((header1 ushr 3) and 0x03) {
@@ -634,8 +617,6 @@ object ProfileUriCodec {
             muxMaxSessions = muxMaxSessions,
             muxMaxStreamsPerSession = muxMaxStreamsPerSession,
             muxWarmSpare = muxWarmSpare,
-            tunnelNetwork = networks.joinToString(","),
-            udp = "udp" in networks,
             upstreamProtocol = if (header1 and 0x04 != 0) "mixed" else CompactDefaultUpstream,
         )
     }

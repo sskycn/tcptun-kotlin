@@ -29,7 +29,7 @@ import java.net.Socket
 @RunWith(AndroidJUnit4::class)
 class LiveConnectivityTest {
     @Test
-    fun profileSupportsTcpAndRepeatedVpnLifecycle() {
+    fun profileSupportsNativeTunAndRepeatedVpnLifecycle() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val encodedProfile = InstrumentationRegistry.getArguments().getString(PROFILE_ARGUMENT).orEmpty()
@@ -42,7 +42,6 @@ class LiveConnectivityTest {
             throw AssertionError("live profile could not be decoded")
         }
         assertNull("live profile is invalid", profile.validate())
-        assertTrue("live profile must enable TCP", "tcp" in profile.effectiveTunnelNetworks())
 
         val originalSettings = TcptunVpnService.readRuntimeSettings(context)
         val socksPort = availablePort()

@@ -6,7 +6,6 @@
     <string name="import_from_clipboard">从剪切板导入</string>
     <string name="add_profile">添加配置</string>
     <string name="edit_profile">编辑配置</string>
-    <string name="profile_actions">配置操作</string>
     <string name="share">分享</string>
     <string name="show_qr_code">生成二维码</string>
     <string name="profile_qr_code">配置二维码</string>
@@ -24,7 +23,6 @@
     <string name="invalid_scanned_profile">该二维码中没有支持的配置。</string>
     <string name="turn_flashlight_on">打开手电筒</string>
     <string name="turn_flashlight_off">关闭手电筒</string>
-    <string name="edit">编辑</string>
     <string name="delete">删除</string>
     <string name="undo">撤销</string>
     <string name="profile_deleted">已删除 %1$s</string>
@@ -91,7 +89,6 @@
     <string name="proxy_lan_available">局域网可访问</string>
     <string name="proxy_no_reachable_address">无可访问地址</string>
     <string name="ip_information_note">客户端代理地址是其他设备实际使用的连接地址：优先显示当前 Wi-Fi 热点接口，未启用热点时回退到当前局域网地址。回环监听只能由本机访问。这里显示的是本地地址，不是公网出口 IP。</string>
-    <string name="battery_settings">省电设置</string>
     <string name="runtime_diagnostics">运行诊断</string>
     <string name="diag_vpn">VPN</string>
     <string name="diag_underlying_network">底层网络</string>
@@ -169,12 +166,7 @@
     <string name="current_effective">当前生效</string>
     <string name="back">返回</string>
     <string name="logs">日志</string>
-    <string name="reset">重置</string>
     <string name="clear">清空</string>
-    <string name="saved">已保存</string>
-    <string name="save_failed">保存失败</string>
-    <string name="delete_failed">删除失败</string>
-    <string name="rule">规则</string>
     <string name="save">保存</string>
     <string name="cancel">取消</string>
     <string name="name">名称</string>
@@ -205,11 +197,9 @@
     <string name="field_fingerprint">Fingerprint</string>
     <string name="field_short_id">Short ID</string>
     <string name="field_spider_x">SpiderX</string>
-    <string name="field_upstream">Upstream</string>
     <string name="field_tls">TLS</string>
     <string name="field_tls_insecure">TLS insecure</string>
     <string name="field_mux">Mux</string>
-    <string name="field_udp">UDP</string>
     <string name="full_config_mode">完整 tcptun-go JSON</string>
     <string name="full_config_json">tcptun-go 配置 JSON</string>
     <string name="full_config_note">保留 tcptun-go 支持的全部字段；VPN 流量通过 tag 为 tun 的原生 TUN 入站进入，本地代理监听仍独立保留。</string>

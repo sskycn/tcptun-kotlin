@@ -6,7 +6,6 @@
     <string name="import_from_clipboard">Import from clipboard</string>
     <string name="add_profile">Add profile</string>
     <string name="edit_profile">Edit profile</string>
-    <string name="profile_actions">Profile actions</string>
     <string name="share">Share</string>
     <string name="show_qr_code">Show QR code</string>
     <string name="profile_qr_code">Profile QR code</string>
@@ -24,7 +23,6 @@
     <string name="invalid_scanned_profile">This QR code does not contain a supported profile.</string>
     <string name="turn_flashlight_on">Turn flashlight on</string>
     <string name="turn_flashlight_off">Turn flashlight off</string>
-    <string name="edit">Edit</string>
     <string name="delete">Delete</string>
     <string name="undo">Undo</string>
     <string name="profile_deleted">Deleted %1$s</string>
@@ -92,7 +90,6 @@
     <string name="proxy_lan_available">LAN accessible</string>
     <string name="proxy_no_reachable_address">No reachable address</string>
     <string name="ip_information_note">The client proxy address is the address another device can use. It prefers the active Wi-Fi hotspot interface, then falls back to the current LAN address. A loopback listener is only reachable on this device. These are local addresses, not public egress IPs.</string>
-    <string name="battery_settings">Battery settings</string>
     <string name="runtime_diagnostics">Runtime diagnostics</string>
     <string name="diag_vpn">VPN</string>
     <string name="diag_underlying_network">Underlying network</string>
@@ -170,12 +167,7 @@
     <string name="current_effective">Current effective settings</string>
     <string name="back">Back</string>
     <string name="logs">Logs</string>
-    <string name="reset">Reset</string>
     <string name="clear">Clear</string>
-    <string name="saved">Saved</string>
-    <string name="save_failed">Save failed</string>
-    <string name="delete_failed">Delete failed</string>
-    <string name="rule">Rule</string>
     <string name="save">Save</string>
     <string name="cancel">Cancel</string>
     <string name="name">Name</string>
@@ -206,11 +198,9 @@
     <string name="field_fingerprint">Fingerprint</string>
     <string name="field_short_id">Short ID</string>
     <string name="field_spider_x">SpiderX</string>
-    <string name="field_upstream">Upstream</string>
     <string name="field_tls">TLS</string>
     <string name="field_tls_insecure">TLS insecure</string>
     <string name="field_mux">Mux</string>
-    <string name="field_udp">UDP</string>
     <string name="full_config_mode">Full tcptun-go JSON</string>
     <string name="full_config_json">tcptun-go configuration JSON</string>
     <string name="full_config_note">All tcptun-go fields are preserved. VPN traffic enters through the native TUN inbound tagged tun; the local proxy listener remains available separately.</string>

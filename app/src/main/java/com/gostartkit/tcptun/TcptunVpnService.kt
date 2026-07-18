@@ -196,32 +196,9 @@ class TcptunVpnService : VpnService() {
                 if (generation != lifecycleGeneration.get()) return
                 TcptunState.setStatus("Starting")
                 startVpnForeground("Starting")
-                val fallbackConfig = AppConfig(
-                    serverHost = intent.getStringExtra("serverHost").orEmpty(),
-                    serverPort = intent.getStringExtra("serverPort") ?: "9443",
-                    protocol = intent.getStringExtra("protocol") ?: "native",
-                    transport = intent.getStringExtra("transport") ?: "raw",
-                    token = intent.getStringExtra("token").orEmpty(),
-                    sni = intent.getStringExtra("sni").orEmpty(),
-                    path = intent.getStringExtra("path") ?: "/proxy",
-                    tls = intent.getBooleanExtra("tls", false),
-                    tlsInsecure = intent.getBooleanExtra("tlsInsecure", false),
-                    tunnelSecurity = intent.getStringExtra("tunnelSecurity").orEmpty(),
-                    flow = intent.getStringExtra("flow").orEmpty(),
-                    realityPublicKey = intent.getStringExtra("realityPublicKey").orEmpty(),
-                    realityShortId = intent.getStringExtra("realityShortId").orEmpty(),
-                    realityFingerprint = intent.getStringExtra("realityFingerprint").orEmpty(),
-                    realitySpiderX = intent.getStringExtra("realitySpiderX").orEmpty(),
-                    mux = intent.getBooleanExtra("mux", true),
-                    udp = intent.getBooleanExtra("udp", true),
-                    upstreamProtocol = intent.getStringExtra("upstreamProtocol") ?: "socks5",
-                )
-                val intentProfile = intent.getStringExtra(EXTRA_PROFILE_CONFIG)
-                    ?.let { raw -> runCatching { AppConfig.fromJson(JSONObject(raw)) }.getOrNull() }
-                    ?: fallbackConfig
                 val plan = intent.getStringExtra(EXTRA_PROFILE_PLAN)
                     ?.let { raw -> runCatching { ProfileRunPlan.fromJson(JSONObject(raw)) }.getOrNull() }
-                    ?: ProfileRunPlan(listOf(intentProfile)).normalized()
+                    ?: error("missing or invalid VPN profile plan")
                 val runtimeSettings = readRuntimeSettings(this)
                 activeSocksPort = runtimeSettings.socksPort
                 activeSocksUsername = runtimeSettings.socksUsername
@@ -594,12 +571,7 @@ class TcptunVpnService : VpnService() {
             if (setStopped) {
                 TcptunState.setStatus("Stopped")
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-            } else {
-                @Suppress("DEPRECATION")
-                stopForeground(true)
-            }
+            stopForeground(STOP_FOREGROUND_REMOVE)
             if (stopSelfService) {
                 stopSelf()
             }
@@ -1375,7 +1347,6 @@ class TcptunVpnService : VpnService() {
         const val ACTION_APPLY_RUNTIME_SETTINGS = "com.tcptun.client.APPLY_RUNTIME_SETTINGS"
         const val ACTION_REFRESH_CLIENT_IPS = "com.tcptun.client.REFRESH_CLIENT_IPS"
         const val EXTRA_CONFIG = "config"
-        private const val EXTRA_PROFILE_CONFIG = "profileConfig"
         private const val EXTRA_PROFILE_PLAN = "profilePlan"
         private const val EXTRA_TCPING_REQUEST_ID = "tcpingRequestId"
         private const val EXTRA_TCPING_TARGET_LABEL = "tcpingTargetLabel"
@@ -1449,7 +1420,6 @@ class TcptunVpnService : VpnService() {
         fun startIntent(context: Context, sourcePlan: ProfileRunPlan): Intent {
             val runtimeSettings = readRuntimeSettings(context)
             val plan = sourcePlan.normalized()
-            val config = plan.profiles.first()
             val localListenAddr = localSocksListenAddr(runtimeSettings)
             return Intent(context, TcptunVpnService::class.java)
                 .setAction(ACTION_START)
@@ -1469,25 +1439,6 @@ class TcptunVpnService : VpnService() {
                         managedRouteRules = RouteRuleStore.load(context),
                     ),
                 )
-                .putExtra("serverHost", config.serverHost)
-                .putExtra("serverPort", config.serverPort)
-                .putExtra("protocol", config.protocol)
-                .putExtra("transport", config.transport)
-                .putExtra("token", config.token)
-                .putExtra("sni", config.sni)
-                .putExtra("path", config.path)
-                .putExtra("tls", config.tls)
-                .putExtra("tlsInsecure", config.tlsInsecure)
-                .putExtra("tunnelSecurity", config.tunnelSecurity)
-                .putExtra("flow", config.flow)
-                .putExtra("realityPublicKey", config.realityPublicKey)
-                .putExtra("realityShortId", config.realityShortId)
-                .putExtra("realityFingerprint", config.realityFingerprint)
-                .putExtra("realitySpiderX", config.realitySpiderX)
-                .putExtra("mux", config.mux)
-                .putExtra("udp", config.udp)
-                .putExtra("upstreamProtocol", runtimeSettings.localProxyProtocol)
-                .putExtra(EXTRA_PROFILE_CONFIG, config.toJson().toString())
                 .putExtra(EXTRA_PROFILE_PLAN, plan.toJson().toString())
         }
 
