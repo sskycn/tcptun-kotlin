@@ -5,6 +5,7 @@
     <string name="more_options">More options</string>
     <string name="import_from_clipboard">Import from clipboard</string>
     <string name="add_profile">Add profile</string>
+    <string name="edit">Edit</string>
     <string name="edit_profile">Edit profile</string>
     <string name="share">Share</string>
     <string name="show_qr_code">Show QR code</string>
@@ -206,6 +207,7 @@
     <string name="field_tls_insecure">TLS insecure</string>
     <string name="field_mux">Mux</string>
     <string name="field_mux_mode">Mux mode</string>
+    <string name="field_mux_udp_mode">Mux UDP mode</string>
     <string name="full_config_mode">Full tcptun-go JSON</string>
     <string name="full_config_json">tcptun-go configuration JSON</string>
     <string name="full_config_note">All tcptun-go fields are preserved. VPN traffic enters through the native TUN inbound tagged tun; the local proxy listener remains available separately.</string>

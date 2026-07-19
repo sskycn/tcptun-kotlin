@@ -39,10 +39,10 @@ object ProfileUriCodec {
         }
     }
 
-    /** Encodes through tcptun-go's canonical profile codec, with a plain URI fallback. */
+    /** Encodes through tcptun-go's current strict, versioned profile codec. */
     fun encodeForQr(config: AppConfig): String? {
         if (config.rawConfigJson.isNotBlank()) return null
-        return runCatching { TcptunProfileCodec.encode(config) }.getOrNull() ?: encode(config)
+        return TcptunProfileCodec.encode(config)
     }
 
     private fun decodeAuthorityProfile(protocol: String, raw: String): AppConfig {
@@ -104,6 +104,7 @@ object ProfileUriCodec {
             realitySpiderX = uri.getQueryParameter("spx").orEmpty(),
             mux = uri.getBooleanParameterCompat("mux", false),
             muxMode = uri.getQueryParameter("mux_mode").orEmpty().trim().lowercase(),
+            muxUdpMode = uri.getQueryParameter("mux_udp_mode").orEmpty().trim().lowercase(),
             muxMaxSessions = uri.getIntParameter("mux_max_sessions"),
             muxMaxStreamsPerSession = uri.getIntParameter("mux_max_streams_per_session"),
             muxWarmSpare = uri.getIntParameter("mux_warm_spares"),
@@ -175,6 +176,7 @@ object ProfileUriCodec {
             realitySpiderX = obj.optString("spx"),
             mux = mux,
             muxMode = obj.optString("tcptun_mux_mode").ifBlank { obj.optString("mux_mode") }.lowercase(),
+            muxUdpMode = obj.optString("tcptun_mux_udp_mode").ifBlank { obj.optString("mux_udp_mode") }.lowercase(),
             muxMaxSessions = obj.optInt("tcptun_mux_max_sessions", obj.optInt("mux_max_sessions", 0)),
             muxMaxStreamsPerSession = obj.optInt(
                 "tcptun_mux_max_streams_per_session",
@@ -257,6 +259,7 @@ object ProfileUriCodec {
             realitySpiderX = obj.optString("reality_spider_x"),
             mux = obj.optBoolean("tunnel_mux", true),
             muxMode = obj.optString("tunnel_mux_mode").lowercase(),
+            muxUdpMode = obj.optString("tunnel_mux_udp_mode").lowercase(),
             muxMaxSessions = obj.optInt("tunnel_mux_max_sessions", 0),
             muxMaxStreamsPerSession = obj.optInt("tunnel_mux_max_streams_per_session", 0),
             muxWarmSpare = obj.optInt("tunnel_mux_warm_spares", 0),
@@ -288,6 +291,7 @@ object ProfileUriCodec {
             .put("tcptun_mux", config.mux)
             .put("tcptun_network", AndroidTunNetworks.joinToString(","))
         putJsonIfNotBlank(obj, "tcptun_mux_mode", config.muxMode)
+        putJsonIfNotBlank(obj, "tcptun_mux_udp_mode", config.muxUdpMode)
         if (config.muxMaxSessions > 0) obj.put("tcptun_mux_max_sessions", config.muxMaxSessions)
         if (config.muxMaxStreamsPerSession > 0) {
             obj.put("tcptun_mux_max_streams_per_session", config.muxMaxStreamsPerSession)
@@ -328,6 +332,7 @@ object ProfileUriCodec {
         params["network"] = AndroidTunNetworks.joinToString(",")
         params["mux"] = config.mux.toString()
         putIfNotBlank(params, "mux_mode", config.muxMode)
+        putIfNotBlank(params, "mux_udp_mode", config.muxUdpMode)
         if (config.muxMaxSessions > 0) params["mux_max_sessions"] = config.muxMaxSessions.toString()
         if (config.muxMaxStreamsPerSession > 0) {
             params["mux_max_streams_per_session"] = config.muxMaxStreamsPerSession.toString()

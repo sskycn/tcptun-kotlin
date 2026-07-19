@@ -317,7 +317,7 @@ native://TOKEN@203.0.113.10:443?v=1&type=raw&security=reality-quic&sni=example.c
 - `VpnService` with foreground service notification.
 - Config persistence with `SharedPreferences`.
 - Independently started local profiles with add, edit, delete, and share actions; active structured profiles form one dynamically weighted, session-affine pool.
-- URI and compact `T2:` QR import/export for native, VLESS, VMess, and Trojan profiles, including REALITY and native QUIC REALITY (`security=reality-quic`). Versioned payloads use tcptun-go's `EncodeProfile` / `DecodeProfile` bridge API and a dedicated profile DTO; Android only renders and scans the QR image.
+- URI sharing and compact `T3:` QR import/export for native, VLESS, VMess, and Trojan profiles, including REALITY and native QUIC REALITY (`security=reality-quic`). T3 preserves QUIC mux UDP mode and receive-window overrides; import remains compatible with legacy `T2:` payloads. Versioned payloads use tcptun-go's `EncodeProfile` / `DecodeProfile` bridge API and a dedicated profile DTO; Android only renders and scans the QR image.
 - Protocol and transport selection UI.
 - Optional token, SNI, path, TLS, TLS insecure, REALITY short ID, mux mode, and upstream protocol UI. Selecting QUIC REALITY locks the required `native + raw + quic mux` combination.
 - IPv4/IPv6 default routes send all VPN traffic into tcptun-go; explicit rules run first and unmatched traffic uses the balanced active-profile pool.

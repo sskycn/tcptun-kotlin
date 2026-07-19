@@ -26,6 +26,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Callable
+import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -358,14 +359,22 @@ class TcptunVpnService : VpnService() {
             profiles.forEachIndexed { index, profile ->
                 if (!TcptunState.isCurrentTcping(requestId)) return@execute
                 TcptunState.beginTcpingStep(requestId, index + 1, profiles.size, profile.name)
-                val result = runCatching {
-                    bridge.probeOutbound(
-                        tag = profile.runtimeOutboundTag(),
-                        host = host,
-                        port = port,
-                        timeoutMillis = TCPING_OUTBOUND_TIMEOUT_MS,
-                    )
-                }.fold(
+                val probe = runCatching {
+                    probeOutboundWithTransientQuicRetry(
+                        totalTimeoutMillis = TCPING_OUTBOUND_TOTAL_TIMEOUT_MS,
+                        attemptTimeoutMillis = TCPING_OUTBOUND_TIMEOUT_MS,
+                        isActive = { TcptunState.isCurrentTcping(requestId) },
+                    ) { timeoutMillis ->
+                        bridge.probeOutbound(
+                            tag = profile.runtimeOutboundTag(),
+                            host = host,
+                            port = port,
+                            timeoutMillis = timeoutMillis,
+                        )
+                    }
+                }
+                if (probe.exceptionOrNull() is CancellationException) return@execute
+                val result = probe.fold(
                     onSuccess = { elapsedMs -> TcpingLinkResult(profile.name, elapsedMs = elapsedMs) },
                     onFailure = { err ->
                         TcpingLinkResult(
@@ -1403,6 +1412,7 @@ class TcptunVpnService : VpnService() {
         private const val BRIDGE_READY_TIMEOUT_MS = 15_000L
         private const val OUTBOUND_STOP_TIMEOUT_MS = 15_000L
         private const val TCPING_OUTBOUND_TIMEOUT_MS = 3_000L
+        private const val TCPING_OUTBOUND_TOTAL_TIMEOUT_MS = 20_000L
         private const val MEMBER_HEALTH_PROBE_TIMEOUT_MS = 3_000L
         private const val MEMBER_HEALTH_PROBE_GRACE_MS = 1_000L
         private const val MAX_CONCURRENT_MEMBER_HEALTH_PROBES = 4

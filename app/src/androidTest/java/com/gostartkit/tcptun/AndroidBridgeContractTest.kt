@@ -619,7 +619,7 @@ class AndroidBridgeContractTest {
             protocol = "native",
         )
         val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
-        assertTrue(qrPayload.startsWith("T2:"))
+        assertTrue(qrPayload.startsWith("T3:"))
         val bitmap = generateQrCodeBitmap(qrPayload, 768)
 
         val scanner = BarcodeScanning.getClient(
@@ -707,6 +707,7 @@ class AndroidBridgeContractTest {
             realityFingerprint = "chrome",
             mux = true,
             muxMode = "quic",
+            muxUdpMode = "auto",
             muxMaxSessions = 4,
             muxWarmSpare = 1,
         )
@@ -722,6 +723,7 @@ class AndroidBridgeContractTest {
         assertFalse(security.has("insecure"))
         val mux = proxy.getJSONObject("mux")
         assertEquals("quic", mux.getString("mode"))
+        assertEquals("auto", mux.getString("udp_mode"))
         assertEquals(4, mux.getInt("max_sessions"))
         assertEquals(1, mux.getInt("warm_spares"))
 

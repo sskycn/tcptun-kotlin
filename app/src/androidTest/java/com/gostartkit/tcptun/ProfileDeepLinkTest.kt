@@ -122,23 +122,37 @@ class ProfileDeepLinkTest {
         val uri = "native://quic-token@edge.example.com:443" +
             "?v=1&type=raw&security=reality-quic&sni=example.com&fp=chrome" +
             "&pbk=BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY&sid=a65f93c1dbc5d54a" +
-            "&mux=true&mux_mode=quic&mux_max_sessions=4&mux_warm_spares=1#quic"
+            "&mux=true&mux_mode=quic&mux_udp_mode=auto&mux_max_sessions=4&mux_warm_spares=1#quic"
 
         val profile = ProfileUriCodec.decode(uri).getOrThrow()
         assertEquals("reality-quic", profile.tunnelSecurity)
         assertEquals("native", profile.protocol)
         assertEquals("raw", profile.transport)
         assertEquals("quic", profile.muxMode)
+        assertEquals("auto", profile.muxUdpMode)
         assertEquals("", profile.realitySpiderX)
         assertNull(profile.validate())
 
         val encoded = requireNotNull(ProfileUriCodec.encode(profile))
         assertTrue(encoded.contains("security=reality-quic"))
         assertTrue(encoded.contains("mux_mode=quic"))
+        assertTrue(encoded.contains("mux_udp_mode=auto"))
         assertFalse(encoded.contains("spx="))
 
-        val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
-        assertTrue(qrPayload.startsWith("T2:"))
+        val bridgeMux = JSONObject(profile.toBridgeJson("127.0.0.1:1080"))
+            .getJSONArray("outbounds")
+            .getJSONObject(0)
+            .getJSONObject("mux")
+        assertEquals("auto", bridgeMux.getString("udp_mode"))
+
+        val qrSource = profile.copy(
+            muxInitialStreamReceiveWindow = 2 shl 20,
+            muxMaxStreamReceiveWindow = 8 shl 20,
+            muxInitialConnectionReceiveWindow = 8 shl 20,
+            muxMaxConnectionReceiveWindow = 32 shl 20,
+        )
+        val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(qrSource))
+        assertTrue(qrPayload.startsWith("T3:"))
         val qrProfile = ProfileUriCodec.decode(qrPayload).getOrThrow()
         assertEquals("reality-quic", qrProfile.tunnelSecurity)
         assertEquals(profile.realityPublicKey, qrProfile.realityPublicKey)
@@ -146,6 +160,11 @@ class ProfileDeepLinkTest {
         assertEquals("chrome", qrProfile.realityFingerprint)
         assertEquals("", qrProfile.realitySpiderX)
         assertEquals("quic", qrProfile.muxMode)
+        assertEquals("auto", qrProfile.muxUdpMode)
+        assertEquals(qrSource.muxInitialStreamReceiveWindow, qrProfile.muxInitialStreamReceiveWindow)
+        assertEquals(qrSource.muxMaxStreamReceiveWindow, qrProfile.muxMaxStreamReceiveWindow)
+        assertEquals(qrSource.muxInitialConnectionReceiveWindow, qrProfile.muxInitialConnectionReceiveWindow)
+        assertEquals(qrSource.muxMaxConnectionReceiveWindow, qrProfile.muxMaxConnectionReceiveWindow)
         assertNull(qrProfile.validate())
     }
 
@@ -171,7 +190,7 @@ class ProfileDeepLinkTest {
             )
             val plain = requireNotNull(ProfileUriCodec.encode(profile))
             val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
-            assertTrue("$protocol should use binary QR payload", qrPayload.startsWith("T2:"))
+            assertTrue("$protocol should use binary QR payload", qrPayload.startsWith("T3:"))
             assertTrue(qrPayload.all { it in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:" })
             assertTrue(
                 "$protocol compact payload should be shorter than plain URI",
@@ -221,7 +240,7 @@ class ProfileDeepLinkTest {
                 mux = false,
             )
             val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
-            assertTrue("$protocol payload", qrPayload.startsWith("T2:"))
+            assertTrue("$protocol payload", qrPayload.startsWith("T3:"))
             assertTrue(qrPayload.all { it in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:" })
             assertTrue(qrPayload.length < requireNotNull(ProfileUriCodec.encode(profile)).length)
 
@@ -256,7 +275,7 @@ class ProfileDeepLinkTest {
             mux = true,
         )
         val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
-        assertTrue(qrPayload.startsWith("T2:"))
+        assertTrue(qrPayload.startsWith("T3:"))
 
         val decoded = ProfileUriCodec.decode(qrPayload).getOrThrow()
         assertEquals("vless", decoded.protocol)
@@ -287,7 +306,7 @@ class ProfileDeepLinkTest {
             tlsInsecure = false,
         )
         val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
-        assertTrue(qrPayload.startsWith("T2:"))
+        assertTrue(qrPayload.startsWith("T3:"))
         assertTrue(qrPayload.all { it in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:" })
 
         val decoded = ProfileUriCodec.decode(qrPayload).getOrThrow()
@@ -330,6 +349,15 @@ class ProfileDeepLinkTest {
             assertEquals(1, decoded.muxWarmSpare)
             assertNull(decoded.validate())
         }
+    }
+
+    @Test
+    fun legacyT2PayloadStillDecodesAndReencodesAsT3() {
+        val legacy = "T2:+1REESK007MO4UU1V2TDWL%53+UKDNS6ONP18VCRZCB\$CBECP9EXYC/:52%E1/DXTDJPC -DB\$CBECP9ERZCUPCAZDA8GLB0  C93D:"
+
+        val decoded = ProfileUriCodec.decode(legacy).getOrThrow()
+        assertEquals("vless", decoded.protocol)
+        assertTrue(requireNotNull(ProfileUriCodec.encodeForQr(decoded)).startsWith("T3:"))
     }
 
     @Test

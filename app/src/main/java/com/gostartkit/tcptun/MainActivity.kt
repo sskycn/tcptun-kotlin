@@ -26,6 +26,11 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.AnchoredDraggableState
+import androidx.compose.foundation.gestures.DraggableAnchors
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.anchoredDraggable
+import androidx.compose.foundation.gestures.animateTo
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
@@ -37,6 +42,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -52,11 +58,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.AltRoute
+import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
@@ -111,12 +119,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.pluralStringResource
@@ -128,11 +138,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import com.tcptun.client.ui.theme.TcpTunTheme
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.net.Inet4Address
@@ -141,7 +151,7 @@ import java.text.DateFormat
 import java.util.Date
 import java.util.UUID
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 
 private const val SnackbarAutoDismissMillis = 6_000L
 private const val HealthUnknownAnimationIntervalMillis = 500L
@@ -760,6 +770,8 @@ internal fun TcptunScreen(
             topBar = {
                 TopBar(
                     title = stringResource(R.string.profiles_title),
+                    onDiagnostics = { showDiagnostics = true },
+                    onShowLogs = { showLogs = true },
                     onRouteManagement = { showRouteManagement = true },
                     onFlowAnalysis = { showFlowAnalysis = true },
                     onSettings = { showSettings = true },
@@ -828,6 +840,7 @@ internal fun TcptunScreen(
                         shareable = ProfileUriCodec.encode(profile) != null,
                         onShare = { shareProfile(context, profile) },
                         onShowQrCode = { profileQrCode = profile },
+                        onEdit = { editingProfile = profile },
                         onDeleteRequest = { deleteProfile(profile) },
                     )
                 }
@@ -1052,6 +1065,8 @@ private fun ConfirmProfileImportDialog(
 @Composable
 private fun TopBar(
     title: String,
+    onDiagnostics: () -> Unit,
+    onShowLogs: () -> Unit,
     onRouteManagement: () -> Unit,
     onFlowAnalysis: () -> Unit,
     onSettings: () -> Unit,
@@ -1085,6 +1100,34 @@ private fun TopBar(
                     shape = MenuShape,
                     containerColor = colors.surfaceContainer,
                 ) {
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Icon(Icons.Rounded.Speed, contentDescription = null)
+                        },
+                        text = { Text(stringResource(R.string.diagnostics)) },
+                        onClick = {
+                            menuExpanded = false
+                            onDiagnostics()
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = colors.onSurface,
+                            leadingIconColor = colors.onSurfaceVariant,
+                        ),
+                    )
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Icon(Icons.AutoMirrored.Rounded.Article, contentDescription = null)
+                        },
+                        text = { Text(stringResource(R.string.logs)) },
+                        onClick = {
+                            menuExpanded = false
+                            onShowLogs()
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = colors.onSurface,
+                            leadingIconColor = colors.onSurfaceVariant,
+                        ),
+                    )
                     DropdownMenuItem(
                         leadingIcon = {
                             Icon(Icons.Rounded.Hub, contentDescription = null)
@@ -1196,6 +1239,7 @@ private fun ProfileRow(
     onClick: () -> Unit,
     onShare: () -> Unit,
     onShowQrCode: () -> Unit,
+    onEdit: () -> Unit,
     onDeleteRequest: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -1210,43 +1254,60 @@ private fun ProfileRow(
         },
         label = "profileRowColor",
     )
-    val dismissState = rememberSwipeToDismissBoxState()
-
-    LaunchedEffect(dismissState.currentValue) {
-        if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart) {
-            try {
-                onDeleteRequest()
-            } finally {
-                withContext(NonCancellable) {
-                    dismissState.snapTo(SwipeToDismissBoxValue.Settled)
-                }
-            }
+    val density = LocalDensity.current
+    val actionWidth = 80.dp
+    val anchors = remember(density) {
+        DraggableAnchors {
+            ProfileSwipeValue.Closed at 0f
+            ProfileSwipeValue.Actions at with(density) { -(actionWidth * 2).toPx() }
         }
     }
+    val swipeState = remember(profile.id, anchors) {
+        AnchoredDraggableState(ProfileSwipeValue.Closed, anchors)
+    }
+    val scope = rememberCoroutineScope()
 
-    SwipeToDismissBox(
-        state = dismissState,
-        enableDismissFromStartToEnd = false,
-        enableDismissFromEndToStart = true,
-        backgroundContent = {
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(colors.errorContainer, CardShape)
-                    .padding(horizontal = 24.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    Icons.Rounded.Delete,
-                    contentDescription = stringResource(R.string.delete),
-                    tint = colors.onErrorContainer,
-                )
-            }
-        },
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(CardShape)
+            .anchoredDraggable(
+                state = swipeState,
+                orientation = Orientation.Horizontal,
+            ),
     ) {
+        Row(
+            modifier = Modifier
+                .matchParentSize()
+                .background(colors.surfaceContainerHighest),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            ProfileSwipeAction(
+                modifier = Modifier.width(actionWidth),
+                icon = Icons.Rounded.Edit,
+                label = stringResource(R.string.edit),
+                containerColor = colors.secondaryContainer,
+                contentColor = colors.onSecondaryContainer,
+                onClick = onEdit,
+            )
+            ProfileSwipeAction(
+                modifier = Modifier.width(actionWidth),
+                icon = Icons.Rounded.Delete,
+                label = stringResource(R.string.delete),
+                containerColor = colors.errorContainer,
+                contentColor = colors.onErrorContainer,
+                onClick = onDeleteRequest,
+            )
+        }
         Surface(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .offset {
+                    IntOffset(
+                        x = swipeState.requireOffset().roundToInt(),
+                        y = 0,
+                    )
+                },
             shape = CardShape,
             color = rowColor,
             tonalElevation = 0.dp,
@@ -1255,7 +1316,13 @@ private fun ProfileRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 88.dp)
-                    .clickable(enabled = enabled, onClick = onClick)
+                    .clickable(enabled = enabled) {
+                        if (swipeState.settledValue == ProfileSwipeValue.Actions) {
+                            scope.launch { swipeState.animateTo(ProfileSwipeValue.Closed) }
+                        } else {
+                            onClick()
+                        }
+                    }
                     .padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -1299,6 +1366,15 @@ private fun ProfileRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    if (degraded && !health?.error.isNullOrBlank()) {
+                        Text(
+                            profileHealthErrorSummary(health?.error.orEmpty()),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = secondaryContentColor,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
                 IconButton(
                     onClick = onShare,
@@ -1322,6 +1398,38 @@ private fun ProfileRow(
                 }
             }
         }
+    }
+}
+
+private enum class ProfileSwipeValue {
+    Closed,
+    Actions,
+}
+
+@Composable
+private fun ProfileSwipeAction(
+    modifier: Modifier,
+    icon: ImageVector,
+    label: String,
+    containerColor: Color,
+    contentColor: Color,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(containerColor)
+            .clickable(onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(icon, contentDescription = label, tint = contentColor)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = contentColor,
+        )
     }
 }
 
@@ -1370,6 +1478,14 @@ private fun profileHealthLabel(health: ProfileHealth?): String? {
             pluralStringResource(R.plurals.profile_health_degraded_failures, failures, failures)
         }
     }
+}
+
+private fun profileHealthErrorSummary(error: String): String {
+    Regex("""close called for canceled stream \d+""").find(error)?.let { return it.value }
+    Regex("""mux session dial is backing off for native QUIC \([^)]*\)""")
+        .find(error)
+        ?.let { return it.value }
+    return error.substringAfterLast("; ").substringAfterLast(": ").trim().take(160)
 }
 
 @Composable
@@ -2890,6 +3006,11 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                         tls = false,
                                         tlsInsecure = false,
                                         muxMode = config.muxMode.takeUnless { it.equals("quic", true) }.orEmpty(),
+                                        muxUdpMode = "",
+                                        muxInitialStreamReceiveWindow = 0,
+                                        muxMaxStreamReceiveWindow = 0,
+                                        muxInitialConnectionReceiveWindow = 0,
+                                        muxMaxConnectionReceiveWindow = 0,
                                     )
                                     "reality-quic" -> config.copy(
                                         protocol = "native",
@@ -2901,12 +3022,18 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                         realitySpiderX = "",
                                         mux = true,
                                         muxMode = "quic",
+                                        muxUdpMode = config.muxUdpMode.ifBlank { "auto" },
                                     )
                                     else -> config.copy(
                                         tunnelSecurity = "",
                                         tls = false,
                                         tlsInsecure = false,
                                         muxMode = config.muxMode.takeUnless { it.equals("quic", true) }.orEmpty(),
+                                        muxUdpMode = "",
+                                        muxInitialStreamReceiveWindow = 0,
+                                        muxMaxStreamReceiveWindow = 0,
+                                        muxInitialConnectionReceiveWindow = 0,
+                                        muxMaxConnectionReceiveWindow = 0,
                                     )
                                 }
                             }
@@ -2975,10 +3102,25 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                         tls = true,
                                         mux = true,
                                         muxMode = "quic",
+                                        muxUdpMode = config.muxUdpMode.ifBlank { "auto" },
                                     )
                                 } else {
-                                    config.copy(muxMode = "group")
+                                    config.copy(
+                                        muxMode = "group",
+                                        muxUdpMode = "",
+                                        muxInitialStreamReceiveWindow = 0,
+                                        muxMaxStreamReceiveWindow = 0,
+                                        muxInitialConnectionReceiveWindow = 0,
+                                        muxMaxConnectionReceiveWindow = 0,
+                                    )
                                 }
+                            }
+                            if (config.mux && config.muxMode.equals("quic", ignoreCase = true)) {
+                                ChoiceRow(
+                                    stringResource(R.string.field_mux_udp_mode),
+                                    config.muxUdpMode.ifBlank { "reliable" },
+                                    listOf("reliable", "auto", "datagram"),
+                                ) { mode -> config = config.copy(muxUdpMode = mode) }
                             }
                             Text(
                                 stringResource(R.string.native_tun_capabilities_note),

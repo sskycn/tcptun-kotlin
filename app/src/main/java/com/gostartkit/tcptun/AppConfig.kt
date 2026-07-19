@@ -10,6 +10,27 @@ internal const val AndroidTunInboundTag = "tun"
 internal val LocalProxyProtocols = listOf(DefaultLocalProxyProtocol, "mixed")
 internal val AndroidTunNetworks = listOf("tcp", "udp")
 
+internal fun normalizeStoredServerHost(value: String): String =
+    value.trim().removeSurrounding("[", "]")
+
+internal fun migratedMuxUdpMode(
+    tunnelSecurity: String,
+    muxMode: String,
+    muxUdpMode: String,
+): String = muxUdpMode.trim().lowercase().ifBlank {
+    // Older Android builds parsed reality-quic URIs before they persisted
+    // mux_udp_mode. Current tcptun-go's generated client configuration uses
+    // auto, while an omitted value becomes reliable.
+    if (
+        tunnelSecurity.trim().equals("reality-quic", ignoreCase = true) &&
+        muxMode.trim().equals("quic", ignoreCase = true)
+    ) {
+        "auto"
+    } else {
+        ""
+    }
+}
+
 internal fun defaultNativeTunDnsConfig(): JSONObject = JSONObject()
     .put(
         "servers",
@@ -53,9 +74,14 @@ data class AppConfig(
     val realitySpiderX: String = "",
     val mux: Boolean = true,
     val muxMode: String = "",
+    val muxUdpMode: String = "",
     val muxMaxSessions: Int = 0,
     val muxMaxStreamsPerSession: Int = 0,
     val muxWarmSpare: Int = 0,
+    val muxInitialStreamReceiveWindow: Int = 0,
+    val muxMaxStreamReceiveWindow: Int = 0,
+    val muxInitialConnectionReceiveWindow: Int = 0,
+    val muxMaxConnectionReceiveWindow: Int = 0,
     val upstreamProtocol: String = "socks5",
     val rawConfigJson: String = "",
 ) {
@@ -106,8 +132,34 @@ data class AppConfig(
         }
         val normalizedMuxMode = muxMode.trim().lowercase()
         if (normalizedMuxMode !in MuxModes) return "unsupported mux mode: $muxMode"
-        if (!mux && (normalizedMuxMode.isNotBlank() || muxMaxSessions != 0 || muxMaxStreamsPerSession != 0 || muxWarmSpare != 0)) {
+        val normalizedMuxUdpMode = muxUdpMode.trim().lowercase()
+        if (normalizedMuxUdpMode !in MuxUdpModes) return "unsupported mux UDP mode: $muxUdpMode"
+        val muxReceiveWindows = listOf(
+            muxInitialStreamReceiveWindow,
+            muxMaxStreamReceiveWindow,
+            muxInitialConnectionReceiveWindow,
+            muxMaxConnectionReceiveWindow,
+        )
+        if (!mux && (normalizedMuxMode.isNotBlank() || normalizedMuxUdpMode.isNotBlank() || muxMaxSessions != 0 || muxMaxStreamsPerSession != 0 || muxWarmSpare != 0 || muxReceiveWindows.any { it != 0 })) {
             return "mux must be enabled when mux pool limits are configured"
+        }
+        if (normalizedMuxMode != "quic" && normalizedMuxUdpMode.isNotBlank()) {
+            return "mux UDP mode requires QUIC mux"
+        }
+        if (normalizedMuxMode != "quic" && muxReceiveWindows.any { it != 0 }) {
+            return "mux receive windows require QUIC mux"
+        }
+        if (muxInitialStreamReceiveWindow !in 0..16_777_216 || muxMaxStreamReceiveWindow !in 0..16_777_216) {
+            return "mux stream receive windows must be between 1 and 16777216 bytes when set"
+        }
+        if (muxInitialConnectionReceiveWindow !in 0..67_108_864 || muxMaxConnectionReceiveWindow !in 0..67_108_864) {
+            return "mux connection receive windows must be between 1 and 67108864 bytes when set"
+        }
+        if (muxMaxStreamReceiveWindow != 0 && muxInitialStreamReceiveWindow > muxMaxStreamReceiveWindow) {
+            return "mux initial stream receive window exceeds maximum"
+        }
+        if (muxMaxConnectionReceiveWindow != 0 && muxInitialConnectionReceiveWindow > muxMaxConnectionReceiveWindow) {
+            return "mux initial connection receive window exceeds maximum"
         }
         if (muxMaxSessions !in 0..32) return "mux max sessions must be between 1 and 32 when set"
         if (muxMaxStreamsPerSession !in 0..4096) return "mux max streams must be between 1 and 4096 when set"
@@ -176,9 +228,18 @@ data class AppConfig(
                 "mux",
                 JSONObject().apply {
                     muxMode.trim().takeIf { it.isNotBlank() }?.let { put("mode", it.lowercase()) }
+                    muxUdpMode.trim().takeIf { it.isNotBlank() }?.let { put("udp_mode", it.lowercase()) }
                     if (muxMaxSessions > 0) put("max_sessions", muxMaxSessions)
                     if (muxMaxStreamsPerSession > 0) put("max_streams_per_session", muxMaxStreamsPerSession)
                     if (muxWarmSpare > 0) put("warm_spares", muxWarmSpare)
+                    if (muxInitialStreamReceiveWindow > 0) put("initial_stream_receive_window", muxInitialStreamReceiveWindow)
+                    if (muxMaxStreamReceiveWindow > 0) put("max_stream_receive_window", muxMaxStreamReceiveWindow)
+                    if (muxInitialConnectionReceiveWindow > 0) {
+                        put("initial_connection_receive_window", muxInitialConnectionReceiveWindow)
+                    }
+                    if (muxMaxConnectionReceiveWindow > 0) {
+                        put("max_connection_receive_window", muxMaxConnectionReceiveWindow)
+                    }
                 },
             )
         }
@@ -563,6 +624,7 @@ data class AppConfig(
         val Transports = listOf("raw", "ws", "h2", "h3")
         val UpstreamProtocols = LocalProxyProtocols
         val MuxModes = listOf("", "group", "quic")
+        val MuxUdpModes = listOf("", "reliable", "auto", "datagram")
         val SecurityOptions = listOf("none", "tls", "reality", "reality-quic")
         val TunnelSecurityTypes = listOf("", "reality", "reality-quic")
         val RealitySecurityTypes = setOf("reality", "reality-quic")
@@ -576,10 +638,17 @@ data class AppConfig(
         }
 
         fun fromJson(obj: JSONObject): AppConfig {
+            val tunnelSecurity = obj.optString("tunnelSecurity").trim().lowercase()
+            val muxMode = obj.optString("muxMode").trim().lowercase()
+            val muxUdpMode = migratedMuxUdpMode(
+                tunnelSecurity = tunnelSecurity,
+                muxMode = muxMode,
+                muxUdpMode = obj.optString("muxUdpMode"),
+            )
             return AppConfig(
                 id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
                 name = obj.optString("name", "proxy").ifBlank { "proxy" },
-                serverHost = obj.optString("serverHost"),
+                serverHost = normalizeStoredServerHost(obj.optString("serverHost")),
                 serverPort = obj.optString("serverPort", "9443"),
                 protocol = obj.optString("protocol", "native"),
                 transport = obj.optString("transport", "raw"),
@@ -588,17 +657,22 @@ data class AppConfig(
                 path = obj.optString("path", "/proxy"),
                 tls = obj.optBoolean("tls", false),
                 tlsInsecure = obj.optBoolean("tlsInsecure", false),
-                tunnelSecurity = obj.optString("tunnelSecurity"),
+                tunnelSecurity = tunnelSecurity,
                 flow = obj.optString("flow"),
                 realityPublicKey = obj.optString("realityPublicKey"),
                 realityShortId = obj.optString("realityShortId"),
                 realityFingerprint = obj.optString("realityFingerprint"),
                 realitySpiderX = obj.optString("realitySpiderX"),
                 mux = obj.optBoolean("mux", true),
-                muxMode = obj.optString("muxMode"),
+                muxMode = muxMode,
+                muxUdpMode = muxUdpMode,
                 muxMaxSessions = obj.optInt("muxMaxSessions", 0),
                 muxMaxStreamsPerSession = obj.optInt("muxMaxStreamsPerSession", 0),
                 muxWarmSpare = obj.optInt("muxWarmSpare", 0),
+                muxInitialStreamReceiveWindow = obj.optInt("muxInitialStreamReceiveWindow", 0),
+                muxMaxStreamReceiveWindow = obj.optInt("muxMaxStreamReceiveWindow", 0),
+                muxInitialConnectionReceiveWindow = obj.optInt("muxInitialConnectionReceiveWindow", 0),
+                muxMaxConnectionReceiveWindow = obj.optInt("muxMaxConnectionReceiveWindow", 0),
                 upstreamProtocol = obj.optString("upstreamProtocol", "socks5"),
                 rawConfigJson = obj.optString("rawConfigJson"),
             )
@@ -674,9 +748,14 @@ data class AppConfig(
             .put("realitySpiderX", realitySpiderX)
             .put("mux", mux)
             .put("muxMode", muxMode)
+            .put("muxUdpMode", muxUdpMode)
             .put("muxMaxSessions", muxMaxSessions)
             .put("muxMaxStreamsPerSession", muxMaxStreamsPerSession)
             .put("muxWarmSpare", muxWarmSpare)
+            .put("muxInitialStreamReceiveWindow", muxInitialStreamReceiveWindow)
+            .put("muxMaxStreamReceiveWindow", muxMaxStreamReceiveWindow)
+            .put("muxInitialConnectionReceiveWindow", muxInitialConnectionReceiveWindow)
+            .put("muxMaxConnectionReceiveWindow", muxMaxConnectionReceiveWindow)
             .put("upstreamProtocol", upstreamProtocol)
             .put("rawConfigJson", rawConfigJson)
     }

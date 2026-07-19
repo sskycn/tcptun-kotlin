@@ -41,6 +41,7 @@ class ProfileDeleteUndoUiTest {
         composeRule.activityRule.scenario.recreate()
 
         composeRule.onNodeWithText(profile.name).performTouchInput { swipeLeft() }
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.delete)).performClick()
         val undo = composeRule.onNodeWithText(composeRule.activity.getString(R.string.undo))
         undo.assertIsDisplayed()
         composeRule.mainClock.advanceTimeBy(7_000)

@@ -5,6 +5,7 @@
     <string name="more_options">更多选项</string>
     <string name="import_from_clipboard">从剪切板导入</string>
     <string name="add_profile">添加配置</string>
+    <string name="edit">编辑</string>
     <string name="edit_profile">编辑配置</string>
     <string name="share">分享</string>
     <string name="show_qr_code">生成二维码</string>
@@ -205,6 +206,7 @@
     <string name="field_tls_insecure">TLS insecure</string>
     <string name="field_mux">Mux</string>
     <string name="field_mux_mode">Mux 模式</string>
+    <string name="field_mux_udp_mode">Mux UDP 模式</string>
     <string name="full_config_mode">完整 tcptun-go JSON</string>
     <string name="full_config_json">tcptun-go 配置 JSON</string>
     <string name="full_config_note">保留 tcptun-go 支持的全部字段；VPN 流量通过 tag 为 tun 的原生 TUN 入站进入，本地代理监听仍独立保留。</string>
