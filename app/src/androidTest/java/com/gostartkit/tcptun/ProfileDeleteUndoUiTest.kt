@@ -1,6 +1,8 @@
 package com.tcptun.client
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
@@ -51,5 +53,26 @@ class ProfileDeleteUndoUiTest {
             ProfileStore.load(composeRule.activity).profiles.any { it.id == profile.id }
         }
         composeRule.onNodeWithText(profile.name).assertIsDisplayed()
+    }
+
+    @Test
+    fun dragHandleReordersAndPersistsProfiles() {
+        val first = AppConfig(id = "drag-profile-first", name = "First proxy", serverHost = "192.0.2.1")
+        val second = AppConfig(id = "drag-profile-second", name = "Second proxy", serverHost = "192.0.2.2")
+        ProfileStore.save(composeRule.activity, ProfilesState(profiles = listOf(first, second)))
+        composeRule.activityRule.scenario.recreate()
+
+        composeRule.onAllNodesWithContentDescription(composeRule.activity.getString(R.string.reorder_profile))[0]
+            .performTouchInput {
+                down(center)
+                moveBy(Offset(0f, 32f), delayMillis = 100)
+                moveBy(Offset(0f, 64f), delayMillis = 100)
+                moveBy(Offset(0f, 96f), delayMillis = 100)
+                up()
+            }
+
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            ProfileStore.load(composeRule.activity).profiles.map { it.id } == listOf(second.id, first.id)
+        }
     }
 }

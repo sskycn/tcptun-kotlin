@@ -7,6 +7,7 @@
     <string name="add_profile">Add profile</string>
     <string name="edit">Edit</string>
     <string name="edit_profile">Edit profile</string>
+    <string name="reorder_profile">Drag to reorder profile</string>
     <string name="share">Share</string>
     <string name="show_qr_code">Show QR code</string>
     <string name="profile_qr_code">Profile QR code</string>
@@ -135,8 +136,7 @@
     <string name="route_rule_type">Match type</string>
     <string name="route_rule_value">Match value</string>
     <string name="route_rule_outbound">Route via</string>
-    <string name="move_rule_up">Move rule up</string>
-    <string name="move_rule_down">Move rule down</string>
+    <string name="reorder_rule">Drag to reorder rule</string>
     <string name="invalid_route_rule">Enter a valid value for this match type.</string>
     <string name="route_type_domain">Exact domain</string>
     <string name="route_type_domain_suffix">Domain suffix</string>

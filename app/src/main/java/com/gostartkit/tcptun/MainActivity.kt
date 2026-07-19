@@ -31,6 +31,9 @@ import androidx.compose.foundation.gestures.DraggableAnchors
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.anchoredDraggable
 import androidx.compose.foundation.gestures.animateTo
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
@@ -49,6 +52,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -58,16 +62,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.AltRoute
-import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Hub
-import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Lan
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -123,6 +125,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -139,10 +142,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import com.tcptun.client.ui.theme.TcpTunTheme
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.net.Inet4Address
@@ -536,6 +541,12 @@ internal fun TcptunScreen(
     var tcpingTargetIndex by remember { mutableStateOf(0) }
     val snackbarHostState = remember { SnackbarHostState() }
     val screenScope = rememberCoroutineScope()
+    val profileListState = rememberLazyListState()
+    var draggedProfileId by remember { mutableStateOf<String?>(null) }
+    var draggedProfileOffset by remember { mutableStateOf(0f) }
+    var profilesBeforeDrag by remember { mutableStateOf<List<AppConfig>?>(null) }
+    var profileReorderScrollJob by remember { mutableStateOf<Job?>(null) }
+    val profileReorderScrollStep = with(LocalDensity.current) { 24.dp.toPx() }
     val vpnState by TcptunState.state.collectAsState()
     LaunchedEffect(vpnState.status) {
         if (vpnState.status == "Stopped" || vpnState.status == "Error") {
@@ -727,6 +738,70 @@ internal fun TcptunScreen(
         }
     }
 
+    fun startProfileDrag(profileId: String) {
+        draggedProfileId = profileId
+        draggedProfileOffset = 0f
+        profilesBeforeDrag = state.profiles
+    }
+
+    fun dragProfile(profileId: String, deltaY: Float) {
+        if (draggedProfileId != profileId) return
+        draggedProfileOffset += deltaY
+        val visibleItems = profileListState.layoutInfo.visibleItemsInfo
+        val draggedItem = visibleItems.firstOrNull { it.key == profileId } ?: return
+        val draggedCenter = draggedItem.offset + draggedProfileOffset + draggedItem.size / 2f
+        val targetItem = visibleItems.firstOrNull { item ->
+            item.key != profileId &&
+                state.profiles.any { it.id == item.key } &&
+                draggedCenter >= item.offset &&
+                draggedCenter <= item.offset + item.size
+        }
+        if (targetItem != null) {
+            val fromIndex = state.profiles.indexOfFirst { it.id == profileId }
+            val toIndex = state.profiles.indexOfFirst { it.id == targetItem.key }
+            if (fromIndex >= 0 && toIndex >= 0 && fromIndex != toIndex) {
+                val reordered = state.profiles.toMutableList().also { profiles ->
+                    profiles.add(toIndex, profiles.removeAt(fromIndex))
+                }
+                state = state.copy(profiles = reordered)
+                draggedProfileOffset += draggedItem.offset - targetItem.offset
+            }
+        }
+
+        if (profileReorderScrollJob?.isActive != true) {
+            profileReorderScrollJob = screenScope.launch {
+                while (draggedProfileId == profileId) {
+                    val layoutInfo = profileListState.layoutInfo
+                    val currentItem = layoutInfo.visibleItemsInfo.firstOrNull { it.key == profileId } ?: break
+                    val currentTop = currentItem.offset + draggedProfileOffset
+                    val currentBottom = currentTop + currentItem.size
+                    val scrollDelta = when {
+                        currentTop < layoutInfo.viewportStartOffset -> -profileReorderScrollStep
+                        currentBottom > layoutInfo.viewportEndOffset -> profileReorderScrollStep
+                        else -> break
+                    }
+                    val consumed = profileListState.scrollBy(scrollDelta)
+                    if (consumed == 0f) break
+                    if (draggedProfileId == profileId) draggedProfileOffset += consumed
+                    delay(16)
+                }
+            }
+        }
+    }
+
+    fun finishProfileDrag() {
+        val original = profilesBeforeDrag
+        val reordered = state.profiles
+        profileReorderScrollJob?.cancel()
+        profileReorderScrollJob = null
+        draggedProfileId = null
+        draggedProfileOffset = 0f
+        profilesBeforeDrag = null
+        if (original != null && original.map { it.id } != reordered.map { it.id }) {
+            save(state.copy(profiles = reordered))
+        }
+    }
+
     val editing = editingProfile
     if (showQrScanner) {
         QrScannerPage(
@@ -771,7 +846,6 @@ internal fun TcptunScreen(
                 TopBar(
                     title = stringResource(R.string.profiles_title),
                     onDiagnostics = { showDiagnostics = true },
-                    onShowLogs = { showLogs = true },
                     onRouteManagement = { showRouteManagement = true },
                     onFlowAnalysis = { showFlowAnalysis = true },
                     onSettings = { showSettings = true },
@@ -818,6 +892,7 @@ internal fun TcptunScreen(
             },
         ) { padding ->
             LazyColumn(
+                state = profileListState,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
@@ -831,7 +906,15 @@ internal fun TcptunScreen(
                     )
                 }
                 items(state.profiles, key = { it.id }) { profile ->
+                    val dragging = draggedProfileId == profile.id
                     ProfileRow(
+                        modifier = Modifier
+                            .zIndex(if (dragging) 1f else 0f)
+                            .graphicsLayer {
+                                translationY = if (dragging) draggedProfileOffset else 0f
+                                shadowElevation = if (dragging) 8.dp.toPx() else 0f
+                                shape = CardShape
+                            },
                         profile = profile,
                         running = profile.id in state.activeIds && isVpnActiveStatus(vpnState.status),
                         health = vpnState.profileHealth[profile.id],
@@ -841,6 +924,10 @@ internal fun TcptunScreen(
                         onShare = { shareProfile(context, profile) },
                         onShowQrCode = { profileQrCode = profile },
                         onEdit = { editingProfile = profile },
+                        dragging = dragging,
+                        onDragStart = { startProfileDrag(profile.id) },
+                        onDrag = { deltaY -> dragProfile(profile.id, deltaY) },
+                        onDragEnd = ::finishProfileDrag,
                         onDeleteRequest = { deleteProfile(profile) },
                     )
                 }
@@ -1066,7 +1153,6 @@ private fun ConfirmProfileImportDialog(
 private fun TopBar(
     title: String,
     onDiagnostics: () -> Unit,
-    onShowLogs: () -> Unit,
     onRouteManagement: () -> Unit,
     onFlowAnalysis: () -> Unit,
     onSettings: () -> Unit,
@@ -1108,20 +1194,6 @@ private fun TopBar(
                         onClick = {
                             menuExpanded = false
                             onDiagnostics()
-                        },
-                        colors = MenuDefaults.itemColors(
-                            textColor = colors.onSurface,
-                            leadingIconColor = colors.onSurfaceVariant,
-                        ),
-                    )
-                    DropdownMenuItem(
-                        leadingIcon = {
-                            Icon(Icons.AutoMirrored.Rounded.Article, contentDescription = null)
-                        },
-                        text = { Text(stringResource(R.string.logs)) },
-                        onClick = {
-                            menuExpanded = false
-                            onShowLogs()
                         },
                         colors = MenuDefaults.itemColors(
                             textColor = colors.onSurface,
@@ -1231,6 +1303,7 @@ private fun MainActionsFab(
 
 @Composable
 private fun ProfileRow(
+    modifier: Modifier = Modifier,
     profile: AppConfig,
     running: Boolean,
     health: ProfileHealth?,
@@ -1240,6 +1313,10 @@ private fun ProfileRow(
     onShare: () -> Unit,
     onShowQrCode: () -> Unit,
     onEdit: () -> Unit,
+    dragging: Boolean,
+    onDragStart: () -> Unit,
+    onDrag: (Float) -> Unit,
+    onDragEnd: () -> Unit,
     onDeleteRequest: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -1267,136 +1344,165 @@ private fun ProfileRow(
     }
     val scope = rememberCoroutineScope()
 
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(CardShape)
-            .anchoredDraggable(
-                state = swipeState,
-                orientation = Orientation.Horizontal,
-            ),
-    ) {
-        Row(
-            modifier = Modifier
-                .matchParentSize()
-                .background(colors.surfaceContainerHighest),
-            horizontalArrangement = Arrangement.End,
-        ) {
-            ProfileSwipeAction(
-                modifier = Modifier.width(actionWidth),
-                icon = Icons.Rounded.Edit,
-                label = stringResource(R.string.edit),
-                containerColor = colors.secondaryContainer,
-                contentColor = colors.onSecondaryContainer,
-                onClick = onEdit,
-            )
-            ProfileSwipeAction(
-                modifier = Modifier.width(actionWidth),
-                icon = Icons.Rounded.Delete,
-                label = stringResource(R.string.delete),
-                containerColor = colors.errorContainer,
-                contentColor = colors.onErrorContainer,
-                onClick = onDeleteRequest,
-            )
-        }
-        Surface(
+    Box(modifier = modifier.fillMaxWidth()) {
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .offset {
-                    IntOffset(
-                        x = swipeState.requireOffset().roundToInt(),
-                        y = 0,
-                    )
-                },
-            shape = CardShape,
-            color = rowColor,
-            tonalElevation = 0.dp,
+                .clip(CardShape)
+                .anchoredDraggable(
+                    state = swipeState,
+                    orientation = Orientation.Horizontal,
+                    enabled = !dragging,
+                ),
         ) {
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 88.dp)
-                    .clickable(enabled = enabled) {
-                        if (swipeState.settledValue == ProfileSwipeValue.Actions) {
-                            scope.launch { swipeState.animateTo(ProfileSwipeValue.Closed) }
-                        } else {
-                            onClick()
-                        }
-                    }
-                    .padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .matchParentSize()
+                    .background(colors.surfaceContainerHighest),
+                horizontalArrangement = Arrangement.End,
             ) {
-                ProfileStatusMark(running = running, degraded = degraded)
-                Column(
+                ProfileSwipeAction(
+                    modifier = Modifier.width(actionWidth),
+                    icon = Icons.Rounded.Edit,
+                    label = stringResource(R.string.edit),
+                    containerColor = colors.secondaryContainer,
+                    contentColor = colors.onSecondaryContainer,
+                    onClick = onEdit,
+                )
+                ProfileSwipeAction(
+                    modifier = Modifier.width(actionWidth),
+                    icon = Icons.Rounded.Delete,
+                    label = stringResource(R.string.delete),
+                    containerColor = colors.errorContainer,
+                    contentColor = colors.onErrorContainer,
+                    onClick = onDeleteRequest,
+                )
+            }
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .offset {
+                        IntOffset(
+                            x = swipeState.requireOffset().roundToInt(),
+                            y = 0,
+                        )
+                    },
+                shape = CardShape,
+                color = rowColor,
+                tonalElevation = 0.dp,
+            ) {
+                Row(
                     modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    val healthLabel = if (running) profileHealthLabel(health) else null
-                    val healthLabelStyle = MaterialTheme.typography.labelMedium.toSpanStyle().copy(
-                        color = if (degraded) colors.onErrorContainer else colors.primary,
-                    )
-                    Text(
-                        text = buildAnnotatedString {
-                            append(profile.name)
-                            healthLabel?.let {
-                                append(" · ")
-                                withStyle(healthLabelStyle) {
-                                    append(it)
-                                }
+                        .fillMaxWidth()
+                        .heightIn(min = 88.dp)
+                        .clickable(enabled = enabled) {
+                            if (swipeState.settledValue == ProfileSwipeValue.Actions) {
+                                scope.launch { swipeState.animateTo(ProfileSwipeValue.Closed) }
+                            } else {
+                                onClick()
                             }
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        color = primaryContentColor,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = profile.label(),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = secondaryContentColor,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        profile.maskedAddress(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = secondaryContentColor,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (degraded && !health?.error.isNullOrBlank()) {
+                        }
+                        .padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ProfileStatusMark(running = running, degraded = degraded)
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        val healthLabel = if (running) profileHealthLabel(health) else null
+                        val healthLabelStyle = MaterialTheme.typography.labelMedium.toSpanStyle().copy(
+                            color = if (degraded) colors.onErrorContainer else colors.primary,
+                        )
                         Text(
-                            profileHealthErrorSummary(health?.error.orEmpty()),
+                            text = buildAnnotatedString {
+                                append(profile.name)
+                                healthLabel?.let {
+                                    append(" · ")
+                                    withStyle(healthLabelStyle) {
+                                        append(it)
+                                    }
+                                }
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            color = primaryContentColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = profile.label(),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = secondaryContentColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            profile.maskedAddress(),
                             style = MaterialTheme.typography.bodySmall,
                             color = secondaryContentColor,
-                            maxLines = 2,
+                            maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                        )
+                        if (degraded && !health?.error.isNullOrBlank()) {
+                            Text(
+                                profileHealthErrorSummary(health?.error.orEmpty()),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = secondaryContentColor,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(48.dp))
+                    IconButton(
+                        onClick = onShare,
+                        enabled = shareable,
+                    ) {
+                        Icon(
+                            Icons.Rounded.Share,
+                            contentDescription = stringResource(R.string.share),
+                            tint = if (shareable) secondaryContentColor else primaryContentColor.copy(alpha = 0.38f),
+                        )
+                    }
+                    IconButton(
+                        onClick = onShowQrCode,
+                        enabled = shareable,
+                    ) {
+                        Icon(
+                            Icons.Rounded.QrCode2,
+                            contentDescription = stringResource(R.string.show_qr_code),
+                            tint = if (shareable) secondaryContentColor else primaryContentColor.copy(alpha = 0.38f),
                         )
                     }
                 }
-                IconButton(
-                    onClick = onShare,
-                    enabled = shareable,
-                ) {
-                    Icon(
-                        Icons.Rounded.Share,
-                        contentDescription = stringResource(R.string.share),
-                        tint = if (shareable) secondaryContentColor else primaryContentColor.copy(alpha = 0.38f),
-                    )
-                }
-                IconButton(
-                    onClick = onShowQrCode,
-                    enabled = shareable,
-                ) {
-                    Icon(
-                        Icons.Rounded.QrCode2,
-                        contentDescription = stringResource(R.string.show_qr_code),
-                        tint = if (shareable) secondaryContentColor else primaryContentColor.copy(alpha = 0.38f),
-                    )
-                }
             }
+        }
+        Row(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .offset { IntOffset(swipeState.requireOffset().roundToInt(), 0) },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .draggable(
+                        state = rememberDraggableState(onDelta = onDrag),
+                        orientation = Orientation.Vertical,
+                        onDragStarted = { onDragStart() },
+                        onDragStopped = { onDragEnd() },
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.DragHandle,
+                    contentDescription = stringResource(R.string.reorder_profile),
+                    tint = secondaryContentColor,
+                )
+            }
+            Spacer(Modifier.width(96.dp))
         }
     }
 }
@@ -2335,6 +2441,13 @@ private fun RouteManagementPage(onBack: () -> Unit) {
     var deleteCandidate by remember { mutableStateOf<ManagedRouteRule?>(null) }
     var dirty by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+    val listState = rememberLazyListState()
+    var draggedRuleId by remember { mutableStateOf<String?>(null) }
+    var draggedRuleOffset by remember { mutableStateOf(0f) }
+    var rulesBeforeDrag by remember { mutableStateOf<List<ManagedRouteRule>?>(null) }
+    var reorderScrollJob by remember { mutableStateOf<Job?>(null) }
+    val reorderScope = rememberCoroutineScope()
+    val reorderScrollStep = with(LocalDensity.current) { 24.dp.toPx() }
 
     fun persist(next: List<ManagedRouteRule>): Boolean {
         return RouteRuleStore.save(context, next).fold(
@@ -2356,6 +2469,71 @@ private fun RouteManagementPage(onBack: () -> Unit) {
         onBack()
     }
 
+    fun startRuleDrag(ruleId: String) {
+        draggedRuleId = ruleId
+        draggedRuleOffset = 0f
+        rulesBeforeDrag = rules
+    }
+
+    fun dragRule(ruleId: String, deltaY: Float) {
+        if (draggedRuleId != ruleId) return
+        draggedRuleOffset += deltaY
+        val visibleItems = listState.layoutInfo.visibleItemsInfo
+        val draggedItem = visibleItems.firstOrNull { it.key == ruleId } ?: return
+        val draggedCenter = draggedItem.offset + draggedRuleOffset + draggedItem.size / 2f
+        val targetItem = visibleItems.firstOrNull { item ->
+            item.key != ruleId &&
+                rules.any { it.id == item.key } &&
+                draggedCenter >= item.offset &&
+                draggedCenter <= item.offset + item.size
+        }
+        if (targetItem != null) {
+            val fromIndex = rules.indexOfFirst { it.id == ruleId }
+            val toIndex = rules.indexOfFirst { it.id == targetItem.key }
+            if (fromIndex >= 0 && toIndex >= 0 && fromIndex != toIndex) {
+                rules = rules.toMutableList().also { reordered ->
+                    reordered.add(toIndex, reordered.removeAt(fromIndex))
+                }
+                draggedRuleOffset += draggedItem.offset - targetItem.offset
+            }
+        }
+
+        if (reorderScrollJob?.isActive != true) {
+            reorderScrollJob = reorderScope.launch {
+                while (draggedRuleId == ruleId) {
+                    val layoutInfo = listState.layoutInfo
+                    val currentItem = layoutInfo.visibleItemsInfo.firstOrNull { it.key == ruleId } ?: break
+                    val currentTop = currentItem.offset + draggedRuleOffset
+                    val currentBottom = currentTop + currentItem.size
+                    val scrollDelta = when {
+                        currentTop < layoutInfo.viewportStartOffset -> -reorderScrollStep
+                        currentBottom > layoutInfo.viewportEndOffset -> reorderScrollStep
+                        else -> break
+                    }
+                    val consumed = listState.scrollBy(scrollDelta)
+                    if (consumed == 0f) break
+                    if (draggedRuleId == ruleId) draggedRuleOffset += consumed
+                    delay(16)
+                }
+            }
+        }
+    }
+
+    fun finishRuleDrag(commit: Boolean) {
+        val original = rulesBeforeDrag
+        val reordered = rules
+        reorderScrollJob?.cancel()
+        reorderScrollJob = null
+        draggedRuleId = null
+        draggedRuleOffset = 0f
+        rulesBeforeDrag = null
+        if (!commit) {
+            if (original != null) rules = original
+        } else if (original != null && original.map { it.id } != reordered.map { it.id }) {
+            if (!persist(reordered)) rules = original
+        }
+    }
+
     BackHandler(onBack = ::leave)
 
     Scaffold(
@@ -2373,6 +2551,7 @@ private fun RouteManagementPage(onBack: () -> Unit) {
         },
     ) { padding ->
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
@@ -2406,33 +2585,25 @@ private fun RouteManagementPage(onBack: () -> Unit) {
                 }
             }
             itemsIndexed(rules, key = { _, rule -> rule.id }) { index, rule ->
+                val dragging = draggedRuleId == rule.id
                 ManagedRouteRuleRow(
+                    modifier = Modifier
+                        .zIndex(if (dragging) 1f else 0f)
+                        .graphicsLayer {
+                            translationY = if (dragging) draggedRuleOffset else 0f
+                            shadowElevation = if (dragging) 8.dp.toPx() else 0f
+                            shape = CardShape
+                        },
                     rule = rule,
                     profiles = routeProfiles,
                     onClick = { editingRule = rule },
                     onEnabledChange = { enabled ->
                         persist(rules.toMutableList().also { it[index] = rule.copy(enabled = enabled) })
                     },
-                    onMoveUp = {
-                        if (index > 0) {
-                            persist(rules.toMutableList().also { list ->
-                                val previous = list[index - 1]
-                                list[index - 1] = list[index]
-                                list[index] = previous
-                            })
-                        }
-                    },
-                    onMoveDown = {
-                        if (index < rules.lastIndex) {
-                            persist(rules.toMutableList().also { list ->
-                                val next = list[index + 1]
-                                list[index + 1] = list[index]
-                                list[index] = next
-                            })
-                        }
-                    },
-                    canMoveUp = index > 0,
-                    canMoveDown = index < rules.lastIndex,
+                    dragging = dragging,
+                    onDragStart = { startRuleDrag(rule.id) },
+                    onDrag = { deltaY -> dragRule(rule.id, deltaY) },
+                    onDragEnd = { finishRuleDrag(commit = true) },
                     onDeleteRequest = { deleteCandidate = rule },
                 )
             }
@@ -2485,14 +2656,15 @@ private fun RouteManagementPage(onBack: () -> Unit) {
 
 @Composable
 private fun ManagedRouteRuleRow(
+    modifier: Modifier = Modifier,
     rule: ManagedRouteRule,
     profiles: List<AppConfig>,
     onClick: () -> Unit,
     onEnabledChange: (Boolean) -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
+    dragging: Boolean,
+    onDragStart: () -> Unit,
+    onDrag: (Float) -> Unit,
+    onDragEnd: () -> Unit,
     onDeleteRequest: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -2505,66 +2677,87 @@ private fun ManagedRouteRuleRow(
         }
     }
 
-    SwipeToDismissBox(
-        state = dismissState,
-        enableDismissFromStartToEnd = false,
-        enableDismissFromEndToStart = true,
-        backgroundContent = {
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(colors.errorContainer, CardShape)
-                    .padding(horizontal = 24.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Rounded.Delete, contentDescription = stringResource(R.string.delete), tint = colors.onErrorContainer)
-            }
-        },
-    ) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 88.dp),
-            shape = CardShape,
-            color = if (rule.enabled) colors.surfaceContainerLow else colors.surfaceContainer,
+    Box(modifier = modifier) {
+        SwipeToDismissBox(
+            modifier = Modifier.fillMaxWidth(),
+            state = dismissState,
+            enableDismissFromStartToEnd = false,
+            enableDismissFromEndToStart = !dragging,
+            backgroundContent = {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(colors.errorContainer, CardShape)
+                        .padding(horizontal = 24.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Rounded.Delete, contentDescription = stringResource(R.string.delete), tint = colors.onErrorContainer)
+                }
+            },
         ) {
-            Row(
+            Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(onClick = onClick)
-                    .padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .heightIn(min = 88.dp),
+                shape = CardShape,
+                color = if (rule.enabled) colors.surfaceContainerLow else colors.surfaceContainer,
             ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onClick)
+                        .padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        routeRuleTypeLabel(rule.type),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = colors.primary,
-                    )
-                    Text(rule.value, style = MaterialTheme.typography.bodyLarge, color = colors.onSurface)
-                    Text(
-                        routeOutboundLabel(rule, profiles),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colors.onSurfaceVariant,
-                    )
-                }
-                Column {
-                    IconButton(onClick = onMoveUp, enabled = canMoveUp) {
-                        Icon(Icons.Rounded.KeyboardArrowUp, contentDescription = stringResource(R.string.move_rule_up))
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            routeRuleTypeLabel(rule.type),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = colors.primary,
+                        )
+                        Text(rule.value, style = MaterialTheme.typography.bodyLarge, color = colors.onSurface)
+                        Text(
+                            routeOutboundLabel(rule, profiles),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.onSurfaceVariant,
+                        )
                     }
-                    IconButton(onClick = onMoveDown, enabled = canMoveDown) {
-                        Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = stringResource(R.string.move_rule_down))
-                    }
+                    Spacer(Modifier.width(100.dp))
                 }
-                Switch(
-                    checked = rule.enabled,
-                    onCheckedChange = onEnabledChange,
+            }
+        }
+        Row(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .offset { IntOffset(dismissState.requireOffset().roundToInt(), 0) }
+                .padding(end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .draggable(
+                        state = rememberDraggableState(onDelta = onDrag),
+                        orientation = Orientation.Vertical,
+                        onDragStarted = { onDragStart() },
+                        onDragStopped = { onDragEnd() },
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.DragHandle,
+                    contentDescription = stringResource(R.string.reorder_rule),
+                    tint = colors.onSurfaceVariant,
                 )
             }
+            Switch(
+                checked = rule.enabled,
+                onCheckedChange = onEnabledChange,
+            )
         }
     }
 }

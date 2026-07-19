@@ -7,6 +7,7 @@
     <string name="add_profile">添加配置</string>
     <string name="edit">编辑</string>
     <string name="edit_profile">编辑配置</string>
+    <string name="reorder_profile">拖动排序代理</string>
     <string name="share">分享</string>
     <string name="show_qr_code">生成二维码</string>
     <string name="profile_qr_code">配置二维码</string>
@@ -134,8 +135,7 @@
     <string name="route_rule_type">匹配类型</string>
     <string name="route_rule_value">匹配值</string>
     <string name="route_rule_outbound">连接方式</string>
-    <string name="move_rule_up">上移规则</string>
-    <string name="move_rule_down">下移规则</string>
+    <string name="reorder_rule">拖动排序规则</string>
     <string name="invalid_route_rule">请输入符合当前匹配类型的有效值。</string>
     <string name="route_type_domain">精确域名</string>
     <string name="route_type_domain_suffix">域名后缀</string>
