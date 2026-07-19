@@ -53,8 +53,6 @@ class LiveConnectivityTest {
                 powerSavingMode = false,
                 socksPort = socksPort,
                 socksListenAll = false,
-                routeExternalSources = false,
-                directFirst = false,
                 socksUsername = "",
                 socksPassword = "",
             ),

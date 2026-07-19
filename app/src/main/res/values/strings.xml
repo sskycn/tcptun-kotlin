@@ -123,15 +123,6 @@
     <string name="socks_port">Local proxy port</string>
     <string name="socks_port_error">Use a port from 1 to 65535.</string>
     <string name="socks_listen_all">Listen on all interfaces</string>
-    <string name="route_external_sources">Route external proxy clients</string>
-    <string name="direct_first">Direct first</string>
-    <string name="probe_timeout">Probe timeout</string>
-    <string name="failure_threshold">Failure threshold</string>
-    <string name="positive_ttl">Positive TTL</string>
-    <string name="negative_ttl">Negative TTL</string>
-    <string name="duration_error">Use a duration such as 120ms, 10s, or 30m.</string>
-    <string name="failure_threshold_error">Use a value from 1 to 100.</string>
-    <string name="direct_first_note">For generated profiles, try direct TCP connections first and fall back to the tunnel when direct access fails. Full JSON profiles keep their own routing.</string>
     <string name="route_management">Route management</string>
     <string name="route_management_note">Rules are evaluated first from top to bottom and can target any connection. Unmatched traffic uses the active dynamic pool. Changes apply when you leave this page.</string>
     <string name="route_rules_count">%1$d enabled rules</string>
@@ -172,7 +163,7 @@
     <string name="recent_restart_reason">Last restart reason</string>
     <string name="transparent_proxy_settings">Transparent proxy settings</string>
     <string name="power_saving_mode">Power saving mode</string>
-    <string name="power_saving_note">Power saving mode uses longer bridge heartbeat/retry timers and lowers idle health-check frequency.</string>
+    <string name="power_saving_note">Power saving mode further reduces health and latency-check frequency while the app is visible. Background checks are always minimized.</string>
     <string name="runtime_settings_note">Settings are saved while editing. When you go back, the running VPN restarts once to apply changed settings.</string>
     <string name="native_tun_capabilities_note">Native TUN supports TCP and UDP. Go handles DNS inside the tunnel and enables fake-IP by default.</string>
     <string name="vpn_traffic_mode">VPN traffic mode</string>
@@ -214,6 +205,7 @@
     <string name="field_tls">TLS</string>
     <string name="field_tls_insecure">TLS insecure</string>
     <string name="field_mux">Mux</string>
+    <string name="field_mux_mode">Mux mode</string>
     <string name="full_config_mode">Full tcptun-go JSON</string>
     <string name="full_config_json">tcptun-go configuration JSON</string>
     <string name="full_config_note">All tcptun-go fields are preserved. VPN traffic enters through the native TUN inbound tagged tun; the local proxy listener remains available separately.</string>

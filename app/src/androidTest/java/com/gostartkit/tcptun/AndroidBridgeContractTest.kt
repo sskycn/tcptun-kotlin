@@ -15,6 +15,7 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -662,11 +663,6 @@ class AndroidBridgeContractTest {
             protocol = "native",
         ).toBridgeJson(
             localListenAddr = "127.0.0.1:18080",
-            directFirst = true,
-            probeTimeout = "1250ms",
-            failureThreshold = 3,
-            positiveTtl = "45m",
-            negativeTtl = "15m",
         )
 
         val root = JSONObject(config)
@@ -683,16 +679,9 @@ class AndroidBridgeContractTest {
         assertFalse(proxy.has("server"))
         assertFalse(proxy.has("port"))
         assertFalse(proxy.getJSONObject("mux").has("enabled"))
-        val autoOutbound = root.getJSONArray("outbounds").getJSONObject(2)
-        assertEquals("1250ms", autoOutbound.getString("probe_timeout"))
-        assertEquals(3, autoOutbound.getInt("failure_threshold"))
-        assertEquals("45m", autoOutbound.getString("positive_ttl"))
-        assertEquals("15m", autoOutbound.getString("negative_ttl"))
+        assertEquals(2, root.getJSONArray("outbounds").length())
         val rules = root.getJSONObject("route").getJSONArray("rules")
-        assertEquals("proxy", rules.getJSONObject(0).getString("outbound"))
-        assertEquals("tun", rules.getJSONObject(0).getJSONArray("inbound").getString(0))
-        assertEquals("auto", rules.getJSONObject(1).getString("outbound"))
-        assertEquals("tun", rules.getJSONObject(1).getJSONArray("inbound").getString(0))
+        assertEquals(0, rules.length())
         val dns = root.getJSONObject("dns")
         assertEquals("1.1.1.1", dns.getJSONArray("servers").getString(0))
         assertEquals("prefer_ipv4", dns.getString("strategy"))
@@ -703,7 +692,44 @@ class AndroidBridgeContractTest {
     }
 
     @Test
-    fun strictConfigMapsProtocolCredentialsAndExternalRouting() {
+    fun generatedRealityQuicConfigStartsCurrentGoBridge() {
+        val profile = AppConfig(
+            name = "reality-quic",
+            serverHost = "192.0.2.1",
+            serverPort = "443",
+            protocol = "native",
+            transport = "raw",
+            token = "android-reality-quic-test",
+            sni = "example.com",
+            tunnelSecurity = "reality-quic",
+            realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
+            realityShortId = "a65f93c1dbc5d54a",
+            realityFingerprint = "chrome",
+            mux = true,
+            muxMode = "quic",
+            muxMaxSessions = 4,
+            muxWarmSpare = 1,
+        )
+        assertNull(profile.validate())
+
+        val config = profile.toBridgeJson(localListenAddr = "127.0.0.1:18086")
+        val proxy = JSONObject(config).getJSONArray("outbounds").getJSONObject(0)
+        val security = proxy.getJSONObject("security")
+        assertEquals("reality-quic", security.getString("type"))
+        assertEquals("example.com", security.getString("server_name"))
+        assertEquals("chrome", security.getString("fingerprint"))
+        assertFalse(security.has("spider_x"))
+        assertFalse(security.has("insecure"))
+        val mux = proxy.getJSONObject("mux")
+        assertEquals("quic", mux.getString("mode"))
+        assertEquals(4, mux.getInt("max_sessions"))
+        assertEquals(1, mux.getInt("warm_spares"))
+
+        assertEngineStarts(config)
+    }
+
+    @Test
+    fun strictConfigMapsProtocolCredentials() {
         val uuid = "00000000-0000-4000-8000-000000000000"
         val localOnly = JSONObject(
             AppConfig(
@@ -711,10 +737,7 @@ class AndroidBridgeContractTest {
                 serverPort = "443",
                 token = uuid,
                 protocol = "vless",
-            ).toBridgeJson(
-                localListenAddr = "0.0.0.0:18081",
-                routeExternalSources = false,
-            ),
+            ).toBridgeJson(localListenAddr = "0.0.0.0:18081"),
         )
         val localOnlyOutbounds = localOnly.getJSONArray("outbounds")
         assertEquals(uuid, localOnlyOutbounds.getJSONObject(0).getString("uuid"))
@@ -727,18 +750,13 @@ class AndroidBridgeContractTest {
                 serverPort = "443",
                 token = "trojan-password",
                 protocol = "trojan",
-            ).toBridgeJson(
-                localListenAddr = "0.0.0.0:18082",
-                routeExternalSources = true,
-                directFirst = true,
-            ),
+            ).toBridgeJson(localListenAddr = "0.0.0.0:18082"),
         )
         val routedOutbounds = routedExternal.getJSONArray("outbounds")
         assertEquals("trojan-password", routedOutbounds.getJSONObject(0).getString("password"))
-        assertEquals(3, routedOutbounds.length())
+        assertEquals(2, routedOutbounds.length())
         val routedRules = routedExternal.getJSONObject("route").getJSONArray("rules")
-        assertEquals("proxy", routedRules.getJSONObject(0).getString("outbound"))
-        assertEquals("auto", routedRules.getJSONObject(1).getString("outbound"))
+        assertEquals(0, routedRules.length())
     }
 
     @Test
@@ -783,7 +801,7 @@ class AndroidBridgeContractTest {
     }
 
     @Test
-    fun fullConfigMigratesTcpOnlyDirectFirstForTcpUdpTun() {
+    fun fullConfigMigratesRemovedDirectFirstToFallback() {
         val prepared = JSONObject(
             AppConfig(
                 name = "direct-first",
@@ -803,12 +821,12 @@ class AndroidBridgeContractTest {
 
         assertEquals("proxy", prepared.getJSONObject("route").getString("default_outbound"))
         val outbounds = prepared.getJSONArray("outbounds")
+        assertEquals(2, outbounds.length())
         assertEquals(2, outbounds.getJSONObject(0).getJSONArray("network").length())
         assertEquals(2, outbounds.getJSONObject(1).getJSONArray("network").length())
         val rules = prepared.getJSONObject("route").getJSONArray("rules")
-        assertEquals("tcp", rules.getJSONObject(0).getJSONArray("network").getString(0))
-        assertEquals("auto", rules.getJSONObject(1).getString("outbound"))
-        assertEquals("tun", rules.getJSONObject(1).getJSONArray("inbound").getString(0))
+        assertEquals(1, rules.length())
+        assertEquals("proxy", rules.getJSONObject(0).getString("outbound"))
 
         assertEngineStarts(prepared.toString())
     }

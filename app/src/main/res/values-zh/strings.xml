@@ -122,15 +122,6 @@
     <string name="socks_port">本地代理端口</string>
     <string name="socks_port_error">请输入 1 到 65535 之间的端口。</string>
     <string name="socks_listen_all">监听所有网卡</string>
-    <string name="route_external_sources">外部代理客户端使用路由规则</string>
-    <string name="direct_first">直连优先</string>
-    <string name="probe_timeout">探测超时</string>
-    <string name="failure_threshold">失败阈值</string>
-    <string name="positive_ttl">成功缓存时间</string>
-    <string name="negative_ttl">失败缓存时间</string>
-    <string name="duration_error">请输入 120ms、10s 或 30m 等时长。</string>
-    <string name="failure_threshold_error">请输入 1 到 100 之间的值。</string>
-    <string name="direct_first_note">对生成的配置先尝试 TCP 直连，直连失败时回落到隧道；完整 JSON 配置保留自身路由。</string>
     <string name="route_management">路由管理</string>
     <string name="route_management_note">规则优先从上到下匹配，并可指定任意连接；未命中流量使用活动连接动态池。离开页面时应用变更。</string>
     <string name="route_rules_count">已启用 %1$d 条规则</string>
@@ -171,7 +162,7 @@
     <string name="recent_restart_reason">最近重启原因</string>
     <string name="transparent_proxy_settings">透明代理参数</string>
     <string name="power_saving_mode">省电模式</string>
-    <string name="power_saving_note">省电模式会使用更长的 bridge 心跳/重试参数，并降低空闲健康检查频率。</string>
+    <string name="power_saving_note">省电模式会进一步降低应用可见时的健康与延迟检查频率；进入后台后始终保持最低检查频率。</string>
     <string name="runtime_settings_note">编辑时会先保存设置；返回时如果有变更，正在运行的 VPN 会重启一次以应用设置。</string>
     <string name="native_tun_capabilities_note">原生 TUN 支持 TCP 和 UDP；DNS 默认在 Go 隧道内接管并启用 fake-IP。</string>
     <string name="vpn_traffic_mode">VPN 流量模式</string>
@@ -213,6 +204,7 @@
     <string name="field_tls">TLS</string>
     <string name="field_tls_insecure">TLS insecure</string>
     <string name="field_mux">Mux</string>
+    <string name="field_mux_mode">Mux 模式</string>
     <string name="full_config_mode">完整 tcptun-go JSON</string>
     <string name="full_config_json">tcptun-go 配置 JSON</string>
     <string name="full_config_note">保留 tcptun-go 支持的全部字段；VPN 流量通过 tag 为 tun 的原生 TUN 入站进入，本地代理监听仍独立保留。</string>

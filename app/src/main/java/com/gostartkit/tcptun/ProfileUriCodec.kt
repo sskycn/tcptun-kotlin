@@ -4,9 +4,6 @@ import android.net.Uri
 import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
-import java.net.Inet6Address
-import java.net.InetAddress
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.UUID
@@ -16,7 +13,6 @@ object ProfileUriCodec {
         val trimmed = raw.trim()
         return runCatching {
             when {
-                trimmed.startsWith(CompactPayloadPrefix) -> decodeCompactProfile(trimmed)
                 ProfileDeepLinkCodec.isSupportedLink(trimmed) -> {
                     val profileUri = ProfileDeepLinkCodec.decode(trimmed).getOrThrow()
                     decode(profileUri).getOrThrow()
@@ -27,7 +23,7 @@ object ProfileUriCodec {
                 trimmed.startsWith("native://", ignoreCase = true) -> decodeAuthorityProfile("native", trimmed)
                 trimmed.startsWith("tcptun://", ignoreCase = true) -> decodeAuthorityProfile("native", trimmed)
                 trimmed.contains("{") && trimmed.contains("}") -> decodeJsonProfile(trimmed)
-                else -> error("unsupported profile URI")
+                else -> TcptunProfileCodec.decode(trimmed)
             }
         }
     }
@@ -43,13 +39,10 @@ object ProfileUriCodec {
         }
     }
 
-    /**
-     * Binary QR encoding wrapped in Base45. The resulting `T2:` payload stays entirely inside
-     * QR's alphanumeric character set, while UUIDs, Reality keys, short IDs, flags, ports, and
-    * common host suffixes are stored in their compact binary form.
-     */
+    /** Encodes through tcptun-go's canonical profile codec, with a plain URI fallback. */
     fun encodeForQr(config: AppConfig): String? {
-        return encodeCompactProfile(config) ?: encode(config)
+        if (config.rawConfigJson.isNotBlank()) return null
+        return runCatching { TcptunProfileCodec.encode(config) }.getOrNull() ?: encode(config)
     }
 
     private fun decodeAuthorityProfile(protocol: String, raw: String): AppConfig {
@@ -79,7 +72,12 @@ object ProfileUriCodec {
             .ifBlank { uri.getQueryParameter("transport").orEmpty() }
             .lowercase()
         val security = uri.getQueryParameter("security").orEmpty().lowercase()
-        if (security !in setOf("", "none", "tls", "reality")) error("unsupported security: $security")
+        if (security !in setOf("", "none", "tls", "reality", "reality-quic")) {
+            error("unsupported security: $security")
+        }
+        if (security == "reality-quic" && protocol != "native") {
+            error("reality-quic requires native protocol")
+        }
         val path = uri.getQueryParameter("path") ?: uri.getQueryParameter("spx") ?: "/proxy"
         validateNetworks(uri.getQueryParameter("network"))
         return AppConfig(
@@ -97,7 +95,7 @@ object ProfileUriCodec {
             tlsInsecure = uri.getBooleanParameterCompat("allowInsecure", false) ||
                 uri.getBooleanParameterCompat("tlsInsecure", false) ||
                 uri.getBooleanParameterCompat("insecure", false),
-            tunnelSecurity = if (security == "reality") "reality" else "",
+            tunnelSecurity = security.takeIf { it == "reality" || it == "reality-quic" }.orEmpty(),
             flow = uri.getQueryParameter("flow").orEmpty(),
             realityPublicKey = uri.getQueryParameter("pbk").orEmpty(),
             realityShortId = uri.getQueryParameter("sid").orEmpty()
@@ -141,6 +139,9 @@ object ProfileUriCodec {
         val portNumber = port.toIntOrNull()
         if (portNumber == null || portNumber !in 1..65535) error("missing or invalid VMess server port")
         val tlsValue = obj.optString("tls").trim().lowercase()
+        if (tlsValue == "reality-quic" || obj.optString("security").equals("reality-quic", ignoreCase = true)) {
+            error("reality-quic requires native protocol")
+        }
         val security = when {
             tlsValue == "reality" -> "reality"
             tlsValue.isBlank() || tlsValue == "none" -> {
@@ -264,6 +265,7 @@ object ProfileUriCodec {
     }
 
     private fun encodeVMess(config: AppConfig): String? {
+        if (config.tunnelSecurity.equals("reality-quic", ignoreCase = true)) return null
         val host = config.serverHost.trim()
         val port = config.serverPort.trim()
         val token = config.token.trim()
@@ -302,18 +304,21 @@ object ProfileUriCodec {
     private fun commonParams(config: AppConfig): LinkedHashMap<String, String> {
         val params = linkedMapOf<String, String>()
         if (config.protocol == "native") params["v"] = TcptunUriVersion
+        val tunnelSecurity = config.tunnelSecurity.trim().lowercase()
         val security = when {
-            config.tunnelSecurity == "reality" -> "reality"
+            tunnelSecurity == "reality" || tunnelSecurity == "reality-quic" -> tunnelSecurity
             config.tls -> "tls"
             else -> "none"
         }
         params["security"] = security
         if (config.protocol == "vless") params["encryption"] = "none"
-        if (security == "reality") {
+        if (security == "reality" || security == "reality-quic") {
             putIfNotBlank(params, "pbk", config.realityPublicKey)
             putIfNotBlank(params, "sid", config.realityShortId)
             putIfNotBlank(params, "fp", config.realityFingerprint)
-            putIfNotBlank(params, "spx", config.realitySpiderX.ifBlank { config.path })
+            if (security == "reality") {
+                putIfNotBlank(params, "spx", config.realitySpiderX.ifBlank { config.path })
+            }
         }
         params["type"] = typeFromTransport(config.transport)
         putIfNotBlank(params, "flow", config.flow)
@@ -432,432 +437,6 @@ object ProfileUriCodec {
     }
 
     private const val TcptunUriVersion = "1"
-    private const val CompactPayloadPrefix = "T2:"
-    private const val CompactDefaultPath = "/proxy"
-    private const val CompactDefaultUpstream = "socks5"
-    private const val CompactDefaultFingerprint = "chrome"
-    private const val CompactDefaultSpiderX = "/"
-    private const val CompactDefaultVlessFlow = "xtls-rprx-vision"
-    private val CompactProtocols = listOf("native", "vless", "vmess", "trojan")
-    private val CompactTransports = listOf("raw", "ws", "h2", "h3")
-    private val CompactHostSuffixes = listOf(".com", ".net", ".org", ".cn", ".io", ".dev")
-    private const val CompactMaxBinaryLength = 43_000
-
-    private fun encodeCompactProfile(config: AppConfig): String? {
-        if (config.rawConfigJson.isNotBlank()) return null
-        val protocol = config.protocol.trim().lowercase()
-        val protocolCode = CompactProtocols.indexOf(protocol).takeIf { it >= 0 } ?: return null
-        val transport = config.transport.trim().lowercase().ifBlank { "raw" }
-        val transportCode = CompactTransports.indexOf(transport).takeIf { it >= 0 } ?: return null
-        val host = config.serverHost.trim()
-        val port = config.serverPort.trim()
-        if (host.isBlank() || port.isBlank()) return null
-        val portNumber = port.toIntOrNull() ?: return null
-        if (portNumber !in 1..65535) return null
-        val token = config.token.trim()
-        if (protocol != "native" && token.isBlank()) return null
-
-        val securityCode = when {
-            config.tunnelSecurity.equals("reality", ignoreCase = true) -> 2
-            config.tls -> 1
-            else -> 0
-        }
-        val networkCode = 0
-        val muxModeCode = when (config.muxMode.trim().lowercase()) {
-            "" -> 0
-            "group" -> 1
-            "quic" -> 2
-            else -> return null
-        }
-        val path = config.path.trim().ifBlank { CompactDefaultPath }
-        val hasPath = transport != "raw" && path != CompactDefaultPath
-        val sni = config.sni.trim()
-        val hasCustomSni = sni.isNotBlank() && sni != host
-        val flow = config.flow.trim()
-        val hasCustomFlow = flow.isNotBlank() &&
-            !(protocol == "vless" && securityCode == 2 && flow == CompactDefaultVlessFlow)
-        val publicKey = config.realityPublicKey.trim().takeIf { securityCode == 2 }.orEmpty()
-        val shortId = config.realityShortId.trim().takeIf { securityCode == 2 }.orEmpty()
-        val fingerprint = config.realityFingerprint.trim().takeIf { securityCode == 2 }.orEmpty()
-        val hasCustomFingerprint = fingerprint.isNotBlank() &&
-            !fingerprint.equals(CompactDefaultFingerprint, ignoreCase = true)
-        val spiderX = config.realitySpiderX.trim().takeIf { securityCode == 2 }.orEmpty()
-        val hasCustomSpiderX = spiderX.isNotBlank() && spiderX != CompactDefaultSpiderX
-        val upstream = config.upstreamProtocol.trim().lowercase().ifBlank { CompactDefaultUpstream }
-        if (upstream !in AppConfig.UpstreamProtocols) return null
-
-        val name = config.name.trim().ifBlank { host }
-        val hasCustomName = name != host
-        val header0 = protocolCode or
-            (transportCode shl 2) or
-            (securityCode shl 4) or
-            (if (config.tlsInsecure) 0x40 else 0) or
-            (if (config.mux) 0x80 else 0)
-        val header1 = networkCode or
-            (if (upstream == "mixed") 0x04 else 0) or
-            (muxModeCode shl 3) or
-            (if (hasPath) 0x20 else 0) or
-            (if (hasCustomSni) 0x40 else 0) or
-            (if (hasCustomName) 0x80 else 0)
-        val header2 = (if (hasCustomFlow) 0x01 else 0) or
-            (if (publicKey.isNotBlank()) 0x02 else 0) or
-            (if (shortId.isNotBlank()) 0x04 else 0) or
-            (if (hasCustomFingerprint) 0x08 else 0) or
-            (if (hasCustomSpiderX) 0x10 else 0) or
-            (if (config.muxMaxSessions > 0) 0x20 else 0) or
-            (if (config.muxMaxStreamsPerSession > 0) 0x40 else 0) or
-            (if (config.muxWarmSpare > 0) 0x80 else 0)
-
-        val writer = CompactWriter()
-        writer.writeByte(header0)
-        writer.writeByte(header1)
-        writer.writeByte(header2)
-        writer.writePort(portNumber)
-        writer.writeCredential(token)
-        writer.writeHost(host)
-        if (hasPath) writer.writeString(path)
-        if (hasCustomSni) writer.writeString(sni)
-        if (hasCustomFlow) writer.writeString(flow)
-        if (publicKey.isNotBlank()) writer.writeRealityKey(publicKey)
-        if (shortId.isNotBlank()) writer.writeShortId(shortId)
-        if (hasCustomFingerprint) writer.writeString(fingerprint)
-        if (hasCustomSpiderX) writer.writeString(spiderX)
-        if (config.muxMaxSessions > 0) writer.writeVarUInt(config.muxMaxSessions)
-        if (config.muxMaxStreamsPerSession > 0) writer.writeVarUInt(config.muxMaxStreamsPerSession)
-        if (config.muxWarmSpare > 0) writer.writeVarUInt(config.muxWarmSpare)
-        if (hasCustomName) writer.writeString(name)
-        val bytes = writer.toByteArray()
-        if (bytes.size > CompactMaxBinaryLength) return null
-        // The final sentinel prevents String.trim()/clipboard normalization from removing a
-        // legitimate trailing Base45 space (space is part of QR's alphanumeric alphabet).
-        return CompactPayloadPrefix + encodeBase45(bytes) + CompactPayloadSentinel
-    }
-
-    private fun decodeCompactProfile(raw: String): AppConfig {
-        if (raw.length > MaxProfileUriLength) error("compact profile payload too long")
-        if (!raw.endsWith(CompactPayloadSentinel)) error("invalid compact profile terminator")
-        val bytes = decodeBase45(raw.removePrefix(CompactPayloadPrefix).dropLast(1))
-        if (bytes.size > CompactMaxBinaryLength) error("compact profile payload too long")
-        val reader = CompactReader(bytes)
-        val header0 = reader.readByte()
-        val header1 = reader.readByte()
-        val header2 = reader.readByte()
-        val protocol = CompactProtocols.getOrNull(header0 and 0x03)
-            ?: error("unsupported compact protocol")
-        val transport = CompactTransports.getOrNull((header0 ushr 2) and 0x03)
-            ?: error("unsupported compact transport")
-        val securityCode = (header0 ushr 4) and 0x03
-        if (securityCode == 3) error("unsupported compact security")
-        when (header1 and 0x03) {
-            0, 1, 2 -> Unit
-            else -> error("unsupported compact network")
-        }
-        val muxMode = when ((header1 ushr 3) and 0x03) {
-            0 -> ""
-            1 -> "group"
-            2 -> "quic"
-            else -> error("unsupported compact mux mode")
-        }
-        val port = reader.readPort().toString()
-        val token = reader.readCredential()
-        val host = reader.readHost().trim()
-        if (host.isBlank()) error("missing server host")
-        if (protocol != "native" && token.isBlank()) error("missing $protocol credential")
-        val path = if (header1 and 0x20 != 0) reader.readString() else CompactDefaultPath
-        val sni = when {
-            header1 and 0x40 != 0 -> reader.readString()
-            securityCode != 0 -> host
-            else -> ""
-        }
-        val flow = if (header2 and 0x01 != 0) {
-            reader.readString()
-        } else if (protocol == "vless" && securityCode == 2) {
-            CompactDefaultVlessFlow
-        } else {
-            ""
-        }
-        val realityPublicKey = if (header2 and 0x02 != 0) reader.readRealityKey() else ""
-        val realityShortId = if (header2 and 0x04 != 0) reader.readShortId() else ""
-        val realityFingerprint = if (securityCode == 2) {
-            if (header2 and 0x08 != 0) reader.readString() else CompactDefaultFingerprint
-        } else {
-            ""
-        }
-        val realitySpiderX = if (securityCode == 2) {
-            if (header2 and 0x10 != 0) reader.readString() else CompactDefaultSpiderX
-        } else {
-            ""
-        }
-        val muxMaxSessions = if (header2 and 0x20 != 0) reader.readVarUInt() else 0
-        val muxMaxStreamsPerSession = if (header2 and 0x40 != 0) reader.readVarUInt() else 0
-        val muxWarmSpare = if (header2 and 0x80 != 0) reader.readVarUInt() else 0
-        val name = if (header1 and 0x80 != 0) reader.readString().ifBlank { host } else host
-        reader.requireEnd()
-
-        return AppConfig(
-            id = UUID.randomUUID().toString(),
-            name = name,
-            serverHost = host,
-            serverPort = port,
-            protocol = protocol,
-            transport = transport,
-            token = token,
-            sni = sni,
-            path = path.ifBlank { CompactDefaultPath },
-            tls = securityCode == 1,
-            tlsInsecure = header0 and 0x40 != 0,
-            tunnelSecurity = if (securityCode == 2) "reality" else "",
-            flow = flow,
-            realityPublicKey = realityPublicKey,
-            realityShortId = realityShortId,
-            realityFingerprint = realityFingerprint,
-            realitySpiderX = realitySpiderX,
-            mux = header0 and 0x80 != 0,
-            muxMode = muxMode,
-            muxMaxSessions = muxMaxSessions,
-            muxMaxStreamsPerSession = muxMaxStreamsPerSession,
-            muxWarmSpare = muxWarmSpare,
-            upstreamProtocol = if (header1 and 0x04 != 0) "mixed" else CompactDefaultUpstream,
-        )
-    }
-
-    private class CompactWriter {
-        private val output = ByteArrayOutputStream()
-
-        fun writeByte(value: Int) = output.write(value)
-
-        fun writeVarUInt(value: Int) {
-            require(value >= 0) { "negative compact integer" }
-            var remaining = value
-            do {
-                val chunk = remaining and 0x7f
-                remaining = remaining ushr 7
-                writeByte(chunk or if (remaining != 0) 0x80 else 0)
-            } while (remaining != 0)
-        }
-
-        fun writeString(value: String) {
-            val bytes = value.toByteArray(StandardCharsets.UTF_8)
-            writeVarUInt(bytes.size)
-            output.write(bytes)
-        }
-
-        fun writePort(port: Int) {
-            when (port) {
-                443 -> writeByte(0)
-                9443 -> writeByte(1)
-                else -> {
-                    writeByte(2)
-                    writeByte(port ushr 8)
-                    writeByte(port)
-                }
-            }
-        }
-
-        fun writeCredential(value: String) {
-            val uuid = runCatching { UUID.fromString(value) }.getOrNull()
-            if (uuid != null && uuid.toString().equals(value, ignoreCase = true)) {
-                writeByte(0)
-                writeLong(uuid.mostSignificantBits)
-                writeLong(uuid.leastSignificantBits)
-            } else {
-                writeByte(1)
-                writeString(value)
-            }
-        }
-
-        fun writeHost(value: String) {
-            val ipv4 = value.split('.').takeIf { parts ->
-                parts.size == 4 && parts.all {
-                    it.isNotEmpty() && (it == "0" || !it.startsWith('0')) && it.toIntOrNull() in 0..255
-                }
-            }
-            if (ipv4 != null) {
-                writeByte(0)
-                ipv4.forEach { writeByte(it.toInt()) }
-                return
-            }
-            val ipv6 = if (value.contains(':')) {
-                runCatching { InetAddress.getByName(value.removeSurrounding("[", "]")) as? Inet6Address }
-                    .getOrNull()
-            } else {
-                null
-            }
-            if (ipv6 != null) {
-                writeByte(1)
-                output.write(ipv6.address)
-                return
-            }
-            val suffixIndex = CompactHostSuffixes.indexOfFirst { value.endsWith(it, ignoreCase = true) }
-            if (suffixIndex >= 0) {
-                writeByte(2 + suffixIndex)
-                writeString(value.dropLast(CompactHostSuffixes[suffixIndex].length))
-            } else {
-                writeByte(2 + CompactHostSuffixes.size)
-                writeString(value)
-            }
-        }
-
-        fun writeRealityKey(value: String) {
-            val decoded = runCatching { decodeBase64(value) }.getOrNull()
-            if (decoded?.size == 32) {
-                writeByte(0)
-                output.write(decoded)
-            } else {
-                writeByte(1)
-                writeString(value)
-            }
-        }
-
-        fun writeShortId(value: String) {
-            val packed = value.takeIf {
-                it.length in 2..32 && it.length % 2 == 0 && it.all { ch -> ch.digitToIntOrNull(16) != null }
-            }
-                ?.chunked(2)
-                ?.map { it.toInt(16) }
-            if (packed != null) {
-                writeByte(packed.size)
-                packed.forEach(::writeByte)
-            } else {
-                writeByte(0)
-                writeString(value)
-            }
-        }
-
-        private fun writeLong(value: Long) {
-            for (shift in 56 downTo 0 step 8) writeByte((value ushr shift).toInt())
-        }
-
-        fun toByteArray(): ByteArray = output.toByteArray()
-    }
-
-    private class CompactReader(private val bytes: ByteArray) {
-        private var offset = 0
-
-        fun readByte(): Int {
-            if (offset >= bytes.size) error("truncated compact profile")
-            return bytes[offset++].toInt() and 0xff
-        }
-
-        fun readVarUInt(): Int {
-            var value = 0
-            var shift = 0
-            repeat(5) {
-                val byte = readByte()
-                if (shift == 28 && byte and 0xf0 != 0) error("compact integer is too large")
-                value = value or ((byte and 0x7f) shl shift)
-                if (byte and 0x80 == 0) return value
-                shift += 7
-            }
-            error("compact integer is too large")
-        }
-
-        fun readString(): String {
-            val length = readVarUInt()
-            if (length > bytes.size - offset) error("truncated compact string")
-            val value = String(bytes, offset, length, StandardCharsets.UTF_8)
-            offset += length
-            return value
-        }
-
-        fun readPort(): Int = when (readByte()) {
-            0 -> 443
-            1 -> 9443
-            2 -> (readByte() shl 8) or readByte()
-            else -> error("invalid compact port")
-        }.also { if (it !in 1..65535) error("invalid compact port") }
-
-        fun readCredential(): String = when (readByte()) {
-            0 -> UUID(readLong(), readLong()).toString()
-            1 -> readString()
-            else -> error("invalid compact credential")
-        }
-
-        fun readHost(): String = when (val kind = readByte()) {
-            0 -> List(4) { readByte() }.joinToString(".")
-            1 -> InetAddress.getByAddress(readBytes(16)).hostAddress.orEmpty()
-            in 2 until 2 + CompactHostSuffixes.size ->
-                readString() + CompactHostSuffixes[kind - 2]
-            2 + CompactHostSuffixes.size -> readString()
-            else -> error("invalid compact host")
-        }
-
-        fun readRealityKey(): String = when (readByte()) {
-            0 -> Base64.encodeToString(readBytes(32), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
-            1 -> readString()
-            else -> error("invalid compact Reality key")
-        }
-
-        fun readShortId(): String {
-            val byteLength = readByte()
-            if (byteLength == 0) return readString()
-            if (byteLength > 16) error("invalid compact short ID")
-            return readBytes(byteLength).joinToString("") { "%02x".format(it.toInt() and 0xff) }
-        }
-
-        private fun readLong(): Long {
-            var value = 0L
-            repeat(8) { value = (value shl 8) or readByte().toLong() }
-            return value
-        }
-
-        private fun readBytes(length: Int): ByteArray {
-            if (length > bytes.size - offset) error("truncated compact profile")
-            return bytes.copyOfRange(offset, offset + length).also { offset += length }
-        }
-
-        fun requireEnd() {
-            if (offset != bytes.size) error("unexpected compact profile data")
-        }
-    }
-
-    private fun encodeBase45(bytes: ByteArray): String = buildString((bytes.size * 3 + 1) / 2) {
-        var index = 0
-        while (index + 1 < bytes.size) {
-            val value = ((bytes[index].toInt() and 0xff) shl 8) or (bytes[index + 1].toInt() and 0xff)
-            append(Base45Alphabet[value % 45])
-            append(Base45Alphabet[(value / 45) % 45])
-            append(Base45Alphabet[value / (45 * 45)])
-            index += 2
-        }
-        if (index < bytes.size) {
-            val value = bytes[index].toInt() and 0xff
-            append(Base45Alphabet[value % 45])
-            append(Base45Alphabet[value / 45])
-        }
-    }
-
-    private fun decodeBase45(value: String): ByteArray {
-        if (value.isEmpty() || value.length % 3 == 1) error("invalid Base45 payload")
-        val output = ByteArrayOutputStream(value.length * 2 / 3)
-        var index = 0
-        while (index < value.length) {
-            val remaining = value.length - index
-            val first = Base45Alphabet.indexOf(value[index]).takeIf { it >= 0 }
-                ?: error("invalid Base45 character")
-            val second = Base45Alphabet.indexOf(value[index + 1]).takeIf { it >= 0 }
-                ?: error("invalid Base45 character")
-            if (remaining >= 3) {
-                val third = Base45Alphabet.indexOf(value[index + 2]).takeIf { it >= 0 }
-                    ?: error("invalid Base45 character")
-                val decoded = first + second * 45 + third * 45 * 45
-                if (decoded > 0xffff) error("invalid Base45 group")
-                output.write(decoded ushr 8)
-                output.write(decoded)
-                index += 3
-            } else {
-                val decoded = first + second * 45
-                if (decoded > 0xff) error("invalid Base45 tail")
-                output.write(decoded)
-                index += 2
-            }
-        }
-        return output.toByteArray()
-    }
-
-    private const val Base45Alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:"
-    private const val CompactPayloadSentinel = ":"
-
     private fun encodeComponent(value: String): String {
         return URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
     }

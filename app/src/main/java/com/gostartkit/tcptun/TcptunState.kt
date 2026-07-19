@@ -145,6 +145,14 @@ object TcptunState {
     private var flowSessionId = -1L
     private var flowSequence = -1L
     private var tcpingRequestId = 0L
+    @Volatile private var uiVisible = false
+
+    val isUiVisible: Boolean
+        get() = uiVisible
+
+    fun setUiVisible(visible: Boolean) {
+        uiVisible = visible
+    }
 
     @Synchronized
     fun beginBridgeSession(): Long {

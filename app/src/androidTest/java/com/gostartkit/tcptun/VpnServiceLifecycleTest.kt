@@ -53,8 +53,6 @@ class VpnServiceLifecycleTest {
                 powerSavingMode = false,
                 socksPort = socksPort,
                 socksListenAll = false,
-                routeExternalSources = false,
-                directFirst = false,
                 flowAnalysisApp = "",
             ),
         )

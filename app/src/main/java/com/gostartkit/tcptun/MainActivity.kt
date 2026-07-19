@@ -145,6 +145,7 @@ import kotlinx.coroutines.withContext
 
 private const val SnackbarAutoDismissMillis = 6_000L
 private const val HealthUnknownAnimationIntervalMillis = 500L
+private const val ClientIpRefreshIntervalMillis = 5_000L
 
 private val CardShape = RoundedCornerShape(16.dp)
 private val CardShapeCompact = RoundedCornerShape(12.dp)
@@ -472,6 +473,19 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        TcptunState.setUiVisible(true)
+        if (TcptunState.status == "Running") {
+            TcptunVpnService.requestDenseHealthCheck("app visible")
+        }
+    }
+
+    override fun onStop() {
+        TcptunState.setUiVisible(false)
+        super.onStop()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -1769,7 +1783,7 @@ private fun IpInformationPage(onBack: () -> Unit) {
     LaunchedEffect(vpnState.status) {
         while (vpnState.status == "Running") {
             runCatching { context.startService(TcptunVpnService.refreshClientIpsIntent(context)) }
-            delay(1_000)
+            delay(ClientIpRefreshIntervalMillis)
         }
     }
 
@@ -1872,10 +1886,6 @@ private fun SettingsPage(onBack: () -> Unit) {
     val context = LocalContext.current
     var settings by remember { mutableStateOf(TcptunVpnService.readRuntimeSettings(context)) }
     var socksPortText by remember { mutableStateOf(settings.socksPort.toString()) }
-    var probeTimeoutText by remember { mutableStateOf(settings.probeTimeout) }
-    var failureThresholdText by remember { mutableStateOf(settings.failureThreshold.toString()) }
-    var positiveTtlText by remember { mutableStateOf(settings.positiveTtl) }
-    var negativeTtlText by remember { mutableStateOf(settings.negativeTtl) }
     var settingsDirty by remember { mutableStateOf(false) }
     val vpnState by TcptunState.state.collectAsState()
     val diagnostics = vpnState.diagnostics
@@ -1886,10 +1896,6 @@ private fun SettingsPage(onBack: () -> Unit) {
         TcptunVpnService.writeRuntimeSettings(context, next)
         settings = TcptunVpnService.readRuntimeSettings(context)
         socksPortText = settings.socksPort.toString()
-        probeTimeoutText = settings.probeTimeout
-        failureThresholdText = settings.failureThreshold.toString()
-        positiveTtlText = settings.positiveTtl
-        negativeTtlText = settings.negativeTtl
         if (settings != before) {
             settingsDirty = true
         }
@@ -1898,9 +1904,6 @@ private fun SettingsPage(onBack: () -> Unit) {
     fun leaveSettings() {
         val socksPort = socksPortText.toIntOrNull()
         if (socksPort == null || socksPort !in 1..65535) return
-        if (!isValidDuration(probeTimeoutText) || !isValidDuration(positiveTtlText) || !isValidDuration(negativeTtlText)) return
-        val failureThreshold = failureThresholdText.toIntOrNull()
-        if (failureThreshold == null || failureThreshold !in 1..TcptunVpnService.MAX_FAILURE_THRESHOLD) return
         if (settingsDirty) {
             applyRuntimeSettings(context)
             settingsDirty = false
@@ -1968,72 +1971,6 @@ private fun SettingsPage(onBack: () -> Unit) {
                         ToggleRow(stringResource(R.string.socks_listen_all), settings.socksListenAll) { checked ->
                             saveSettings(settings.copy(socksListenAll = checked))
                         }
-                        ToggleRow(stringResource(R.string.route_external_sources), settings.routeExternalSources) { checked ->
-                            saveSettings(settings.copy(routeExternalSources = checked))
-                        }
-                        ToggleRow(stringResource(R.string.direct_first), settings.directFirst) { checked ->
-                            saveSettings(settings.copy(directFirst = checked))
-                        }
-                        val validProbeTimeout = isValidDuration(probeTimeoutText)
-                        OutlinedTextField(
-                            value = probeTimeoutText,
-                            onValueChange = { value ->
-                                probeTimeoutText = value.take(32)
-                                if (isValidDuration(probeTimeoutText)) {
-                                    saveSettings(settings.copy(probeTimeout = probeTimeoutText))
-                                }
-                            },
-                            label = { Text(stringResource(R.string.probe_timeout)) },
-                            singleLine = true,
-                            enabled = settings.directFirst,
-                            isError = settings.directFirst && !validProbeTimeout,
-                            supportingText = {
-                                if (settings.directFirst && !validProbeTimeout) {
-                                    Text(stringResource(R.string.duration_error))
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        val failureThreshold = failureThresholdText.toIntOrNull()
-                        OutlinedTextField(
-                            value = failureThresholdText,
-                            onValueChange = { value ->
-                                failureThresholdText = value.filter(Char::isDigit).take(3)
-                                val threshold = failureThresholdText.toIntOrNull()
-                                if (threshold != null && threshold in 1..TcptunVpnService.MAX_FAILURE_THRESHOLD) {
-                                    saveSettings(settings.copy(failureThreshold = threshold))
-                                }
-                            },
-                            label = { Text(stringResource(R.string.failure_threshold)) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            enabled = settings.directFirst,
-                            isError = settings.directFirst && (failureThreshold == null || failureThreshold !in 1..TcptunVpnService.MAX_FAILURE_THRESHOLD),
-                            supportingText = {
-                                if (settings.directFirst && (failureThreshold == null || failureThreshold !in 1..TcptunVpnService.MAX_FAILURE_THRESHOLD)) {
-                                    Text(stringResource(R.string.failure_threshold_error))
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        DurationSettingField(
-                            value = positiveTtlText,
-                            onValueChange = { value ->
-                                positiveTtlText = value.take(32)
-                                if (isValidDuration(positiveTtlText)) saveSettings(settings.copy(positiveTtl = positiveTtlText))
-                            },
-                            label = stringResource(R.string.positive_ttl),
-                            enabled = settings.directFirst,
-                        )
-                        DurationSettingField(
-                            value = negativeTtlText,
-                            onValueChange = { value ->
-                                negativeTtlText = value.take(32)
-                                if (isValidDuration(negativeTtlText)) saveSettings(settings.copy(negativeTtl = negativeTtlText))
-                            },
-                            label = stringResource(R.string.negative_ttl),
-                            enabled = settings.directFirst,
-                        )
                         OutlinedTextField(
                             value = settings.socksUsername,
                             onValueChange = { value -> saveSettings(settings.copy(socksUsername = value.take(255))) },
@@ -2063,11 +2000,6 @@ private fun SettingsPage(onBack: () -> Unit) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text(
-                            stringResource(R.string.direct_first_note),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
                             stringResource(R.string.power_saving_note),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2093,12 +2025,6 @@ private fun SettingsPage(onBack: () -> Unit) {
                         DiagnosticsLine("MTU", diagnostics.mtu.toString())
                         DiagnosticsLine(stringResource(R.string.local_proxy_protocol), settings.localProxyProtocol)
                         DiagnosticsLine(stringResource(R.string.socks_listen), TcptunVpnService.localSocksListenAddr(settings))
-                        DiagnosticsLine(stringResource(R.string.route_external_sources), if (settings.routeExternalSources) stringResource(R.string.enabled) else stringResource(R.string.disabled))
-                        DiagnosticsLine(stringResource(R.string.direct_first), if (settings.directFirst) stringResource(R.string.enabled) else stringResource(R.string.disabled))
-                        DiagnosticsLine(stringResource(R.string.probe_timeout), settings.probeTimeout)
-                        DiagnosticsLine(stringResource(R.string.failure_threshold), settings.failureThreshold.toString())
-                        DiagnosticsLine(stringResource(R.string.positive_ttl), settings.positiveTtl)
-                        DiagnosticsLine(stringResource(R.string.negative_ttl), settings.negativeTtl)
                         DiagnosticsLine(stringResource(R.string.socks_auth), if (settings.socksUsername.isNotEmpty() || settings.socksPassword.isNotEmpty()) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(stringResource(R.string.vpn_traffic_mode), stringResource(R.string.tcp_udp))
                         DiagnosticsLine(stringResource(R.string.diag_power_saving), if (diagnostics.powerSavingMode) stringResource(R.string.enabled) else stringResource(R.string.disabled))
@@ -2279,28 +2205,6 @@ private fun FlowAnalysisEventCard(event: FlowAnalysisEvent) {
             }
         }
     }
-}
-
-@Composable
-private fun DurationSettingField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    label: String,
-    enabled: Boolean,
-) {
-    val valid = isValidDuration(value)
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        label = { Text(label) },
-        singleLine = true,
-        enabled = enabled,
-        isError = enabled && !valid,
-        supportingText = {
-            if (enabled && !valid) Text(stringResource(R.string.duration_error))
-        },
-        modifier = Modifier.fillMaxWidth(),
-    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -2911,6 +2815,12 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         } else {
+                            val selectedSecurity = when {
+                                config.tunnelSecurity.equals("reality-quic", ignoreCase = true) -> "reality-quic"
+                                config.tunnelSecurity.equals("reality", ignoreCase = true) -> "reality"
+                                config.tls -> "tls"
+                                else -> "none"
+                            }
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 OutlinedTextField(
                                     value = config.serverHost,
@@ -2927,10 +2837,20 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                     modifier = Modifier.weight(0.52f),
                                 )
                             }
-                            ChoiceRow(stringResource(R.string.protocol), config.protocol, AppConfig.Protocols) {
+                            ChoiceRow(
+                                stringResource(R.string.protocol),
+                                config.protocol,
+                                AppConfig.Protocols,
+                                enabled = selectedSecurity != "reality-quic",
+                            ) {
                                 config = config.copy(protocol = it)
                             }
-                            ChoiceRow(stringResource(R.string.field_transport), config.transport, AppConfig.Transports) {
+                            ChoiceRow(
+                                stringResource(R.string.field_transport),
+                                config.transport,
+                                AppConfig.Transports,
+                                enabled = selectedSecurity != "reality-quic",
+                            ) {
                                 config = config.copy(transport = it)
                             }
                             OutlinedTextField(
@@ -2957,13 +2877,39 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                     modifier = Modifier.weight(1f),
                                 )
                             }
-                            OutlinedTextField(
-                                value = config.tunnelSecurity,
-                                onValueChange = { config = config.copy(tunnelSecurity = it.lowercase()) },
-                                label = { Text(stringResource(R.string.field_security)) },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
+                            ChoiceRow(
+                                stringResource(R.string.field_security),
+                                selectedSecurity,
+                                AppConfig.SecurityOptions,
+                            ) { security ->
+                                config = when (security) {
+                                    "tls" -> config.copy(tunnelSecurity = "", tls = true)
+                                    "reality" -> config.copy(
+                                        transport = "raw",
+                                        tunnelSecurity = "reality",
+                                        tls = false,
+                                        tlsInsecure = false,
+                                        muxMode = config.muxMode.takeUnless { it.equals("quic", true) }.orEmpty(),
+                                    )
+                                    "reality-quic" -> config.copy(
+                                        protocol = "native",
+                                        transport = "raw",
+                                        tunnelSecurity = "reality-quic",
+                                        tls = false,
+                                        tlsInsecure = false,
+                                        realityFingerprint = config.realityFingerprint.ifBlank { "chrome" },
+                                        realitySpiderX = "",
+                                        mux = true,
+                                        muxMode = "quic",
+                                    )
+                                    else -> config.copy(
+                                        tunnelSecurity = "",
+                                        tls = false,
+                                        tlsInsecure = false,
+                                        muxMode = config.muxMode.takeUnless { it.equals("quic", true) }.orEmpty(),
+                                    )
+                                }
+                            }
                             OutlinedTextField(
                                 value = config.flow,
                                 onValueChange = { config = config.copy(flow = it) },
@@ -2971,41 +2917,69 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
                             )
-                            OutlinedTextField(
-                                value = config.realityPublicKey,
-                                onValueChange = { config = config.copy(realityPublicKey = it) },
-                                label = { Text(stringResource(R.string.field_reality_public_key)) },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            if (selectedSecurity == "reality" || selectedSecurity == "reality-quic") {
                                 OutlinedTextField(
-                                    value = config.realityFingerprint,
-                                    onValueChange = { config = config.copy(realityFingerprint = it) },
-                                    label = { Text(stringResource(R.string.field_fingerprint)) },
+                                    value = config.realityPublicKey,
+                                    onValueChange = { config = config.copy(realityPublicKey = it) },
+                                    label = { Text(stringResource(R.string.field_reality_public_key)) },
                                     singleLine = true,
-                                    modifier = Modifier.weight(1f),
+                                    modifier = Modifier.fillMaxWidth(),
                                 )
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    OutlinedTextField(
+                                        value = config.realityFingerprint,
+                                        onValueChange = { config = config.copy(realityFingerprint = it) },
+                                        label = { Text(stringResource(R.string.field_fingerprint)) },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    OutlinedTextField(
+                                        value = config.realityShortId,
+                                        onValueChange = { config = config.copy(realityShortId = it) },
+                                        label = { Text(stringResource(R.string.field_short_id)) },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                            }
+                            if (selectedSecurity == "reality") {
                                 OutlinedTextField(
-                                    value = config.realityShortId,
-                                    onValueChange = { config = config.copy(realityShortId = it) },
-                                    label = { Text(stringResource(R.string.field_short_id)) },
+                                    value = config.realitySpiderX,
+                                    onValueChange = { config = config.copy(realitySpiderX = it) },
+                                    label = { Text(stringResource(R.string.field_spider_x)) },
                                     singleLine = true,
-                                    modifier = Modifier.weight(1f),
+                                    modifier = Modifier.fillMaxWidth(),
                                 )
                             }
-                            OutlinedTextField(
-                                value = config.realitySpiderX,
-                                onValueChange = { config = config.copy(realitySpiderX = it) },
-                                label = { Text(stringResource(R.string.field_spider_x)) },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            ToggleRow(stringResource(R.string.field_tls), config.tls) { config = config.copy(tls = it) }
-                            ToggleRow(stringResource(R.string.field_tls_insecure), config.tlsInsecure) {
-                                config = config.copy(tlsInsecure = it)
+                            if (selectedSecurity == "tls") {
+                                ToggleRow(stringResource(R.string.field_tls_insecure), config.tlsInsecure) {
+                                    config = config.copy(tlsInsecure = it)
+                                }
                             }
-                            ToggleRow(stringResource(R.string.field_mux), config.mux) { config = config.copy(mux = it) }
+                            ToggleRow(
+                                stringResource(R.string.field_mux),
+                                config.mux,
+                                enabled = selectedSecurity != "reality-quic",
+                            ) { config = config.copy(mux = it) }
+                            ChoiceRow(
+                                stringResource(R.string.field_mux_mode),
+                                config.muxMode.ifBlank { "group" },
+                                listOf("group", "quic"),
+                                enabled = config.mux && selectedSecurity != "reality-quic",
+                            ) { mode ->
+                                config = if (mode == "quic") {
+                                    config.copy(
+                                        protocol = "native",
+                                        transport = "raw",
+                                        tunnelSecurity = "",
+                                        tls = true,
+                                        mux = true,
+                                        muxMode = "quic",
+                                    )
+                                } else {
+                                    config.copy(muxMode = "group")
+                                }
+                            }
                             Text(
                                 stringResource(R.string.native_tun_capabilities_note),
                                 style = MaterialTheme.typography.bodySmall,
@@ -3085,11 +3059,16 @@ private fun ChoiceRow(
 }
 
 @Composable
-private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun ToggleRow(
+    label: String,
+    checked: Boolean,
+    enabled: Boolean = true,
+    onChange: (Boolean) -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onChange(!checked) }
+            .clickable(enabled = enabled) { onChange(!checked) }
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -3097,10 +3076,10 @@ private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
         Text(
             label,
             style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f).padding(end = 12.dp),
         )
-        Switch(checked = checked, onCheckedChange = onChange)
+        Switch(checked = checked, enabled = enabled, onCheckedChange = onChange)
     }
 }
 

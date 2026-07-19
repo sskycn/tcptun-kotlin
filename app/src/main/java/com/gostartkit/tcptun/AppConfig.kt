@@ -80,6 +80,30 @@ data class AppConfig(
         if (protocol !in Protocols) return "unsupported protocol: $protocol"
         if (transport !in Transports) return "unsupported transport: $transport"
         if (upstreamProtocol !in UpstreamProtocols) return "unsupported upstream protocol: $upstreamProtocol"
+        val normalizedSecurity = tunnelSecurity.trim().lowercase()
+        if (normalizedSecurity !in TunnelSecurityTypes) return "unsupported security: $tunnelSecurity"
+        if (normalizedSecurity.isNotBlank() && tls) return "TLS cannot be combined with tunnel security"
+        if (normalizedSecurity == "reality" && transport != "raw") {
+            return "REALITY requires raw transport"
+        }
+        if (normalizedSecurity in RealitySecurityTypes) {
+            if (sni.isBlank()) return "$normalizedSecurity requires SNI"
+            if (realityPublicKey.isBlank()) return "$normalizedSecurity requires a public key"
+        }
+        if (normalizedSecurity == "reality-quic") {
+            if (protocol != "native") return "reality-quic requires native protocol"
+            if (transport != "raw") return "reality-quic requires raw transport"
+            if (!mux || !muxMode.equals("quic", ignoreCase = true)) {
+                return "reality-quic requires QUIC mux"
+            }
+            if (tlsInsecure) return "reality-quic cannot use TLS insecure"
+            if (realityShortId.isBlank()) return "reality-quic requires a short ID"
+            if (realitySpiderX.isNotBlank()) return "reality-quic does not use SpiderX"
+            val fingerprint = realityFingerprint.trim().lowercase()
+            if (fingerprint.isNotBlank() && fingerprint != "chrome") {
+                return "reality-quic currently supports only the chrome fingerprint"
+            }
+        }
         val normalizedMuxMode = muxMode.trim().lowercase()
         if (normalizedMuxMode !in MuxModes) return "unsupported mux mode: $muxMode"
         if (!mux && (normalizedMuxMode.isNotBlank() || muxMaxSessions != 0 || muxMaxStreamsPerSession != 0 || muxWarmSpare != 0)) {
@@ -88,17 +112,19 @@ data class AppConfig(
         if (muxMaxSessions !in 0..32) return "mux max sessions must be between 1 and 32 when set"
         if (muxMaxStreamsPerSession !in 0..4096) return "mux max streams must be between 1 and 4096 when set"
         val effectiveMuxSessions = muxMaxSessions.takeIf { it > 0 }
-            ?: if (normalizedMuxMode == "quic") 1 else 4
+            ?: 4
         if (muxWarmSpare !in 0 until effectiveMuxSessions) {
             return "mux warm spares must be between 0 and max sessions minus 1"
         }
         if (normalizedMuxMode == "quic") {
             if (protocol != "native") return "QUIC mux requires native protocol"
             if (transport != "raw") return "QUIC mux requires raw transport"
-            if (!tls) return "QUIC mux requires TLS"
-            if (tunnelSecurity.isNotBlank()) return "QUIC mux cannot be combined with tunnel security"
-            if (muxMaxSessions > 1) return "QUIC mux supports at most one session"
-            if (muxWarmSpare != 0) return "QUIC mux does not support warm spares"
+            if (!tls && normalizedSecurity != "reality-quic") {
+                return "QUIC mux requires TLS or reality-quic security"
+            }
+            if (normalizedSecurity.isNotBlank() && normalizedSecurity != "reality-quic") {
+                return "QUIC mux cannot be combined with $normalizedSecurity security"
+            }
         }
         if (path.isBlank()) return "path is required"
         return null
@@ -110,12 +136,6 @@ data class AppConfig(
         verbose: Boolean = false,
         socks5Username: String = "",
         socks5Password: String = "",
-        routeExternalSources: Boolean = false,
-        directFirst: Boolean = false,
-        probeTimeout: String = "120ms",
-        failureThreshold: Int = 1,
-        positiveTtl: String = "30m",
-        negativeTtl: String = "10m",
         managedRouteRules: List<ManagedRouteRule> = emptyList(),
     ): String {
         if (rawConfigJson.isNotBlank()) {
@@ -167,16 +187,18 @@ data class AppConfig(
             "trojan" -> proxy.put("password", token.trim())
             else -> proxy.put("token", token.trim())
         }
-        if (tunnelSecurity.equals("reality", ignoreCase = true)) {
+        val normalizedSecurity = tunnelSecurity.trim().lowercase()
+        if (normalizedSecurity in RealitySecurityTypes) {
             proxy.put(
                 "security",
-                JSONObject()
-                    .put("type", "reality")
+                JSONObject().apply {
+                    put("type", normalizedSecurity)
                     .put("server_name", sni.trim())
                     .put("fingerprint", realityFingerprint.trim())
                     .put("public_key", realityPublicKey.trim())
                     .put("short_id", realityShortId.trim())
-                    .put("spider_x", realitySpiderX.trim()),
+                    if (normalizedSecurity == "reality") put("spider_x", realitySpiderX.trim())
+                },
             )
         } else if (tls) {
             proxy.put(
@@ -188,32 +210,14 @@ data class AppConfig(
             )
         }
 
-        // tcptun-go's direct-first outbound is TCP-only. UDP keeps using the
-        // tunnel, matching the previous Android client behavior for public IPs.
-        val allowDirectFirst = directFirst &&
-            (listenHost in setOf("127.0.0.1", "::1", "localhost") || routeExternalSources)
         val outbounds = JSONArray()
             .put(proxy)
             .put(JSONObject().put("tag", "direct").put("type", "direct"))
-        if (allowDirectFirst) {
-            outbounds.put(
-                JSONObject()
-                    .put("tag", "auto")
-                    .put("type", "direct-first")
-                    .put("primary", "direct")
-                    .put("fallback", "proxy")
-                    .put("network", JSONArray().put("tcp"))
-                    .put("probe_timeout", probeTimeout.trim())
-                    .put("failure_threshold", failureThreshold.coerceIn(1, 100))
-                    .put("positive_ttl", positiveTtl.trim())
-                    .put("negative_ttl", negativeTtl.trim()),
-            )
-        }
 
         val rules = JSONArray()
         val activeManagedRules = managedRouteRules.map(ManagedRouteRule::normalized)
             .filter { it.enabled && it.isValid() }
-        if (allowDirectFirst || activeManagedRules.any { it.outbound == ManagedRouteOutbound.Direct }) {
+        if (activeManagedRules.any { it.outbound == ManagedRouteOutbound.Direct }) {
             rules.put(
                 JSONObject()
                     .put("inbound", JSONArray().put(AndroidTunInboundTag))
@@ -234,14 +238,6 @@ data class AppConfig(
                         .put("inbound", JSONArray().put(AndroidTunInboundTag))
                         .put("outbound", rule.outbound.tag),
                 ),
-            )
-        }
-        if (allowDirectFirst) {
-            rules.put(
-                JSONObject()
-                    .put("inbound", JSONArray().put(AndroidTunInboundTag))
-                    .put("network", JSONArray().put("tcp"))
-                    .put("outbound", "auto"),
             )
         }
         return JSONObject()
@@ -286,6 +282,7 @@ data class AppConfig(
             inferred.ifBlank { outbounds.optJSONObject(0)?.optString("tag")?.trim().orEmpty() }
         }
         require(defaultOutbound.isNotBlank()) { "route.default_outbound or a tagged outbound is required" }
+        if (!route.has("default_outbound")) route.put("default_outbound", defaultOutbound)
 
         val (listenHost, listenPort) = splitHostPort(localListenAddr)
         val normalizedListenAddr = joinHostPort(listenHost, listenPort)
@@ -321,9 +318,8 @@ data class AppConfig(
                 ensureAndroidTunOutboundNetworks(outbound)
             }
         }
-        migrateDirectFirstRoutesForAndroidTun(route, outbounds)
+        migrateRemovedDirectFirstOutbounds(route, outbounds)
         root.put("inbounds", inbounds)
-        if (!route.has("default_outbound")) route.put("default_outbound", defaultOutbound)
         if (!route.has("rules")) route.put("rules", JSONArray())
         remapInboundRules(route.optJSONArray("rules"), replacedInboundTags)
         if (verbose) {
@@ -381,7 +377,6 @@ data class AppConfig(
     }
 
     private fun ensureAndroidTunOutboundNetworks(outbound: JSONObject) {
-        if (outbound.optString("type").trim().equals("direct-first", ignoreCase = true)) return
         val configured = outbound.optJSONArray("network") ?: return
         val networks = buildSet {
             for (index in 0 until configured.length()) {
@@ -392,35 +387,63 @@ data class AppConfig(
         outbound.put("network", JSONArray().apply { AndroidTunNetworks.forEach(::put) })
     }
 
-    private fun migrateDirectFirstRoutesForAndroidTun(route: JSONObject, outbounds: JSONArray) {
-        val directFirstByTag = buildMap<String, JSONObject> {
+    private fun migrateRemovedDirectFirstOutbounds(route: JSONObject, outbounds: JSONArray) {
+        val fallbackByTag = buildMap<String, String> {
             for (index in 0 until outbounds.length()) {
                 val outbound = outbounds.optJSONObject(index) ?: continue
                 if (!outbound.optString("type").trim().equals("direct-first", ignoreCase = true)) continue
-                outbound.optString("tag").trim().takeIf(String::isNotBlank)?.let { put(it, outbound) }
+                val tag = outbound.optString("tag").trim()
+                val fallback = outbound.optString("fallback").trim()
+                require(tag.isNotBlank() && fallback.isNotBlank()) {
+                    "legacy direct-first outbound requires tag and fallback"
+                }
+                put(tag, fallback)
             }
         }
-        if (directFirstByTag.isEmpty()) return
+        if (fallbackByTag.isEmpty()) return
 
-        val rules = route.optJSONArray("rules") ?: JSONArray().also { route.put("rules", it) }
-        for (index in 0 until rules.length()) {
-            val rule = rules.optJSONObject(index) ?: continue
-            if (rule.optString("outbound").trim() in directFirstByTag) {
-                rule.put("network", JSONArray().put("tcp"))
+        fun replacement(tag: String): String {
+            var current = tag.trim()
+            val visited = mutableSetOf<String>()
+            while (current in fallbackByTag) {
+                require(visited.add(current)) { "legacy direct-first fallback cycle contains $current" }
+                current = fallbackByTag.getValue(current)
             }
+            return current
         }
 
-        val defaultTag = route.optString("default_outbound").trim()
-        val directFirst = directFirstByTag[defaultTag] ?: return
-        val udpFallback = directFirst.optString("fallback").trim()
-        if (udpFallback.isBlank()) return
-        route.put("default_outbound", udpFallback)
-        rules.put(
-            JSONObject()
-                .put("inbound", JSONArray().put(AndroidTunInboundTag))
-                .put("network", JSONArray().put("tcp"))
-                .put("outbound", defaultTag),
-        )
+        route.optString("default_outbound").trim().takeIf(String::isNotBlank)?.let {
+            route.put("default_outbound", replacement(it))
+        }
+        route.optJSONArray("rules")?.let { rules ->
+            for (index in 0 until rules.length()) {
+                val rule = rules.optJSONObject(index) ?: continue
+                rule.optString("outbound").trim().takeIf(String::isNotBlank)?.let {
+                    rule.put("outbound", replacement(it))
+                }
+            }
+        }
+        for (index in 0 until outbounds.length()) {
+            val outbound = outbounds.optJSONObject(index) ?: continue
+            outbound.optString("via").trim().takeIf(String::isNotBlank)?.let {
+                outbound.put("via", replacement(it))
+            }
+            outbound.optJSONArray("members")?.let { members ->
+                for (memberIndex in 0 until members.length()) {
+                    val member = members.optJSONObject(memberIndex) ?: continue
+                    member.optString("outbound").trim().takeIf(String::isNotBlank)?.let {
+                        member.put("outbound", replacement(it))
+                    }
+                }
+            }
+        }
+        for (index in outbounds.length() - 1 downTo 0) {
+            val outbound = outbounds.optJSONObject(index) ?: continue
+            if (outbound.optString("type").trim().equals("direct-first", ignoreCase = true)) {
+                outbounds.remove(index)
+            }
+        }
+        require(outbounds.length() > 0) { "legacy direct-first migration left no supported outbounds" }
     }
 
     private fun endpointAddresses(
@@ -540,6 +563,9 @@ data class AppConfig(
         val Transports = listOf("raw", "ws", "h2", "h3")
         val UpstreamProtocols = LocalProxyProtocols
         val MuxModes = listOf("", "group", "quic")
+        val SecurityOptions = listOf("none", "tls", "reality", "reality-quic")
+        val TunnelSecurityTypes = listOf("", "reality", "reality-quic")
+        val RealitySecurityTypes = setOf("reality", "reality-quic")
         private const val AndroidVpnInboundTag = "android-vpn"
         private val WildcardHosts = setOf("0.0.0.0", "::", "*")
         private val LoopbackHosts = setOf("127.0.0.1", "::1", "localhost")

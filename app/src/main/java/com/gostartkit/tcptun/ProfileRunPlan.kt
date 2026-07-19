@@ -85,12 +85,6 @@ internal fun ProfileRunPlan.toBridgeJson(
     verbose: Boolean = false,
     socks5Username: String = "",
     socks5Password: String = "",
-    routeExternalSources: Boolean = false,
-    directFirst: Boolean = false,
-    probeTimeout: String = "120ms",
-    failureThreshold: Int = 1,
-    positiveTtl: String = "30m",
-    negativeTtl: String = "10m",
     managedRouteRules: List<ManagedRouteRule> = emptyList(),
 ): String {
     val plan = normalized()
@@ -102,12 +96,6 @@ internal fun ProfileRunPlan.toBridgeJson(
             verbose = verbose,
             socks5Username = socks5Username,
             socks5Password = socks5Password,
-            routeExternalSources = routeExternalSources,
-            directFirst = directFirst,
-            probeTimeout = probeTimeout,
-            failureThreshold = failureThreshold,
-            positiveTtl = positiveTtl,
-            negativeTtl = negativeTtl,
             managedRouteRules = managedRouteRules,
         )
     }
@@ -153,28 +141,10 @@ internal fun ProfileRunPlan.toBridgeJson(
             ),
     )
 
-    val listenHost = localListenAddr.substringBeforeLast(':').removeSurrounding("[", "]")
-    val allowDirectFirst = directFirst &&
-        (listenHost in setOf("127.0.0.1", "::1", "localhost") || routeExternalSources)
-    if (allowDirectFirst) {
-        outbounds.put(
-            JSONObject()
-                .put("tag", "auto")
-                .put("type", "direct-first")
-                .put("primary", "direct")
-                .put("fallback", BalancedOutboundTag)
-                .put("network", JSONArray().put("tcp"))
-                .put("probe_timeout", probeTimeout.trim())
-                .put("failure_threshold", failureThreshold.coerceIn(1, 100))
-                .put("positive_ttl", positiveTtl.trim())
-                .put("negative_ttl", negativeTtl.trim()),
-        )
-    }
-
     val activeRules = managedRouteRules.map(ManagedRouteRule::normalized)
         .filter { it.enabled && it.isValid() }
     val rules = JSONArray()
-    if (allowDirectFirst || activeRules.isNotEmpty()) {
+    if (activeRules.isNotEmpty()) {
         rules.put(
             JSONObject()
                 .put("inbound", JSONArray().put(AndroidTunInboundTag))
@@ -202,15 +172,6 @@ internal fun ProfileRunPlan.toBridgeJson(
         }
         rules.put(route)
     }
-    if (allowDirectFirst) {
-        rules.put(
-            JSONObject()
-                .put("inbound", JSONArray().put(AndroidTunInboundTag))
-                .put("network", JSONArray().put("tcp"))
-                .put("outbound", "auto"),
-        )
-    }
-
     return JSONObject()
         .put("log", JSONObject().put("level", if (verbose) "debug" else "info"))
         .put("inbounds", JSONArray().put(inbound))

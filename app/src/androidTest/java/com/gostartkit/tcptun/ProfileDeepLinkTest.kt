@@ -118,6 +118,38 @@ class ProfileDeepLinkTest {
     }
 
     @Test
+    fun nativeRealityQuicUriRoundTrips() {
+        val uri = "native://quic-token@edge.example.com:443" +
+            "?v=1&type=raw&security=reality-quic&sni=example.com&fp=chrome" +
+            "&pbk=BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY&sid=a65f93c1dbc5d54a" +
+            "&mux=true&mux_mode=quic&mux_max_sessions=4&mux_warm_spares=1#quic"
+
+        val profile = ProfileUriCodec.decode(uri).getOrThrow()
+        assertEquals("reality-quic", profile.tunnelSecurity)
+        assertEquals("native", profile.protocol)
+        assertEquals("raw", profile.transport)
+        assertEquals("quic", profile.muxMode)
+        assertEquals("", profile.realitySpiderX)
+        assertNull(profile.validate())
+
+        val encoded = requireNotNull(ProfileUriCodec.encode(profile))
+        assertTrue(encoded.contains("security=reality-quic"))
+        assertTrue(encoded.contains("mux_mode=quic"))
+        assertFalse(encoded.contains("spx="))
+
+        val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
+        assertTrue(qrPayload.startsWith("T2:"))
+        val qrProfile = ProfileUriCodec.decode(qrPayload).getOrThrow()
+        assertEquals("reality-quic", qrProfile.tunnelSecurity)
+        assertEquals(profile.realityPublicKey, qrProfile.realityPublicKey)
+        assertEquals(profile.realityShortId, qrProfile.realityShortId)
+        assertEquals("chrome", qrProfile.realityFingerprint)
+        assertEquals("", qrProfile.realitySpiderX)
+        assertEquals("quic", qrProfile.muxMode)
+        assertNull(qrProfile.validate())
+    }
+
+    @Test
     fun compactQrPayloadRoundTripsAdvancedFieldsAndStaysShorter() {
         AppConfig.Protocols.forEach { protocol ->
             val profile = AppConfig(

@@ -69,8 +69,8 @@ only through that instance.
 
 `Start` receives the current strict `tcptun-go` file configuration. The Android
 app builds a local mixed/SOCKS5 inbound, every configured structured profile as
-an equal tagged tunnel outbound, a dynamic `balance` pool, a direct outbound, and
-an optional TCP-only `direct-first` outbound. Ordered route rules are evaluated
+an equal tagged tunnel outbound, a dynamic `balance` pool, and a direct outbound.
+Ordered route rules are evaluated
 first and may select a specific configured profile by its stable tag; unmatched sessions enter the
 pool, whose effective weights follow active load, observed connection latency,
 and failures while destination affinity keeps related sessions on one link.
@@ -79,6 +79,12 @@ member. Failed checks increase only that member's balance penalty; a successful
 check clears the penalty so a recovered member can immediately re-enter
 selection. `OutboundsStatusJSON` reports `health`, `failures`, `latency_ms`,
 `last_observed_at_ms`, and `last_succeeded_at_ms` without exposing credentials.
+Automated outbound latency probes run only while the app UI is visible. In the
+background, status callbacks remain active while the service stops runtime-stat
+polling and reduces its lightweight local health check to a five-minute interval.
+Generated profiles use group mux with no warm spare, so the Go runtime can retire
+idle carriers. When flow analysis is disabled and no app route is configured, the
+bridge also skips Android UID ownership lookups entirely.
 The service installs `SocketProtector` and `AppIdentityProvider`, calls `Configure`,
 passes a duplicate of the `VpnService` TUN to `SetTun`, and then starts the
 configured session with every inactive profile tag disabled from its
@@ -251,7 +257,7 @@ For VLESS/VMess/Trojan, use the same protocol, transport, token/UUID/password, T
 1. Run `./scripts/build-androidbridge.sh` to create `app/libs/androidbridge.aar`, then install the app.
 2. Open the app. The first screen is the profile list.
 3. Tap `+` to add a profile, or tap the pen icon to edit an existing profile.
-4. Tap `⇩` to import a URI share link, or enter profile name, server address, port, protocol, transport, UUID/password/token, SNI, path, TLS, REALITY, mux, upstream, and UDP settings manually.
+4. Tap `⇩` to import a URI share link, or enter profile name, server address, port, protocol, transport, UUID/password/token, SNI, path, TLS, REALITY, QUIC REALITY, mux, upstream, and UDP settings manually.
 5. Tap a profile row to start or stop only that connection. Every running structured profile joins the same dynamic pool; while the VPN is running, the row action hot-starts or hot-stops only that outbound.
 6. Tap the share icon to export a URI link for the profile protocol.
 7. Approve the Android VPN prompt when starting the first connection.
@@ -299,15 +305,21 @@ Example VLESS/REALITY format:
 vless://00000000-0000-4000-8000-000000000000@203.0.113.10:443?security=reality&encryption=none&pbk=PUBLIC_KEY_PLACEHOLDER&headerType=none&fp=chrome&spx=%2F&type=tcp&flow=xtls-rprx-vision&sni=example.com#example
 ```
 
+Example native/QUIC REALITY format:
+
+```text
+native://TOKEN@203.0.113.10:443?v=1&type=raw&security=reality-quic&sni=example.com&fp=chrome&pbk=PUBLIC_KEY_PLACEHOLDER&sid=SHORT_ID&mux=true&mux_mode=quic#example
+```
+
 ## Supported
 
 - Kotlin + Jetpack Compose Android app.
 - `VpnService` with foreground service notification.
 - Config persistence with `SharedPreferences`.
 - Independently started local profiles with add, edit, delete, and share actions; active structured profiles form one dynamically weighted, session-affine pool.
-- URI import/export for native, VLESS, VMess, and Trojan profiles, including REALITY `pbk`, `sid`, `fp`, `spx`, `flow`, and `sni`.
+- URI and compact `T2:` QR import/export for native, VLESS, VMess, and Trojan profiles, including REALITY and native QUIC REALITY (`security=reality-quic`). Versioned payloads use tcptun-go's `EncodeProfile` / `DecodeProfile` bridge API and a dedicated profile DTO; Android only renders and scans the QR image.
 - Protocol and transport selection UI.
-- Optional token, SNI, path, TLS, TLS insecure, REALITY short ID, mux, and upstream protocol UI.
+- Optional token, SNI, path, TLS, TLS insecure, REALITY short ID, mux mode, and upstream protocol UI. Selecting QUIC REALITY locks the required `native + raw + quic mux` combination.
 - IPv4/IPv6 default routes send all VPN traffic into tcptun-go; explicit rules run first and unmatched traffic uses the balanced active-profile pool.
 - Status display: `Stopped`, `Starting`, `Running`, `Error`.
 - Recent log display.
@@ -315,7 +327,7 @@ vless://00000000-0000-4000-8000-000000000000@203.0.113.10:443?security=reality&e
 - Runtime reflection bridge to gomobile AAR.
 - In-app diagnostics for VPN, underlying network, bridge state, local proxy reachability, MTU, TCP/UDP mode, and socket protect.
 - Runtime MTU settings.
-- Strict tcptun-go topology config and cached TCP direct-first routing.
+- Strict tcptun-go topology config and ordered managed routing.
 - Native TUN TCP/UDP forwarding with in-tunnel DNS interception and fake-IP restoration.
 - Android 10+ per-app outbound routing for TCP and UDP flows.
 - Android 10+ single-app successful destination analysis through `SetFlowAnalysisApp` and `FlowCallback`.
