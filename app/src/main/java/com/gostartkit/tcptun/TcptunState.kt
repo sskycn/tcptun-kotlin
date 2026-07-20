@@ -31,8 +31,10 @@ data class TcptunDiagnostics(
     val localProxyPort: Int = 1080,
     val lastRestartReason: String = "None",
     val mtu: Int = 1400,
-    val powerSavingMode: Boolean = false,
-    val healthCheckIntervalSeconds: Long = 15,
+    val powerSavingMode: Boolean = true,
+    /** True when health checks are event/pull-driven only (no timer poll). */
+    val healthCheckEventDriven: Boolean = true,
+    val healthCheckIntervalSeconds: Long = 0,
     val socketProtectEnabled: Boolean = false,
 )
 
@@ -334,7 +336,11 @@ object TcptunState {
     fun appendLog(line: String) {
         val clean = line.trim()
         if (clean.isEmpty()) return
-        Log.i(LOG_TAG, clean)
+        // Keep in-app log history for later inspection; avoid logcat I/O while hanging
+        // in the background with the UI closed.
+        if (uiVisible) {
+            Log.i(LOG_TAG, clean)
+        }
         val current = _state.value
         if (current.logs.lastOrNull() == clean) return
         _state.value = current.copy(logs = (current.logs + clean).takeLast(MAX_LOGS))

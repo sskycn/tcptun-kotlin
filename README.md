@@ -79,9 +79,18 @@ member. Failed checks increase only that member's balance penalty; a successful
 check clears the penalty so a recovered member can immediately re-enter
 selection. `OutboundsStatusJSON` reports `health`, `failures`, `latency_ms`,
 `last_observed_at_ms`, and `last_succeeded_at_ms` without exposing credentials.
-Automated outbound latency probes run only while the app UI is visible. In the
-background, status callbacks remain active while the service stops runtime-stat
-polling and reduces its lightweight local health check to a five-minute interval.
+The client targets extreme hang efficiency while keeping the VPN tunnel and the
+local mixed/SOCKS proxy fully usable. App traffic keeps the data path alive;
+control-plane work stays near zero while the UI is closed.
+
+With power saving enabled (the default), there is no routine timer-based health
+polling. The bridge monitor sleeps until an event wakes it: network change
+callbacks, core status callbacks (degraded/error), pull-to-refresh, or opening
+the app. A failed check schedules one bounded confirmation check before recovery.
+Disabling power saving enables a five-minute safety check. Loopback proxy probes
+and upstream latency probes run only on UI-driven refreshes. Unlock wakes and
+background logcat I/O are skipped. Power-saving-only setting changes apply
+without restarting the VPN tunnel.
 Generated profiles use group mux with no warm spare, so the Go runtime can retire
 idle carriers. When flow analysis is disabled and no app route is configured, the
 bridge also skips Android UID ownership lookups entirely.

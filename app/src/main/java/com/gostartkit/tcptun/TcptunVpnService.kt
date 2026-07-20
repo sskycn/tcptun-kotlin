@@ -5,10 +5,8 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
@@ -18,6 +16,7 @@ import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import org.json.JSONArray
@@ -35,7 +34,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 data class RuntimeSettings(
     val mtu: Int = TcptunVpnService.DEFAULT_VPN_MTU,
-    val powerSavingMode: Boolean = false,
+    val powerSavingMode: Boolean = true,
     val socksPort: Int = TcptunVpnService.DEFAULT_SOCKS_PORT,
     val localProxyProtocol: String = DefaultLocalProxyProtocol,
     val socksListenAll: Boolean = false,
@@ -108,6 +107,7 @@ class TcptunVpnService : VpnService() {
     }
     private val lifecycleGeneration = AtomicInteger()
     private val monitorGeneration = AtomicInteger()
+    private val monitorWakeGeneration = AtomicInteger()
     private val bridgeRestartRequestGeneration = AtomicInteger()
     private val teardownInProgress = AtomicBoolean()
     private val bridgeReadyWaiter = AtomicReference<BridgeReadyWaiter?>(null)
@@ -116,6 +116,8 @@ class TcptunVpnService : VpnService() {
     @Volatile private var activeBridgeEpoch = 0L
     @Volatile private var runningPlan: ProfileRunPlan? = null
     @Volatile private var monitorThread: Thread? = null
+    private val monitorWaitLock = Object()
+    private val monitorWakeCallback: () -> Unit = ::wakeBridgeMonitor
     private val connectivity by lazy { getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager }
     private val appIdentityProvider by lazy { AndroidAppIdentityProvider(this, connectivity) }
     private var underlyingNetworkCallback: ConnectivityManager.NetworkCallback? = null
@@ -127,21 +129,22 @@ class TcptunVpnService : VpnService() {
     @Volatile private var stopping = false
     @Volatile private var bridgeRestarting = false
     @Volatile private var lastBridgeRestartAtMs = 0L
-    @Volatile private var stableHealthSuccesses = 0
-    @Volatile private var lastUpstreamProbeAtMs = 0L
     @Volatile private var tunMtu = DEFAULT_VPN_MTU
     @Volatile private var activeSocksPort = DEFAULT_SOCKS_PORT
     @Volatile private var activeSocksUsername = ""
     @Volatile private var activeSocksPassword = ""
+    @Volatile private var activeLocalProxyProtocol = DefaultLocalProxyProtocol
+    @Volatile private var activeSocksListenAll = false
+    @Volatile private var powerSavingMode = true
     @Volatile private var upstreamProbeIndex = 0
     @Volatile private var runtimeSettingsApplyGeneration = 0
     private val runtimeSettingsApplyLock = Any()
-    private var deviceActivityReceiver: BroadcastReceiver? = null
+    private var runtimeSettingsForceRestartPending = false
 
     override fun onCreate() {
         super.onCreate()
+        activeMonitorWakeCallback.set(monitorWakeCallback)
         createNotificationChannel()
-        registerDeviceActivityReceiver()
     }
 
     override fun onBind(intent: Intent?): IBinder? {
@@ -161,7 +164,14 @@ class TcptunVpnService : VpnService() {
                 requestOutboundUpdate(intent)
             }
             ACTION_TCPING_OUTBOUNDS -> requestOutboundTcping(intent)
-            ACTION_APPLY_RUNTIME_SETTINGS -> requestRuntimeSettingsRestart("runtime settings changed")
+            ACTION_APPLY_RUNTIME_SETTINGS -> requestRuntimeSettingsRestart(
+                reason = if (intent.getBooleanExtra(EXTRA_FORCE_RUNTIME_RESTART, false)) {
+                    "route rules changed"
+                } else {
+                    "runtime settings changed"
+                },
+                forceRestart = intent.getBooleanExtra(EXTRA_FORCE_RUNTIME_RESTART, false),
+            )
             ACTION_UPDATE_FLOW_ANALYSIS -> requestFlowAnalysisUpdate()
             ACTION_REFRESH_CLIENT_IPS -> refreshBridgeClientIps()
             else -> requestRestoreLastRunningConfig()
@@ -185,7 +195,6 @@ class TcptunVpnService : VpnService() {
         stopping = false
         bridgeRestartRequestGeneration.incrementAndGet()
         lastBridgeRestartAtMs = 0L
-        lastUpstreamProbeAtMs = 0L
         val json = intent.getStringExtra(EXTRA_CONFIG) ?: run {
             TcptunState.error("missing VPN config")
             stopSelf()
@@ -199,9 +208,7 @@ class TcptunVpnService : VpnService() {
                     ?.let { raw -> runCatching { ProfileRunPlan.fromJson(JSONObject(raw)) }.getOrNull() }
                     ?: error("missing or invalid VPN profile plan")
                 val runtimeSettings = readRuntimeSettings(this)
-                activeSocksPort = runtimeSettings.socksPort
-                activeSocksUsername = runtimeSettings.socksUsername
-                activeSocksPassword = runtimeSettings.socksPassword
+                applyCachedRuntimeSettings(runtimeSettings)
                 saveDesiredRunningPlan(this, plan)
                 TcptunState.updateDiagnostics {
                     it.copy(
@@ -302,7 +309,7 @@ class TcptunVpnService : VpnService() {
             }
             runningPlan = nextPlan
             TcptunState.initializeProfileHealth(nextPlan.activeProfiles)
-            requestDenseHealthCheck("active connections changed")
+            requestHealthCheck("active connections changed")
             saveDesiredRunningPlan(this, nextPlan)
             updateNotification(runningNotificationState(nextPlan))
             updateBridgeDiagnostics()
@@ -390,7 +397,7 @@ class TcptunVpnService : VpnService() {
             }
             TcptunState.finishTcping(requestId)
             if (results.any { it.elapsedMs == null }) {
-                requestDenseHealthCheck("TCPing failed on ${results.count { it.elapsedMs == null }} connection(s)")
+                requestHealthCheck("TCPing failed on ${results.count { it.elapsedMs == null }} connection(s)")
             }
         }
     }
@@ -506,7 +513,7 @@ class TcptunVpnService : VpnService() {
         runCatching { setUnderlyingNetworks(network?.let { arrayOf(it) }) }
             .onFailure { err -> TcptunState.appendLog("set underlying network failed: ${err.message}") }
         if (tun != null && !stopping) {
-            requestDenseHealthCheck(reason)
+            requestHealthCheck(reason)
             if (!initialSelection && TcptunState.status == "Running") requestBridgeRestart(reason)
         }
     }
@@ -561,6 +568,9 @@ class TcptunVpnService : VpnService() {
             activeSocksPort = DEFAULT_SOCKS_PORT
             activeSocksUsername = ""
             activeSocksPassword = ""
+            activeLocalProxyProtocol = DefaultLocalProxyProtocol
+            activeSocksListenAll = false
+            powerSavingMode = true
             runningPlan = null
             TcptunState.updateDiagnostics {
                 it.copy(
@@ -572,6 +582,8 @@ class TcptunVpnService : VpnService() {
                     localProxyReachable = false,
                     localProxyAddress = defaultLocalSocksConnectAddr(),
                     localProxyPort = DEFAULT_SOCKS_PORT,
+                    healthCheckEventDriven = true,
+                    healthCheckIntervalSeconds = 0,
                     socketProtectEnabled = false,
                 )
             }
@@ -588,6 +600,7 @@ class TcptunVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        activeMonitorWakeCallback.compareAndSet(monitorWakeCallback, null)
         lifecycleGeneration.incrementAndGet()
         tcpingExecutor.shutdownNow()
         memberHealthExecutor.shutdownNow()
@@ -595,47 +608,29 @@ class TcptunVpnService : VpnService() {
         runCatching { synchronized(bridgeLock) { bridge.close() } }
             .onFailure { err -> TcptunState.appendLog("tcptun engine close failed: ${err.message}") }
         lifecycleExecutor.shutdownNow()
-        unregisterDeviceActivityReceiver()
         super.onDestroy()
     }
 
-    private fun registerDeviceActivityReceiver() {
-        if (deviceActivityReceiver != null) return
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                when (intent?.action) {
-                    Intent.ACTION_SCREEN_ON,
-                    Intent.ACTION_USER_PRESENT -> handleDeviceBecameActive(intent.action.orEmpty())
-                }
-            }
-        }
-        val filter = IntentFilter().apply {
-            addAction(Intent.ACTION_SCREEN_ON)
-            addAction(Intent.ACTION_USER_PRESENT)
-        }
-        runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-            } else {
-                @Suppress("DEPRECATION")
-                registerReceiver(receiver, filter)
-            }
-            deviceActivityReceiver = receiver
-        }.onFailure { err ->
-            TcptunState.appendLog("device activity receiver unavailable: ${err.message}")
-        }
+    private fun applyCachedRuntimeSettings(settings: RuntimeSettings) {
+        tunMtu = settings.mtu
+        activeSocksPort = settings.socksPort
+        activeSocksUsername = settings.socksUsername
+        activeSocksPassword = settings.socksPassword
+        activeLocalProxyProtocol = settings.localProxyProtocol
+        activeSocksListenAll = settings.socksListenAll
+        powerSavingMode = settings.powerSavingMode
     }
 
-    private fun unregisterDeviceActivityReceiver() {
-        val receiver = deviceActivityReceiver ?: return
-        runCatching { unregisterReceiver(receiver) }
-            .onFailure { err -> TcptunState.appendLog("device activity receiver unregister failed: ${err.message}") }
-        deviceActivityReceiver = null
-    }
-
-    private fun handleDeviceBecameActive(action: String) {
-        if (stopping || tun == null) return
-        requestDenseHealthCheck("device active: ${action.substringAfterLast('.')}")
+    private fun currentStructuralRuntimeSettings(): RuntimeSettings {
+        return RuntimeSettings(
+            mtu = tunMtu,
+            powerSavingMode = powerSavingMode,
+            socksPort = activeSocksPort,
+            localProxyProtocol = activeLocalProxyProtocol,
+            socksListenAll = activeSocksListenAll,
+            socksUsername = activeSocksUsername,
+            socksPassword = activeSocksPassword,
+        )
     }
 
     private fun startBridge(
@@ -787,19 +782,25 @@ class TcptunVpnService : VpnService() {
         }
     }
 
-    private fun requestRuntimeSettingsRestart(reason: String) {
+    private fun requestRuntimeSettingsRestart(reason: String, forceRestart: Boolean) {
         val generation = synchronized(runtimeSettingsApplyLock) {
             runtimeSettingsApplyGeneration += 1
+            runtimeSettingsForceRestartPending = runtimeSettingsForceRestartPending || forceRestart
             runtimeSettingsApplyGeneration
         }
         TcptunState.appendLog("runtime settings apply requested: $reason")
         Thread {
             try {
                 Thread.sleep(RUNTIME_SETTINGS_RESTART_DEBOUNCE_MS)
-                val shouldApply = synchronized(runtimeSettingsApplyLock) {
-                    generation == runtimeSettingsApplyGeneration
-                }
-                if (!shouldApply) return@Thread
+                val forceThisApply = synchronized(runtimeSettingsApplyLock) {
+                    if (generation != runtimeSettingsApplyGeneration) {
+                        null
+                    } else {
+                        runtimeSettingsForceRestartPending.also {
+                            runtimeSettingsForceRestartPending = false
+                        }
+                    }
+                } ?: return@Thread
                 val plan = readDesiredRunningPlan(this) ?: run {
                     TcptunState.appendLog("runtime settings apply skipped: no running profile")
                     if (tun == null) stopSelf()
@@ -810,7 +811,31 @@ class TcptunVpnService : VpnService() {
                     if (tun == null) stopSelf()
                     return@Thread
                 }
-                TcptunState.updateDiagnostics { it.copy(lastRestartReason = reason) }
+                val settings = readRuntimeSettings(this)
+                val structuralChange = BridgeHealthPolicy.requiresRuntimeRestart(
+                    forceRestart = forceThisApply,
+                    currentStructuralRuntimeSettings(),
+                    settings,
+                )
+                if (!structuralChange) {
+                    applyCachedRuntimeSettings(settings)
+                    TcptunState.updateDiagnostics {
+                        it.copy(
+                            mtu = settings.mtu,
+                            powerSavingMode = settings.powerSavingMode,
+                            localProxyAddress = localSocksConnectAddr(settings),
+                            localProxyPort = settings.socksPort,
+                        )
+                    }
+                    TcptunState.appendLog(
+                        "runtime settings applied without VPN restart: power-saving=${settings.powerSavingMode}",
+                    )
+                    wakeBridgeMonitor()
+                    return@Thread
+                }
+                applyCachedRuntimeSettings(settings)
+                val restartReason = if (forceThisApply) "route rules changed" else reason
+                TcptunState.updateDiagnostics { it.copy(lastRestartReason = restartReason) }
                 TcptunState.appendLog("restarting VPN to apply runtime settings")
                 startFromIntent(startIntent(this, plan))
             } catch (_: InterruptedException) {
@@ -863,39 +888,58 @@ class TcptunVpnService : VpnService() {
     private fun handleBridgeStatusEvent(event: BridgeStatusEvent) {
         val eventState = event.state.lowercase()
         if (eventState == "degraded") {
-            requestDenseHealthCheck("tcptun reported degraded")
+            requestHealthCheck("tcptun reported degraded")
             return
         }
         if (eventState != "error" && eventState != "stopped") return
         if (stopping || bridgeRestarting || tun == null) return
-        requestDenseHealthCheck("tcptun reported $eventState")
+        requestHealthCheck("tcptun reported $eventState")
         requestBridgeRestart("tcptun reported $eventState")
     }
 
     private fun startBridgeMonitor() {
         stopBridgeMonitor()
         val generation = monitorGeneration.incrementAndGet()
-        stableHealthSuccesses = 0
+        val initialHandledWakeGeneration = monitorWakeGeneration.get()
         monitorThread = Thread {
             var bridgeFailures = 0
+            var handledWakeGeneration = initialHandledWakeGeneration
             while (
                 generation == monitorGeneration.get() &&
                 !stopping &&
                 !Thread.currentThread().isInterrupted
             ) {
                 try {
-                    val intervalMs = bridgeHealthIntervalMs()
-                    TcptunState.updateDiagnostics { it.copy(healthCheckIntervalSeconds = intervalMs / 1_000) }
-                    sleepBridgeHealthInterval(intervalMs)
+                    val delayMs = BridgeHealthPolicy.nextCheckDelayMs(
+                        powerSaving = powerSavingMode,
+                        confirmingFailure = bridgeFailures > 0,
+                    )
+                    val intervalSeconds = delayMs?.div(1_000) ?: 0
+                    val eventDriven = delayMs == null
+                    val diagnostics = TcptunState.state.value.diagnostics
+                    if (
+                        diagnostics.healthCheckEventDriven != eventDriven ||
+                        diagnostics.healthCheckIntervalSeconds != intervalSeconds
+                    ) {
+                        TcptunState.updateDiagnostics {
+                            it.copy(
+                                healthCheckEventDriven = eventDriven,
+                                healthCheckIntervalSeconds = intervalSeconds,
+                            )
+                        }
+                    }
+                    // Preserve the last generation actually consumed. A wake that
+                    // arrives while the check runs is handled by the next iteration.
+                    handledWakeGeneration = awaitBridgeHealthEvent(
+                        handledWakeGeneration = handledWakeGeneration,
+                        timeoutMs = delayMs,
+                    )
                     if (generation != monitorGeneration.get() || tun == null || stopping) continue
                     val failure = vpnHealthFailure(generation)
                     if (generation != monitorGeneration.get() || stopping) return@Thread
                     if (failure == null) {
                         bridgeFailures = 0
-                        stableHealthSuccesses += 1
                     } else {
-                        stableHealthSuccesses = 0
-                        requestDenseHealthCheck("health check failed")
                         TcptunState.appendLog("VPN health check failed: ${failure.reason}")
                         bridgeFailures += 1
                         if (bridgeFailures >= HEALTH_FAILURE_LIMIT) {
@@ -918,34 +962,32 @@ class TcptunVpnService : VpnService() {
 
     private fun stopBridgeMonitor() {
         monitorGeneration.incrementAndGet()
+        wakeBridgeMonitor()
         monitorThread?.interrupt()
         monitorThread = null
     }
 
-    private fun bridgeHealthIntervalMs(): Long {
-        val now = System.currentTimeMillis()
-        if (!TcptunState.isUiVisible) return BRIDGE_HEALTH_BACKGROUND_INTERVAL_MS
-        if (now < denseHealthCheckUntilMs) return BRIDGE_HEALTH_FAST_INTERVAL_MS
-        if (stableHealthSuccesses < BRIDGE_STABLE_SUCCESS_LIMIT) return BRIDGE_HEALTH_FAST_INTERVAL_MS
-        val settings = readRuntimeSettings(this)
-        return if (settings.powerSavingMode) {
-            BRIDGE_HEALTH_POWER_SAVING_INTERVAL_MS
-        } else {
-            BRIDGE_HEALTH_STABLE_INTERVAL_MS
-        }
-    }
-
-    private fun sleepBridgeHealthInterval(intervalMs: Long) {
-        val wasDense = System.currentTimeMillis() < denseHealthCheckUntilMs
-        val deadlineMs = System.currentTimeMillis() + intervalMs
-        while (!stopping && !Thread.currentThread().isInterrupted) {
-            val remainingMs = deadlineMs - System.currentTimeMillis()
-            if (remainingMs <= 0) return
-            Thread.sleep(remainingMs.coerceAtMost(BRIDGE_HEALTH_SLEEP_GRANULARITY_MS))
-            if (!wasDense && System.currentTimeMillis() < denseHealthCheckUntilMs) {
-                return
+    private fun awaitBridgeHealthEvent(handledWakeGeneration: Int, timeoutMs: Long?): Int {
+        val deadlineMs = timeoutMs?.let { SystemClock.elapsedRealtime() + it }
+        synchronized(monitorWaitLock) {
+            while (!stopping && !Thread.currentThread().isInterrupted) {
+                val currentWakeGeneration = monitorWakeGeneration.get()
+                if (handledWakeGeneration != currentWakeGeneration) return currentWakeGeneration
+                if (deadlineMs == null) {
+                    monitorWaitLock.wait()
+                } else {
+                    val remainingMs = deadlineMs - SystemClock.elapsedRealtime()
+                    if (remainingMs <= 0) return handledWakeGeneration
+                    monitorWaitLock.wait(remainingMs)
+                }
             }
         }
+        return handledWakeGeneration
+    }
+
+    private fun wakeBridgeMonitor() {
+        monitorWakeGeneration.incrementAndGet()
+        synchronized(monitorWaitLock) { monitorWaitLock.notifyAll() }
     }
 
     private fun vpnHealthFailure(monitorEpoch: Int): HealthFailure? {
@@ -953,20 +995,35 @@ class TcptunVpnService : VpnService() {
             TcptunState.updateDiagnostics { it.copy(bridgeStatus = "Unknown", localProxyReachable = false) }
             return HealthFailure("status unavailable: ${err.message}")
         }
-        val localProxyReachable = canConnectLocalProxy()
-        TcptunState.updateDiagnostics {
-            it.copy(
-                bridgeStatus = status,
-                localProxyReachable = localProxyReachable,
-                localProxyAddress = activeLocalSocksConnectAddr(),
-                localProxyPort = activeSocksPort,
-            )
+        val uiVisible = TcptunState.isUiVisible
+        val probeLocalProxy = BridgeHealthPolicy.shouldProbeLocalProxy(uiVisible)
+        val localProxyReachable = if (probeLocalProxy) canConnectLocalProxy() else true
+        val localProxyAddress = activeLocalSocksConnectAddr()
+        // Avoid StateFlow churn while hanging: only publish when something changed
+        // or the user is looking at diagnostics.
+        val previous = TcptunState.state.value.diagnostics
+        val nextLocalProxyReachable = if (probeLocalProxy) localProxyReachable else previous.localProxyReachable
+        if (
+            uiVisible ||
+            previous.bridgeStatus != status ||
+            previous.localProxyReachable != nextLocalProxyReachable ||
+            previous.localProxyAddress != localProxyAddress ||
+            previous.localProxyPort != activeSocksPort
+        ) {
+            TcptunState.updateDiagnostics {
+                it.copy(
+                    bridgeStatus = status,
+                    localProxyReachable = nextLocalProxyReachable,
+                    localProxyAddress = localProxyAddress,
+                    localProxyPort = activeSocksPort,
+                )
+            }
         }
         if (status != "Running") {
             return HealthFailure("bridge status is $status")
         }
-        if (!localProxyReachable) {
-            return HealthFailure("local proxy ${activeLocalSocksConnectAddr()} is not accepting connections")
+        if (probeLocalProxy && !localProxyReachable) {
+            return HealthFailure("local proxy $localProxyAddress is not accepting connections")
         }
         if (shouldRunUpstreamProbe()) {
             val targets = orderedUpstreamProbeTargets()
@@ -1169,15 +1226,18 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun shouldRunUpstreamProbe(): Boolean {
-        if (!TcptunState.isUiVisible) return false
-        val now = System.currentTimeMillis()
-        val intervalMs = when {
-            now < denseHealthCheckUntilMs -> UPSTREAM_PROBE_DENSE_INTERVAL_MS
-            readRuntimeSettings(this).powerSavingMode -> UPSTREAM_PROBE_POWER_SAVING_INTERVAL_MS
-            else -> UPSTREAM_PROBE_STABLE_INTERVAL_MS
+        val force = forceNextUpstreamProbe.compareAndSet(true, false)
+        val allowed = BridgeHealthPolicy.shouldRunUpstreamProbe(
+            uiVisible = TcptunState.isUiVisible,
+            force = force,
+        )
+        if (!allowed) {
+            // Keep a pending force if this cycle could not run (UI already hidden).
+            if (force && !TcptunState.isUiVisible) {
+                forceNextUpstreamProbe.set(true)
+            }
+            return false
         }
-        if (now - lastUpstreamProbeAtMs < intervalMs) return false
-        lastUpstreamProbeAtMs = now
         return true
     }
 
@@ -1392,6 +1452,7 @@ class TcptunVpnService : VpnService() {
         private const val EXTRA_TCPING_TARGET_LABEL = "tcpingTargetLabel"
         private const val EXTRA_TCPING_HOST = "tcpingHost"
         private const val EXTRA_TCPING_PORT = "tcpingPort"
+        private const val EXTRA_FORCE_RUNTIME_RESTART = "forceRuntimeRestart"
         const val LOCAL_SOCKS_HOST = "127.0.0.1"
         const val DEFAULT_SOCKS_PORT = 1080
         const val DEFAULT_VPN_MTU = 1400
@@ -1399,13 +1460,6 @@ class TcptunVpnService : VpnService() {
         private const val VPN_DISPLAY_NAME = "TcpTun VPN"
         private const val CHANNEL_ID = "tcptun_vpn_silent"
         private const val NOTIFICATION_ID = 1001
-        private const val BRIDGE_HEALTH_FAST_INTERVAL_MS = 15_000L
-        private const val BRIDGE_HEALTH_STABLE_INTERVAL_MS = 60_000L
-        private const val BRIDGE_HEALTH_POWER_SAVING_INTERVAL_MS = 120_000L
-        private const val BRIDGE_HEALTH_BACKGROUND_INTERVAL_MS = 300_000L
-        private const val BRIDGE_DENSE_HEALTH_WINDOW_MS = 120_000L
-        private const val BRIDGE_HEALTH_SLEEP_GRANULARITY_MS = 5_000L
-        private const val BRIDGE_STABLE_SUCCESS_LIMIT = 2
         private const val HEALTH_FAILURE_LIMIT = 2
         private const val BRIDGE_RESTART_DELAY_MS = 300L
         private const val BRIDGE_RESTART_MIN_INTERVAL_MS = 30_000L
@@ -1419,9 +1473,6 @@ class TcptunVpnService : VpnService() {
         private const val RUNTIME_SETTINGS_RESTART_DEBOUNCE_MS = 800L
         private const val LOCAL_PROXY_CONNECT_TIMEOUT_MS = 1_000
         private const val UPSTREAM_PROBE_TIMEOUT_MS = 5_000
-        private const val UPSTREAM_PROBE_DENSE_INTERVAL_MS = 10_000L
-        private const val UPSTREAM_PROBE_STABLE_INTERVAL_MS = 60_000L
-        private const val UPSTREAM_PROBE_POWER_SAVING_INTERVAL_MS = 120_000L
         private const val RUNTIME_PREFS = "tcptun_runtime"
         private const val KEY_LAST_RUNNING_CONFIG = "lastRunningConfig"
         private const val KEY_LAST_RUNNING_PLAN = "lastRunningPlan"
@@ -1436,7 +1487,8 @@ class TcptunVpnService : VpnService() {
         private const val KEY_RUNTIME_SOCKS_USERNAME = "runtimeSocksUsername"
         private const val KEY_RUNTIME_SOCKS_PASSWORD = "runtimeSocksPassword"
         private const val KEY_RUNTIME_FLOW_ANALYSIS_APP = "runtimeFlowAnalysisApp"
-        @Volatile private var denseHealthCheckUntilMs = 0L
+        private val forceNextUpstreamProbe = AtomicBoolean(false)
+        private val activeMonitorWakeCallback = AtomicReference<(() -> Unit)?>(null)
         private val UPSTREAM_PROBE_TARGETS = listOf(
             UpstreamProbeTarget("Google 204", "connectivitycheck.gstatic.com", path = "/generate_204", expectedStatus = 204),
             UpstreamProbeTarget("Cloudflare 204", "cp.cloudflare.com", path = "/generate_204", expectedStatus = 204),
@@ -1476,8 +1528,10 @@ class TcptunVpnService : VpnService() {
             return startIntent(context, plan).setAction(ACTION_UPDATE_OUTBOUNDS)
         }
 
-        fun applyRuntimeSettingsIntent(context: Context): Intent {
-            return Intent(context, TcptunVpnService::class.java).setAction(ACTION_APPLY_RUNTIME_SETTINGS)
+        fun applyRuntimeSettingsIntent(context: Context, forceRestart: Boolean = false): Intent {
+            return Intent(context, TcptunVpnService::class.java)
+                .setAction(ACTION_APPLY_RUNTIME_SETTINGS)
+                .putExtra(EXTRA_FORCE_RUNTIME_RESTART, forceRestart)
         }
 
         fun updateFlowAnalysisIntent(context: Context): Intent {
@@ -1499,18 +1553,26 @@ class TcptunVpnService : VpnService() {
                 .putExtra(EXTRA_TCPING_PORT, port)
         }
 
-        fun requestDenseHealthCheck(reason: String) {
-            val nextUntilMs = System.currentTimeMillis() + BRIDGE_DENSE_HEALTH_WINDOW_MS
-            if (nextUntilMs > denseHealthCheckUntilMs) {
-                denseHealthCheckUntilMs = nextUntilMs
-            }
-            TcptunState.appendLog("dense bridge health check requested: $reason")
+        /** One event-driven health check (network change, core status, user refresh). */
+        fun requestHealthCheck(reason: String) {
+            TcptunState.appendLog("bridge health check requested: $reason")
+            activeMonitorWakeCallback.get()?.invoke()
+        }
+
+        @Deprecated("Use requestHealthCheck", ReplaceWith("requestHealthCheck(reason)"))
+        fun requestDenseHealthCheck(reason: String) = requestHealthCheck(reason)
+
+        fun requestUiVisibleHealthCheck() {
+            // One full UI-driven refresh: status + local proxy + single upstream probe.
+            forceNextUpstreamProbe.set(true)
+            TcptunState.appendLog("bridge health check requested: app visible")
+            activeMonitorWakeCallback.get()?.invoke()
         }
 
         fun readRuntimeSettings(context: Context): RuntimeSettings {
             val prefs = context.applicationContext.getSharedPreferences(RUNTIME_PREFS, Context.MODE_PRIVATE)
             val mtu = prefs.getInt(KEY_RUNTIME_MTU, DEFAULT_VPN_MTU).coerceIn(1280, 1500)
-            val powerSavingMode = prefs.getBoolean(KEY_RUNTIME_POWER_SAVING, false)
+            val powerSavingMode = prefs.getBoolean(KEY_RUNTIME_POWER_SAVING, true)
             val socksPort = prefs.getInt(KEY_RUNTIME_SOCKS_PORT, DEFAULT_SOCKS_PORT).coerceIn(1, 65535)
             return RuntimeSettings(
                 mtu = mtu,
@@ -1561,7 +1623,12 @@ class TcptunVpnService : VpnService() {
                     localProxyPort = normalizedSocksPort,
                 )
             }
-            TcptunState.appendLog("runtime settings saved: proxy=${normalizedSettings.localProxyProtocol}://${localSocksListenAddr(normalizedSettings)} mtu=${normalizedSettings.mtu} flow-analysis=${normalizedFlowAnalysisApp.ifBlank { "disabled" }}")
+            TcptunState.appendLog(
+                "runtime settings saved: proxy=${normalizedSettings.localProxyProtocol}://" +
+                    "${localSocksListenAddr(normalizedSettings)} mtu=${normalizedSettings.mtu} " +
+                    "power-saving=$normalizedPowerSavingMode " +
+                    "flow-analysis=${normalizedFlowAnalysisApp.ifBlank { "disabled" }}",
+            )
         }
 
         fun localSocksListenAddr(settings: RuntimeSettings): String {
