@@ -72,7 +72,7 @@ object ProfileUriCodec {
             .ifBlank { uri.getQueryParameter("transport").orEmpty() }
             .lowercase()
         val security = uri.getQueryParameter("security").orEmpty().lowercase()
-        if (security !in setOf("", "none", "tls", "reality", "reality-quic")) {
+        if (security !in setOf("", "none", "tls", "reality", "reality-tcp", "reality-quic")) {
             error("unsupported security: $security")
         }
         if (security == "reality-quic" && protocol != "native") {
@@ -95,7 +95,7 @@ object ProfileUriCodec {
             tlsInsecure = uri.getBooleanParameterCompat("allowInsecure", false) ||
                 uri.getBooleanParameterCompat("tlsInsecure", false) ||
                 uri.getBooleanParameterCompat("insecure", false),
-            tunnelSecurity = security.takeIf { it == "reality" || it == "reality-quic" }.orEmpty(),
+            tunnelSecurity = security.takeIf { it in AppConfig.RealitySecurityTypes }.orEmpty(),
             flow = uri.getQueryParameter("flow").orEmpty(),
             realityPublicKey = uri.getQueryParameter("pbk").orEmpty(),
             realityShortId = uri.getQueryParameter("sid").orEmpty()
@@ -140,13 +140,15 @@ object ProfileUriCodec {
         val portNumber = port.toIntOrNull()
         if (portNumber == null || portNumber !in 1..65535) error("missing or invalid VMess server port")
         val tlsValue = obj.optString("tls").trim().lowercase()
-        if (tlsValue == "reality-quic" || obj.optString("security").equals("reality-quic", ignoreCase = true)) {
+        val securityField = obj.optString("security").trim().lowercase()
+        if (tlsValue == "reality-quic" || securityField == "reality-quic") {
             error("reality-quic requires native protocol")
         }
         val security = when {
-            tlsValue == "reality" -> "reality"
+            tlsValue in AppConfig.TcpRealitySecurityTypes -> tlsValue
+            securityField in AppConfig.TcpRealitySecurityTypes -> securityField
             tlsValue.isBlank() || tlsValue == "none" -> {
-                if (obj.optString("security").equals("reality", ignoreCase = true)) "reality" else ""
+                if (securityField == "reality") "reality" else ""
             }
             else -> "tls"
         }
@@ -168,7 +170,7 @@ object ProfileUriCodec {
             path = obj.optString("path", "/proxy").ifBlank { "/proxy" },
             tls = security == "tls",
             tlsInsecure = obj.optBoolean("allowInsecure", false) || obj.optBoolean("tlsInsecure", false),
-            tunnelSecurity = if (security == "reality") "reality" else "",
+            tunnelSecurity = security.takeIf { it in AppConfig.TcpRealitySecurityTypes }.orEmpty(),
             flow = obj.optString("tcptun_flow").ifBlank { obj.optString("flow") },
             realityPublicKey = obj.optString("pbk"),
             realityShortId = obj.optString("sid").ifBlank { obj.optString("reality_short_id") },
@@ -268,11 +270,17 @@ object ProfileUriCodec {
     }
 
     private fun encodeVMess(config: AppConfig): String? {
-        if (config.tunnelSecurity.equals("reality-quic", ignoreCase = true)) return null
+        val tunnelSecurity = config.tunnelSecurity.trim().lowercase()
+        if (tunnelSecurity == "reality-quic") return null
         val host = config.serverHost.trim()
         val port = config.serverPort.trim()
         val token = config.token.trim()
         if (host.isBlank() || port.isBlank() || token.isBlank()) return null
+        val tlsField = when {
+            tunnelSecurity in AppConfig.TcpRealitySecurityTypes -> tunnelSecurity
+            config.tls -> "tls"
+            else -> ""
+        }
         val obj = JSONObject()
             .put("v", "2")
             .put("ps", config.name.ifBlank { host })
@@ -285,7 +293,7 @@ object ProfileUriCodec {
             .put("type", "none")
             .put("host", config.sni)
             .put("path", config.path)
-            .put("tls", if (config.tunnelSecurity == "reality") "reality" else if (config.tls) "tls" else "")
+            .put("tls", tlsField)
             .put("sni", config.sni)
             .put("allowInsecure", config.tlsInsecure)
             .put("tcptun_mux", config.mux)
@@ -310,17 +318,17 @@ object ProfileUriCodec {
         if (config.protocol == "native") params["v"] = TcptunUriVersion
         val tunnelSecurity = config.tunnelSecurity.trim().lowercase()
         val security = when {
-            tunnelSecurity == "reality" || tunnelSecurity == "reality-quic" -> tunnelSecurity
+            tunnelSecurity in AppConfig.RealitySecurityTypes -> tunnelSecurity
             config.tls -> "tls"
             else -> "none"
         }
         params["security"] = security
         if (config.protocol == "vless") params["encryption"] = "none"
-        if (security == "reality" || security == "reality-quic") {
+        if (security in AppConfig.RealitySecurityTypes) {
             putIfNotBlank(params, "pbk", config.realityPublicKey)
             putIfNotBlank(params, "sid", config.realityShortId)
             putIfNotBlank(params, "fp", config.realityFingerprint)
-            if (security == "reality") {
+            if (security in AppConfig.TcpRealitySecurityTypes) {
                 putIfNotBlank(params, "spx", config.realitySpiderX.ifBlank { config.path })
             }
         }

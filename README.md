@@ -321,6 +321,12 @@ Example VLESS/REALITY format:
 vless://00000000-0000-4000-8000-000000000000@203.0.113.10:443?security=reality&encryption=none&pbk=PUBLIC_KEY_PLACEHOLDER&headerType=none&fp=chrome&spx=%2F&type=tcp&flow=xtls-rprx-vision&sni=example.com#example
 ```
 
+Example native TCP REALITY format:
+
+```text
+native://TOKEN@203.0.113.10:443?v=1&type=raw&security=reality-tcp&sni=example.com&fp=chrome&pbk=PUBLIC_KEY_PLACEHOLDER&sid=SHORT_ID&spx=%2F&mux=true#example
+```
+
 Example native/QUIC REALITY format:
 
 ```text
@@ -333,9 +339,9 @@ native://TOKEN@203.0.113.10:443?v=1&type=raw&security=reality-quic&sni=example.c
 - `VpnService` with foreground service notification.
 - Config persistence with `SharedPreferences`.
 - Independently started local profiles with add, edit, delete, and share actions; active structured profiles form one dynamically weighted, session-affine pool.
-- URI sharing and compact `T3:` QR import/export for native, VLESS, VMess, and Trojan profiles, including REALITY and native QUIC REALITY (`security=reality-quic`). T3 preserves QUIC mux UDP mode and receive-window overrides; import remains compatible with legacy `T2:` payloads. Versioned payloads use tcptun-go's `EncodeProfile` / `DecodeProfile` bridge API and a dedicated profile DTO; Android only renders and scans the QR image.
+- URI sharing and compact `T3:` QR import/export for native, VLESS, VMess, and Trojan profiles, including TCP REALITY (`security=reality` / `reality-tcp`) and native QUIC REALITY (`security=reality-quic`). T3 preserves QUIC mux UDP mode and receive-window overrides; import remains compatible with legacy `T2:` payloads. Versioned payloads use tcptun-go's `EncodeProfile` / `DecodeProfile` bridge API and a dedicated profile DTO; Android only renders and scans the QR image.
 - Protocol and transport selection UI.
-- Optional token, SNI, path, TLS, TLS insecure, REALITY short ID, mux mode, and upstream protocol UI. Selecting QUIC REALITY locks the required `native + raw + quic mux` combination.
+- Optional token, SNI, path, TLS, TLS insecure, REALITY short ID, mux mode, and upstream protocol UI. Native supports `reality` (TCP + optional auto-QUIC), `reality-tcp` (TCP only), and `reality-quic` (locks `native + raw + quic mux`).
 - IPv4/IPv6 default routes send all VPN traffic into tcptun-go; explicit rules run first and unmatched traffic uses the balanced active-profile pool.
 - Status display: `Stopped`, `Starting`, `Running`, `Error`.
 - Recent log display.

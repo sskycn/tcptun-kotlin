@@ -117,8 +117,10 @@ data class AppConfig(
         val normalizedSecurity = tunnelSecurity.trim().lowercase()
         if (normalizedSecurity !in TunnelSecurityTypes) return "unsupported security: $tunnelSecurity"
         if (normalizedSecurity.isNotBlank() && tls) return "TLS cannot be combined with tunnel security"
-        if (normalizedSecurity == "reality" && transport != "raw") {
-            return "REALITY requires raw transport"
+        // native supports reality (TCP + optional auto-QUIC), reality-tcp (TCP only),
+        // and reality-quic (QUIC only). Other tunnel protocols only use TCP REALITY.
+        if (normalizedSecurity in TcpRealitySecurityTypes && transport != "raw") {
+            return "$normalizedSecurity requires raw transport"
         }
         if (normalizedSecurity in RealitySecurityTypes) {
             if (sni.isBlank()) return "$normalizedSecurity requires SNI"
@@ -268,7 +270,10 @@ data class AppConfig(
                     .put("fingerprint", realityFingerprint.trim())
                     .put("public_key", realityPublicKey.trim())
                     .put("short_id", realityShortId.trim())
-                    if (normalizedSecurity == "reality") put("spider_x", realitySpiderX.trim())
+                    // TCP REALITY variants use SpiderX; reality-quic does not.
+                    if (normalizedSecurity in TcpRealitySecurityTypes) {
+                        put("spider_x", realitySpiderX.trim())
+                    }
                 },
             )
         } else if (tls) {
@@ -647,9 +652,12 @@ data class AppConfig(
         val UpstreamProtocols = LocalProxyProtocols
         val MuxModes = listOf("", "group", "quic")
         val MuxUdpModes = listOf("", "reliable", "auto", "datagram")
-        val SecurityOptions = listOf("none", "tls", "reality", "reality-quic")
-        val TunnelSecurityTypes = listOf("", "reality", "reality-quic")
-        val RealitySecurityTypes = setOf("reality", "reality-quic")
+        // Matches tcptun-go: reality (TCP + native auto-QUIC), reality-tcp (TCP only),
+        // reality-quic (native QUIC REALITY).
+        val SecurityOptions = listOf("none", "tls", "reality", "reality-tcp", "reality-quic")
+        val TunnelSecurityTypes = listOf("", "reality", "reality-tcp", "reality-quic")
+        val TcpRealitySecurityTypes = setOf("reality", "reality-tcp")
+        val RealitySecurityTypes = setOf("reality", "reality-tcp", "reality-quic")
         private const val AndroidVpnInboundTag = "android-vpn"
         private val WildcardHosts = setOf("0.0.0.0", "::", "*")
         private val LoopbackHosts = setOf("127.0.0.1", "::1", "localhost")

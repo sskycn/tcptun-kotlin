@@ -3232,10 +3232,13 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                         } else {
                             val selectedSecurity = when {
                                 config.tunnelSecurity.equals("reality-quic", ignoreCase = true) -> "reality-quic"
+                                config.tunnelSecurity.equals("reality-tcp", ignoreCase = true) -> "reality-tcp"
                                 config.tunnelSecurity.equals("reality", ignoreCase = true) -> "reality"
                                 config.tls -> "tls"
                                 else -> "none"
                             }
+                            val isTcpReality = selectedSecurity in AppConfig.TcpRealitySecurityTypes
+                            val isRealityQuic = selectedSecurity == "reality-quic"
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 OutlinedTextField(
                                     value = config.serverHost,
@@ -3256,7 +3259,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                 stringResource(R.string.protocol),
                                 config.protocol,
                                 AppConfig.Protocols,
-                                enabled = selectedSecurity != "reality-quic",
+                                enabled = !isRealityQuic,
                             ) {
                                 config = config.copy(protocol = it)
                             }
@@ -3264,7 +3267,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                 stringResource(R.string.field_transport),
                                 config.transport,
                                 AppConfig.Transports,
-                                enabled = selectedSecurity != "reality-quic",
+                                enabled = !isRealityQuic && !isTcpReality,
                             ) {
                                 config = config.copy(transport = it)
                             }
@@ -3299,9 +3302,11 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                             ) { security ->
                                 config = when (security) {
                                     "tls" -> config.copy(tunnelSecurity = "", tls = true)
-                                    "reality" -> config.copy(
+                                    "reality", "reality-tcp" -> config.copy(
+                                        // reality: TCP REALITY + native auto-QUIC when mux/raw.
+                                        // reality-tcp: TCP REALITY only (no auto-QUIC).
                                         transport = "raw",
-                                        tunnelSecurity = "reality",
+                                        tunnelSecurity = security,
                                         tls = false,
                                         tlsInsecure = false,
                                         muxMode = config.muxMode.takeUnless { it.equals("quic", true) }.orEmpty(),
@@ -3343,7 +3348,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
                             )
-                            if (selectedSecurity == "reality" || selectedSecurity == "reality-quic") {
+                            if (isTcpReality || isRealityQuic) {
                                 OutlinedTextField(
                                     value = config.realityPublicKey,
                                     onValueChange = { config = config.copy(realityPublicKey = it) },
@@ -3368,7 +3373,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                     )
                                 }
                             }
-                            if (selectedSecurity == "reality") {
+                            if (isTcpReality) {
                                 OutlinedTextField(
                                     value = config.realitySpiderX,
                                     onValueChange = { config = config.copy(realitySpiderX = it) },
@@ -3385,13 +3390,13 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                             ToggleRow(
                                 stringResource(R.string.field_mux),
                                 config.mux,
-                                enabled = selectedSecurity != "reality-quic",
+                                enabled = !isRealityQuic,
                             ) { config = config.copy(mux = it) }
                             ChoiceRow(
                                 stringResource(R.string.field_mux_mode),
                                 config.muxMode.ifBlank { "group" },
                                 listOf("group", "quic"),
-                                enabled = config.mux && selectedSecurity != "reality-quic",
+                                enabled = config.mux && !isRealityQuic,
                             ) { mode ->
                                 config = if (mode == "quic") {
                                     config.copy(

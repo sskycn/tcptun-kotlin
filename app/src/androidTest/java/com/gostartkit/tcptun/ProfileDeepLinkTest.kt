@@ -118,6 +118,34 @@ class ProfileDeepLinkTest {
     }
 
     @Test
+    fun nativeRealityTcpUriRoundTrips() {
+        val uri = "native://tcp-token@edge.example.com:443" +
+            "?v=1&type=raw&security=reality-tcp&sni=example.com&fp=chrome" +
+            "&pbk=BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY&sid=a65f93c1dbc5d54a" +
+            "&spx=%2F&mux=true&mux_mode=group#tcp-reality"
+
+        val profile = ProfileUriCodec.decode(uri).getOrThrow()
+        assertEquals("reality-tcp", profile.tunnelSecurity)
+        assertEquals("native", profile.protocol)
+        assertEquals("raw", profile.transport)
+        assertEquals("group", profile.muxMode)
+        assertEquals("/", profile.realitySpiderX)
+        assertNull(profile.validate())
+
+        val encoded = requireNotNull(ProfileUriCodec.encode(profile))
+        assertTrue(encoded.contains("security=reality-tcp"))
+        assertTrue(encoded.contains("spx="))
+
+        val security = JSONObject(profile.toBridgeJson("127.0.0.1:1080"))
+            .getJSONArray("outbounds")
+            .getJSONObject(0)
+            .getJSONObject("security")
+        assertEquals("reality-tcp", security.getString("type"))
+        assertEquals("/", security.getString("spider_x"))
+        assertEquals("example.com", security.getString("server_name"))
+    }
+
+    @Test
     fun nativeRealityQuicUriRoundTrips() {
         val uri = "native://quic-token@edge.example.com:443" +
             "?v=1&type=raw&security=reality-quic&sni=example.com&fp=chrome" +
