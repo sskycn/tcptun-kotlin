@@ -206,6 +206,7 @@ data class AppConfig(
                 socks5Username = socks5Username,
                 socks5Password = socks5Password,
                 verbose = verbose,
+                routeLocalProxyTraffic = routeLocalProxyTraffic,
             )
         }
         val (listenHost, listenPort) = splitHostPort(localListenAddr)
@@ -325,6 +326,7 @@ data class AppConfig(
         socks5Username: String,
         socks5Password: String,
         verbose: Boolean,
+        routeLocalProxyTraffic: Boolean,
     ): String {
         val root = JSONObject(rawConfigJson)
         // tcptun-go removed the top-level discovery config in 30ff0a1 and now
@@ -391,7 +393,11 @@ data class AppConfig(
         migrateRemovedDirectFirstOutbounds(route, outbounds)
         root.put("inbounds", inbounds)
         if (!route.has("rules")) route.put("rules", JSONArray())
-        remapInboundRules(route.optJSONArray("rules"), replacedInboundTags)
+        remapInboundRules(
+            rules = route.optJSONArray("rules"),
+            replacedTags = replacedInboundTags,
+            routeLocalProxyTraffic = routeLocalProxyTraffic,
+        )
         if (verbose) {
             val log = root.optJSONObject("log") ?: JSONObject().also { root.put("log", it) }
             log.put("level", "debug")
@@ -583,7 +589,11 @@ data class AppConfig(
         return left in LoopbackHosts && right in LoopbackHosts
     }
 
-    private fun remapInboundRules(rules: JSONArray?, replacedTags: Set<String>) {
+    private fun remapInboundRules(
+        rules: JSONArray?,
+        replacedTags: Set<String>,
+        routeLocalProxyTraffic: Boolean,
+    ) {
         if (rules == null || replacedTags.isEmpty()) return
         for (ruleIndex in 0 until rules.length()) {
             val rule = rules.optJSONObject(ruleIndex) ?: continue
@@ -593,6 +603,9 @@ data class AppConfig(
                 val tag = tags.optString(tagIndex).trim()
                 if (tag.isBlank()) continue
                 remapped += if (tag in replacedTags) AndroidTunInboundTag else tag
+            }
+            if (routeLocalProxyTraffic && AndroidTunInboundTag in remapped) {
+                remapped += AndroidVpnInboundTag
             }
             rule.put("inbound", JSONArray().apply { remapped.forEach(::put) })
         }

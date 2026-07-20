@@ -930,6 +930,19 @@ class AndroidBridgeContractTest {
         assertEquals("tun", ruleInbound.getString(0))
 
         assertEngineStarts(prepared.toString())
+
+        val preparedWithLocalRouting = JSONObject(
+            imported.toBridgeJson(
+                localListenAddr = "127.0.0.1:1080",
+                routeLocalProxyTraffic = true,
+            ),
+        )
+        val localRuleInbound = preparedWithLocalRouting.getJSONObject("route").getJSONArray("rules")
+            .getJSONObject(0).getJSONArray("inbound")
+        assertEquals(2, localRuleInbound.length())
+        assertEquals(AndroidTunInboundTag, localRuleInbound.getString(0))
+        assertEquals("android-vpn", localRuleInbound.getString(1))
+        assertEngineStarts(preparedWithLocalRouting.toString())
     }
 
     @Test
