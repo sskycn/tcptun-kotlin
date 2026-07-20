@@ -112,7 +112,7 @@
     <string name="diag_go_state">Go state</string>
     <string name="diag_go_phase">Go phase</string>
     <string name="diag_go_listen">Go listen</string>
-    <string name="diag_go_remote">Go remote</string>
+    <string name="diag_go_remote">Connected remote</string>
     <string name="diag_go_active">Go active</string>
     <string name="diag_go_error">Go error</string>
     <string name="diag_go_event_time">Go event time</string>
@@ -120,7 +120,6 @@
     <string name="diag_socket_protect">Socket protect</string>
     <string name="diag_health_interval">Health checks</string>
     <string name="health_check_event_driven">Event / pull-to-refresh</string>
-    <string name="diag_power_saving">Power saving</string>
     <string name="socks_listen">Local proxy listen</string>
     <string name="local_proxy_protocol">Local listener protocol</string>
     <string name="socks_port">Local proxy port</string>
@@ -166,9 +165,7 @@
     <string name="seconds_value">%1$ds</string>
     <string name="recent_restart_reason">Last restart reason</string>
     <string name="transparent_proxy_settings">Transparent proxy settings</string>
-    <string name="power_saving_mode">Power saving mode</string>
-    <string name="power_saving_note">Extreme hang mode (default): VPN and mixed proxy stay up while the phone sleeps. There is no routine timer polling; failures still receive one confirmation check. Turning this mode off enables a five-minute safety check.</string>
-    <string name="runtime_settings_note">Settings are saved while editing. When you go back, only changes that affect the tunnel (MTU, local proxy bind/auth, route local proxy) restart the running VPN. Power saving applies without a restart.</string>
+    <string name="runtime_settings_note">Settings are saved while editing. When you go back, only changes that affect the tunnel (MTU, local proxy bind/auth, route local proxy) restart the running VPN.</string>
     <string name="native_tun_capabilities_note">Native TUN supports TCP and UDP. Go handles DNS inside the tunnel and enables fake-IP by default.</string>
     <string name="vpn_traffic_mode">VPN traffic mode</string>
     <string name="tcp_udp">TCP + UDP</string>

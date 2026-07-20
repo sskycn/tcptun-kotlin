@@ -90,10 +90,28 @@ class AndroidBridgeContractTest {
                 Long::class.javaPrimitiveType,
             )
             engine.javaClass.getMethod("outboundsStatusJSON")
+            engine.javaClass.getMethod("registerEvent", String::class.java)
+            engine.javaClass.getMethod("unregisterEvent", String::class.java)
             assertEquals("Stopped", engine.status())
             assertEquals("stopped", JSONObject(engine.statusJSON()).getString("state"))
             assertEquals(0L, engine.sessionID())
             assertTrue(runCatching { engine.waitStopped(1, 1) }.isFailure)
+        } finally {
+            engine.close()
+        }
+    }
+
+    @Test
+    fun currentBridgeAcceptsOptionalStatusEventRegistration() {
+        val engine = Androidbridge.newEngine()
+        try {
+            TcptunBridgeEvents.DefaultRegistered.forEach { event ->
+                engine.registerEvent(event)
+            }
+            assertTrue(runCatching { engine.registerEvent("UNKNOWN_EVENT") }.isFailure)
+            TcptunBridgeEvents.DefaultRegistered.forEach { event ->
+                engine.unregisterEvent(event)
+            }
         } finally {
             engine.close()
         }
@@ -185,6 +203,21 @@ class AndroidBridgeContractTest {
         assertEquals(null, staleEpoch)
         assertEquals(0, TcptunState.state.value.diagnostics.bridgeSequence)
         assertTrue(secondEpoch > firstEpoch)
+    }
+
+    @Test
+    fun stateFlowAcceptsAnExplicitlyClearedRemote() {
+        val epoch = TcptunState.beginBridgeSession()
+        TcptunState.applyBridgeStatusEvent(
+            epoch,
+            """{"session_id":1,"sequence":1,"state":"running","remote":"203.0.113.10:443"}""",
+        )
+        TcptunState.applyBridgeStatusEvent(
+            epoch,
+            """{"session_id":1,"sequence":2,"state":"outbound_stopped","remote":""}""",
+        )
+
+        assertEquals("", TcptunState.state.value.diagnostics.bridgeRemote)
     }
 
     @Test

@@ -111,7 +111,7 @@
     <string name="diag_go_state">Go 状态</string>
     <string name="diag_go_phase">Go 阶段</string>
     <string name="diag_go_listen">Go 监听</string>
-    <string name="diag_go_remote">Go 远端</string>
+    <string name="diag_go_remote">连接远端</string>
     <string name="diag_go_active">Go 活跃连接</string>
     <string name="diag_go_error">Go 错误</string>
     <string name="diag_go_event_time">Go 事件时间</string>
@@ -119,7 +119,6 @@
     <string name="diag_socket_protect">Socket protect</string>
     <string name="diag_health_interval">健康检查</string>
     <string name="health_check_event_driven">事件 / 下拉刷新</string>
-    <string name="diag_power_saving">省电模式</string>
     <string name="socks_listen">本地代理监听</string>
     <string name="local_proxy_protocol">本地监听协议</string>
     <string name="socks_port">本地代理端口</string>
@@ -165,9 +164,7 @@
     <string name="seconds_value">%1$d 秒</string>
     <string name="recent_restart_reason">最近重启原因</string>
     <string name="transparent_proxy_settings">透明代理参数</string>
-    <string name="power_saving_mode">省电模式</string>
-    <string name="power_saving_note">极致挂机（默认开）：VPN 与 mixed 代理保持可用，不做常规定时轮询；检测到失败时仍会复检一次。关闭后启用每五分钟一次的安全检查。</string>
-    <string name="runtime_settings_note">编辑时会先保存设置；返回时仅当 MTU/本地代理监听与认证/本地代理走路由等隧道相关参数变化时，才会重启正在运行的 VPN。省电模式无需重启即可生效。</string>
+    <string name="runtime_settings_note">编辑时会先保存设置；返回时仅当 MTU/本地代理监听与认证/本地代理走路由等隧道相关参数变化时，才会重启正在运行的 VPN。</string>
     <string name="native_tun_capabilities_note">原生 TUN 支持 TCP 和 UDP；DNS 默认在 Go 隧道内接管并启用 fake-IP。</string>
     <string name="vpn_traffic_mode">VPN 流量模式</string>
     <string name="tcp_udp">TCP + UDP</string>

@@ -19,6 +19,20 @@ internal fun validateTcptunConfig(configJson: String) {
     }
 }
 
+/** Optional status-event names accepted by Engine.RegisterEvent / UnregisterEvent. */
+internal object TcptunBridgeEvents {
+    const val RemoteEndpointsChanged = "REMOTE_ENDPOINTS_CHANGED"
+    const val RuntimeReconnecting = "RUNTIME_RECONNECTING"
+    const val RuntimeConnectionIssue = "RUNTIME_CONNECTION_ISSUE"
+
+    /** Telemetry Android always opts into while a VPN session is live. */
+    val DefaultRegistered: List<String> = listOf(
+        RemoteEndpointsChanged,
+        RuntimeReconnecting,
+        RuntimeConnectionIssue,
+    )
+}
+
 interface TcptunBridge {
     fun configure(configJson: String)
     fun setTun(fd: Int, mtu: Int)
@@ -35,6 +49,8 @@ interface TcptunBridge {
     fun setLogCallback(onLog: (String) -> Unit)
     fun setStatusCallback(onStatus: (String) -> Unit)
     fun clearStatusCallback()
+    fun registerEvent(event: String)
+    fun unregisterEvent(event: String)
     fun setSocketProtector(onProtect: (Int) -> Boolean)
     fun clearSocketProtector()
     fun setAppIdentityProvider(onIdentify: (String) -> String?)
@@ -194,6 +210,14 @@ class ReflectionTcptunBridge : TcptunBridge {
     override fun clearStatusCallback() {
         clearCallback("androidbridge.StatusCallback", "setStatusCallback")
         statusCallback = null
+    }
+
+    override fun registerEvent(event: String) {
+        invokeEngine("registerEvent", arrayOf(String::class.java), event.trim())
+    }
+
+    override fun unregisterEvent(event: String) {
+        invokeEngine("unregisterEvent", arrayOf(String::class.java), event.trim())
     }
 
     override fun setSocketProtector(onProtect: (Int) -> Boolean) {

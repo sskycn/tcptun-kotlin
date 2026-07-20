@@ -30,24 +30,30 @@ class BridgeHealthPolicyTest {
     }
 
     @Test
-    fun memberHealthProbeRunsWhenForcedRegardlessOfInterval() {
+    fun statusJsonReconcileOnlyWhenUiVisibleAndForced() {
+        assertTrue(BridgeHealthPolicy.shouldReconcileStatusJson(uiVisible = true, force = true))
+        assertFalse(BridgeHealthPolicy.shouldReconcileStatusJson(uiVisible = true, force = false))
+        assertFalse(BridgeHealthPolicy.shouldReconcileStatusJson(uiVisible = false, force = true))
+    }
+
+    @Test
+    fun memberHealthProbeRunsOnlyWhenForcedAfterSettle() {
         val now = 1_000_000L
         assertTrue(
             BridgeHealthPolicy.shouldProbeMemberHealth(
                 force = true,
-                lastProbeAtMs = now - 1_000L,
                 nowMs = now,
             ),
         )
-    }
-
-    @Test
-    fun memberHealthProbeBlockedUntilSettleWindowElapses() {
-        val now = 50_000L
+        assertFalse(
+            BridgeHealthPolicy.shouldProbeMemberHealth(
+                force = false,
+                nowMs = now,
+            ),
+        )
         assertFalse(
             BridgeHealthPolicy.shouldProbeMemberHealth(
                 force = true,
-                lastProbeAtMs = 0L,
                 nowMs = now,
                 notBeforeMs = now + 1_000L,
             ),
@@ -55,41 +61,8 @@ class BridgeHealthPolicyTest {
         assertTrue(
             BridgeHealthPolicy.shouldProbeMemberHealth(
                 force = true,
-                lastProbeAtMs = 0L,
                 nowMs = now + 1_000L,
                 notBeforeMs = now + 1_000L,
-            ),
-        )
-    }
-
-    @Test
-    fun memberHealthProbeRunsOnFirstCheckWithoutForce() {
-        assertTrue(
-            BridgeHealthPolicy.shouldProbeMemberHealth(
-                force = false,
-                lastProbeAtMs = 0L,
-                nowMs = 10_000L,
-            ),
-        )
-    }
-
-    @Test
-    fun memberHealthProbeRespectsMinimumIntervalWithoutForce() {
-        val last = 100_000L
-        val tooSoon = last + BridgeHealthPolicy.MEMBER_HEALTH_MIN_INTERVAL_MS - 1
-        val ready = last + BridgeHealthPolicy.MEMBER_HEALTH_MIN_INTERVAL_MS
-        assertFalse(
-            BridgeHealthPolicy.shouldProbeMemberHealth(
-                force = false,
-                lastProbeAtMs = last,
-                nowMs = tooSoon,
-            ),
-        )
-        assertTrue(
-            BridgeHealthPolicy.shouldProbeMemberHealth(
-                force = false,
-                lastProbeAtMs = last,
-                nowMs = ready,
             ),
         )
     }
@@ -102,32 +75,30 @@ class BridgeHealthPolicyTest {
     }
 
     @Test
-    fun powerSavingHasNoRoutineTimer() {
+    fun healthChecksAreAlwaysEventDrivenExceptFailureConfirmation() {
         assertNull(
             BridgeHealthPolicy.nextCheckDelayMs(
                 powerSaving = true,
                 confirmingFailure = false,
             ),
         )
-    }
-
-    @Test
-    fun disablingPowerSavingEnablesSafetyChecks() {
-        assertEquals(
-            BridgeHealthPolicy.SAFETY_INTERVAL_MS,
+        assertNull(
             BridgeHealthPolicy.nextCheckDelayMs(
                 powerSaving = false,
                 confirmingFailure = false,
             ),
         )
-    }
-
-    @Test
-    fun failureConfirmationOverridesPowerSaving() {
         assertEquals(
             BridgeHealthPolicy.FAILURE_CONFIRM_INTERVAL_MS,
             BridgeHealthPolicy.nextCheckDelayMs(
                 powerSaving = true,
+                confirmingFailure = true,
+            ),
+        )
+        assertEquals(
+            BridgeHealthPolicy.FAILURE_CONFIRM_INTERVAL_MS,
+            BridgeHealthPolicy.nextCheckDelayMs(
+                powerSaving = false,
                 confirmingFailure = true,
             ),
         )

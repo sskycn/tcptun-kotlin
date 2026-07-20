@@ -759,6 +759,15 @@ class TcptunVpnService : VpnService() {
         )
         bridge.setLogCallback(TcptunState::appendLog)
         bridge.setStatusCallback { eventJson -> onBridgeStatusEvent(epoch, eventJson) }
+        // Opt into active telemetry: live remote endpoints, reconnect, and
+        // connection-issue status events. Unregistered optional events still
+        // update StatusJSON but do not invoke the status callback.
+        TcptunBridgeEvents.DefaultRegistered.forEach { event ->
+            runCatching { bridge.registerEvent(event) }
+                .onFailure { err ->
+                    TcptunState.appendLog("register bridge event $event failed: ${err.message}")
+                }
+        }
         bridge.setSocketProtector { fd -> protect(fd) }
         bridge.setAppIdentityProvider(appIdentityProvider::identify)
         configureFlowAnalysis(readRuntimeSettings(this).flowAnalysisApp, epoch)
@@ -784,6 +793,9 @@ class TcptunVpnService : VpnService() {
         bridgeReadyWaiter.getAndSet(null)?.future?.completeExceptionally(
             IllegalStateException("tcptun stopped before core became ready"),
         )
+        TcptunBridgeEvents.DefaultRegistered.forEach { event ->
+            runCatching { bridge.unregisterEvent(event) }
+        }
         synchronized(bridgeLock) {
             bridgeConfigJson = null
             runCatching { bridge.stop() }
@@ -987,10 +999,21 @@ class TcptunVpnService : VpnService() {
 
     private fun handleBridgeStatusEvent(event: BridgeStatusEvent) {
         val eventState = event.state.lowercase()
+        // Live remote endpoint updates only refresh diagnostics; never restart.
+        if (
+            eventState == "remote_endpoints_changed" ||
+            event.reason.equals(TcptunBridgeEvents.RemoteEndpointsChanged, ignoreCase = true)
+        ) {
+            return
+        }
         if (eventState == "degraded") {
             // Refresh per-member balance health so recovered or failing pool
             // members re-score without waiting for a UI refresh.
             requestMemberHealthProbe("tcptun reported degraded")
+            return
+        }
+        if (eventState == "reconnecting") {
+            requestMemberHealthProbe("tcptun reported reconnecting")
             return
         }
         if (eventState != "error" && eventState != "stopped") return
@@ -1093,17 +1116,23 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun vpnHealthFailure(monitorEpoch: Int): HealthFailure? {
-        val status = runCatching { bridge.status() }.getOrElse { err ->
-            TcptunState.updateDiagnostics { it.copy(bridgeStatus = "Unknown", localProxyReachable = false) }
-            return HealthFailure("status unavailable: ${err.message}")
-        }
         val uiVisible = TcptunState.isUiVisible
+        val previous = TcptunState.state.value.diagnostics
+        // Prefer StatusCallback state already folded into TcptunState. Only
+        // UI-forced refreshes reconcile against StatusJSON (authoritative snapshot).
+        val reconcile = shouldReconcileStatusJson()
+        val status = if (reconcile) {
+            reconcileBridgeStatusFromJson()?.ifBlank { TcptunState.status }
+                ?: run {
+                    TcptunState.updateDiagnostics { it.copy(bridgeStatus = "Unknown", localProxyReachable = false) }
+                    return HealthFailure("status unavailable")
+                }
+        } else {
+            TcptunState.status.ifBlank { previous.bridgeStatus }.ifBlank { "Unknown" }
+        }
         val probeLocalProxy = BridgeHealthPolicy.shouldProbeLocalProxy(uiVisible)
         val localProxyReachable = if (probeLocalProxy) canConnectLocalProxy() else true
         val localProxyAddress = activeLocalSocksConnectAddr()
-        // Avoid StateFlow churn while hanging: only publish when something changed
-        // or the user is looking at diagnostics.
-        val previous = TcptunState.state.value.diagnostics
         val nextLocalProxyReachable = if (probeLocalProxy) localProxyReachable else previous.localProxyReachable
         if (
             uiVisible ||
@@ -1127,9 +1156,8 @@ class TcptunVpnService : VpnService() {
         if (probeLocalProxy && !localProxyReachable) {
             return HealthFailure("local proxy $localProxyAddress is not accepting connections")
         }
-        // Member probes update Go balance scores (observeHealthProbe). They are
-        // event-driven with a min interval and do not require the UI.
-        // Aggregate SOCKS/HTTP probes stay UI-only (expensive path through the pool).
+        // Member probes only when an event forced them (network / RUNTIME_* /
+        // membership / UI). Aggregate SOCKS/HTTP stays UI-only.
         if (shouldProbeMemberHealth()) {
             val targets = orderedUpstreamProbeTargets()
             probeActiveMembers(targets, monitorEpoch)
@@ -1142,6 +1170,47 @@ class TcptunVpnService : VpnService() {
             upstreamFailure?.let { return HealthFailure(it) }
         }
         return null
+    }
+
+    /**
+     * Fold the latest StatusJSON into diagnostics and return the simple status
+     * string. Unlike [TcptunState.applyBridgeStatusEvent], this ignores sequence
+     * so a UI pull can re-sync even when no new callback advanced the cursor.
+     */
+    private fun reconcileBridgeStatusFromJson(): String? {
+        return runCatching {
+            val status = bridge.status()
+            val json = JSONObject(bridge.statusJson())
+            val clientIps = normalizeClientIps(
+                buildList {
+                    json.optJSONArray("client_ips")?.let { values ->
+                        for (index in 0 until values.length()) add(values.optString(index))
+                    }
+                },
+            )
+            TcptunState.updateDiagnostics {
+                it.copy(
+                    bridgeStatus = status,
+                    bridgeEventState = json.optString("state").ifBlank { it.bridgeEventState },
+                    bridgeEventReason = json.optString("reason").ifBlank { it.bridgeEventReason },
+                    bridgeEventPhase = json.optString("phase").ifBlank { it.bridgeEventPhase },
+                    bridgeListen = json.optString("listen").ifBlank { it.bridgeListen },
+                    bridgeRemote = if (json.has("remote")) json.optString("remote") else it.bridgeRemote,
+                    bridgeActiveConnections = json.optInt("active_connections", it.bridgeActiveConnections),
+                    bridgeClientIps = if (json.has("client_ips")) clientIps else it.bridgeClientIps,
+                    bridgeMuxSources = json.optInt("mux_sources", it.bridgeMuxSources),
+                    bridgeMuxSessions = json.optInt("mux_sessions", it.bridgeMuxSessions),
+                    bridgeMuxStreams = json.optInt("mux_streams", it.bridgeMuxStreams),
+                    bridgeRecoverable = json.optBoolean("recoverable", it.bridgeRecoverable),
+                    bridgeLastError = if (json.has("last_error")) json.optString("last_error") else it.bridgeLastError,
+                    bridgeTimestampMs = json.optLong("timestamp_ms", it.bridgeTimestampMs).takeIf { ts -> ts > 0 }
+                        ?: it.bridgeTimestampMs,
+                    bridgeSessionId = json.optLong("session_id", it.bridgeSessionId),
+                    bridgeSequence = maxOf(it.bridgeSequence, json.optLong("sequence", 0)),
+                )
+            }
+            status
+        }.getOrNull()
     }
 
     private fun probeActiveMembers(targets: List<UpstreamProbeTarget>, monitorEpoch: Int) {
@@ -1305,20 +1374,18 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun updateBridgeDiagnostics() {
-        val status = runCatching { bridge.status() }.getOrDefault("Unknown")
-        val runtimeSnapshot = bridgeRuntimeSnapshot()
-        val localProxyReachable = canConnectLocalProxy()
+        // Prefer a one-shot StatusJSON reconcile over repeated status() polls.
+        val status = reconcileBridgeStatusFromJson()
+            ?: TcptunState.status.ifBlank { "Unknown" }
+        val uiVisible = TcptunState.isUiVisible
+        val previous = TcptunState.state.value.diagnostics
+        val localProxyReachable = if (uiVisible) canConnectLocalProxy() else previous.localProxyReachable
         TcptunState.updateDiagnostics {
             it.copy(
                 bridgeStatus = status,
                 localProxyReachable = localProxyReachable,
                 localProxyAddress = activeLocalSocksConnectAddr(),
                 localProxyPort = activeSocksPort,
-                bridgeActiveConnections = runtimeSnapshot?.activeConnections ?: it.bridgeActiveConnections,
-                bridgeClientIps = runtimeSnapshot?.clientIps ?: it.bridgeClientIps,
-                bridgeMuxSources = runtimeSnapshot?.muxSources ?: it.bridgeMuxSources,
-                bridgeMuxSessions = runtimeSnapshot?.muxSessions ?: it.bridgeMuxSessions,
-                bridgeMuxStreams = runtimeSnapshot?.muxStreams ?: it.bridgeMuxStreams,
             )
         }
     }
@@ -1377,6 +1444,21 @@ class TcptunVpnService : VpnService() {
         return true
     }
 
+    private fun shouldReconcileStatusJson(): Boolean {
+        val force = forceStatusReconcile.compareAndSet(true, false)
+        val allowed = BridgeHealthPolicy.shouldReconcileStatusJson(
+            uiVisible = TcptunState.isUiVisible,
+            force = force,
+        )
+        if (!allowed) {
+            if (force && !TcptunState.isUiVisible) {
+                forceStatusReconcile.set(true)
+            }
+            return false
+        }
+        return true
+    }
+
     private fun shouldProbeMemberHealth(): Boolean {
         val nowElapsedMs = SystemClock.elapsedRealtime()
         val notBeforeMs = memberHealthProbeNotBeforeElapsedMs.get()
@@ -1388,7 +1470,6 @@ class TcptunVpnService : VpnService() {
         val force = forceNextMemberHealthProbe.compareAndSet(true, false)
         val allowed = BridgeHealthPolicy.shouldProbeMemberHealth(
             force = force,
-            lastProbeAtMs = lastMemberHealthProbeAtElapsedMs,
             nowMs = nowElapsedMs,
             notBeforeMs = notBeforeMs,
         )
@@ -1646,6 +1727,7 @@ class TcptunVpnService : VpnService() {
         private const val KEY_RUNTIME_FLOW_ANALYSIS_APP = "runtimeFlowAnalysisApp"
         private val forceNextUpstreamProbe = AtomicBoolean(false)
         private val forceNextMemberHealthProbe = AtomicBoolean(false)
+        private val forceStatusReconcile = AtomicBoolean(false)
         /** ElapsedRealtime deadline; member probes are blocked until this time. */
         private val memberHealthProbeNotBeforeElapsedMs = AtomicLong(0L)
         private val memberHealthProbeScheduleGeneration = AtomicInteger()
@@ -1771,11 +1853,12 @@ class TcptunVpnService : VpnService() {
         fun requestDenseHealthCheck(reason: String) = requestHealthCheck(reason)
 
         fun requestUiVisibleHealthCheck() {
-            // Full UI-driven refresh: status + local proxy + member balance health
-            // + single aggregate upstream probe through the pool. Immediate; do not
-            // extend the settle window so pull-to-refresh stays responsive.
+            // Full UI-driven refresh: StatusJSON reconcile + local proxy + member
+            // balance health + single aggregate upstream probe through the pool.
+            // Immediate; do not extend the settle window so pull-to-refresh stays responsive.
             forceNextUpstreamProbe.set(true)
             forceNextMemberHealthProbe.set(true)
+            forceStatusReconcile.set(true)
             memberHealthProbeNotBeforeElapsedMs.set(0L)
             memberHealthProbeScheduleGeneration.incrementAndGet()
             TcptunState.appendLog("bridge health check requested: app visible")

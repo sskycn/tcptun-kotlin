@@ -1,41 +1,26 @@
 package com.tcptun.client
 
 /**
- * Event-first VPN health policy. Power saving disables routine periodic polling;
- * disabling it enables a low-frequency safety check.
+ * Event-first VPN health policy. There is no routine timer-based health polling
+ * in either power-saving or normal mode. The monitor sleeps until an event wakes
+ * it (network change, core status, UI refresh, connection membership change).
  *
- * Wakes come from:
- * - network change callbacks
- * - core status callbacks (degraded / error / stopped)
- * - pull-to-refresh / app-visible diagnostic refresh
- * - active connection / TCPing side effects that request a check
+ * A detected failure still gets one bounded confirmation timer so recovery can
+ * reach its restart threshold without waiting for an unrelated event.
  *
- * A failed check also gets one bounded confirmation timer so recovery can reach
- * its restart threshold without waiting for an unrelated event.
- *
- * Pool member health ([shouldProbeMemberHealth]) is separate from the expensive
- * aggregate SOCKS/HTTP upstream probe ([shouldRunUpstreamProbe]): members can be
- * probed on background events so balance selection receives observeHealthProbe
- * updates without requiring the UI.
+ * Pool member health ([shouldProbeMemberHealth]) runs only when explicitly
+ * forced by an event path so balance selection can call ProbeOutboundHealth
+ * without background sweeps. Aggregate SOCKS/HTTP upstream probes remain
+ * UI-only ([shouldRunUpstreamProbe]).
  */
 internal object BridgeHealthPolicy {
     /** One-shot retry used to confirm a failure before restarting the bridge. */
     const val FAILURE_CONFIRM_INTERVAL_MS = 15_000L
 
-    /** Safety polling used only when the user disables power saving. */
-    const val SAFETY_INTERVAL_MS = 300_000L
-
-    /**
-     * Minimum gap between non-forced per-member balance health probes.
-     * Forced probes (network change, degraded, UI refresh, pool membership
-     * change) bypass this throttle once the settle window has elapsed.
-     */
-    const val MEMBER_HEALTH_MIN_INTERVAL_MS = 60_000L
-
     /**
      * After VPN start / bridge restart, wait before the first member health
      * probe so underlying routing and tunnel dials can settle. Probing too
-     * early commonly yields "no route to host" and falsely degrades every pool
+     * early commonly yields "no route to host" and falsely degrade every pool
      * member right after multi-connection start.
      */
     const val MEMBER_HEALTH_STARTUP_DELAY_MS = 4_000L
@@ -43,7 +28,7 @@ internal object BridgeHealthPolicy {
     /** Short settle after StartOutbound / StopOutbound pool membership changes. */
     const val MEMBER_HEALTH_MEMBERSHIP_DELAY_MS = 2_000L
 
-    /** Background safety checks only ask the engine status; loopback TCP is UI-facing. */
+    /** Background safety checks only ask engine status via callbacks; loopback TCP is UI-facing. */
     fun shouldProbeLocalProxy(uiVisible: Boolean): Boolean = uiVisible
 
     /**
@@ -54,23 +39,24 @@ internal object BridgeHealthPolicy {
         uiVisible && force
 
     /**
-     * Per-member [ProbeOutboundHealth] updates balance dynamic scores in Go.
-     * [notBeforeMs] blocks all probes (including forced) until the settle
-     * window ends. After that, forced probes always run; otherwise the minimum
-     * interval applies so event storms do not hammer every pool member.
+     * StatusJSON reconciliation is only for UI-driven recovery (pull / app
+     * visible), not for every event wake. Callbacks already carry live stats.
+     */
+    fun shouldReconcileStatusJson(uiVisible: Boolean, force: Boolean): Boolean =
+        uiVisible && force
+
+    /**
+     * Per-member ProbeOutboundHealth updates balance dynamic scores in Go.
+     * Only forced probes run (network / runtime issue / membership / UI).
+     * [notBeforeMs] still blocks probes during the settle window.
      */
     fun shouldProbeMemberHealth(
         force: Boolean,
-        lastProbeAtMs: Long,
         nowMs: Long,
         notBeforeMs: Long = 0L,
-        minIntervalMs: Long = MEMBER_HEALTH_MIN_INTERVAL_MS,
     ): Boolean {
         if (notBeforeMs > 0L && nowMs < notBeforeMs) return false
-        if (force) return true
-        if (lastProbeAtMs <= 0L) return true
-        if (minIntervalMs <= 0L) return true
-        return nowMs - lastProbeAtMs >= minIntervalMs
+        return force
     }
 
     /** Routing/setup failures that should not stick as user-visible health text. */
@@ -86,13 +72,16 @@ internal object BridgeHealthPolicy {
     }
 
     /**
-     * Power saving has no routine timer. A detected failure still gets one
-     * bounded confirmation check so the restart threshold can be reached.
+     * No routine timer in any mode. A detected failure still gets one bounded
+     * confirmation check so the restart threshold can be reached.
+     *
+     * [powerSaving] is retained for call-site compatibility and no longer
+     * enables a safety poll interval.
      */
+    @Suppress("UNUSED_PARAMETER")
     fun nextCheckDelayMs(powerSaving: Boolean, confirmingFailure: Boolean): Long? = when {
         confirmingFailure -> FAILURE_CONFIRM_INTERVAL_MS
-        powerSaving -> null
-        else -> SAFETY_INTERVAL_MS
+        else -> null
     }
 
     fun isStructuralRuntimeChange(previous: RuntimeSettings, next: RuntimeSettings): Boolean {

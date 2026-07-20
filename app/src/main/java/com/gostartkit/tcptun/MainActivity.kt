@@ -1999,7 +1999,6 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
                                     )
                                 },
                             )
-                            DiagnosticsLine(stringResource(R.string.diag_power_saving), if (diagnostics.powerSavingMode) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                             DiagnosticsLine(stringResource(R.string.recent_restart_reason), diagnostics.lastRestartReason)
                         }
                     }
@@ -2303,9 +2302,6 @@ private fun SettingsPage(onBack: () -> Unit) {
                             visualTransformation = PasswordVisualTransformation(),
                             modifier = Modifier.fillMaxWidth(),
                         )
-                        ToggleRow(stringResource(R.string.power_saving_mode), settings.powerSavingMode) { checked ->
-                            saveSettings(settings.copy(powerSavingMode = checked))
-                        }
                         Text(
                             stringResource(R.string.native_tun_capabilities_note),
                             style = MaterialTheme.typography.bodyMedium,
@@ -2313,11 +2309,6 @@ private fun SettingsPage(onBack: () -> Unit) {
                         )
                         Text(
                             stringResource(R.string.socks_settings_note),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            stringResource(R.string.power_saving_note),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -2348,7 +2339,6 @@ private fun SettingsPage(onBack: () -> Unit) {
                             if (settings.routeLocalProxyTraffic) stringResource(R.string.enabled) else stringResource(R.string.disabled),
                         )
                         DiagnosticsLine(stringResource(R.string.vpn_traffic_mode), stringResource(R.string.tcp_udp))
-                        DiagnosticsLine(stringResource(R.string.diag_power_saving), if (diagnostics.powerSavingMode) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                     }
                 }
             }
@@ -2744,10 +2734,6 @@ private fun RouteManagementPage(onBack: () -> Unit) {
                 if (index >= 0) next[index] = updated else next.add(updated)
                 if (persist(next)) editingRule = null
             },
-            onDeleteRequest = {
-                editingRule = null
-                deleteCandidate = rule
-            },
         )
     }
 
@@ -2954,7 +2940,6 @@ private fun ManagedRouteRuleDialog(
     isNew: Boolean,
     onDismiss: () -> Unit,
     onSave: (ManagedRouteRule) -> Unit,
-    onDeleteRequest: () -> Unit,
 ) {
     var type by remember(rule.id) { mutableStateOf(rule.type) }
     var value by remember(rule.id) { mutableStateOf(rule.value) }
@@ -3058,15 +3043,8 @@ private fun ManagedRouteRuleDialog(
             }
         },
         dismissButton = {
-            Row {
-                if (!isNew) {
-                    TextButton(onClick = onDeleteRequest) {
-                        Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error)
-                    }
-                }
-                TextButton(onClick = onDismiss) {
-                    Text(stringResource(R.string.cancel))
-                }
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
             }
         },
     )

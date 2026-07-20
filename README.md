@@ -46,6 +46,8 @@ func NewEngine() *Engine
 func ValidateConfig(configJson string) error
 func (e *Engine) SetLogCallback(cb LogCallback)
 func (e *Engine) SetStatusCallback(cb StatusCallback)
+func (e *Engine) RegisterEvent(event string) error
+func (e *Engine) UnregisterEvent(event string) error
 func (e *Engine) SetSocketProtector(p SocketProtector)
 func (e *Engine) SetAppIdentityProvider(provider AppIdentityProvider)
 func (e *Engine) Configure(configJson string) error
@@ -64,6 +66,11 @@ func (e *Engine) Status() string
 func (e *Engine) StatusJSON() string
 ```
 
+Optional telemetry must be opted into with `RegisterEvent`. The app registers:
+
+- `REMOTE_ENDPOINTS_CHANGED` — live managed-tunnel remotes for diagnostics
+- `RUNTIME_RECONNECTING` / `RUNTIME_CONNECTION_ISSUE` — health-check wakes
+
 Each `TcptunVpnService` instance owns one `Engine`; runtime control is available
 only through that instance.
 
@@ -75,26 +82,25 @@ first and may select a specific configured profile by its stable tag; unmatched 
 pool, whose effective weights follow active load, observed connection latency,
 and failures while destination affinity keeps related sessions on one link.
 Event-driven checks call `ProbeOutboundHealth` for every active structured pool
-member (VPN start, network change, core degraded/error, pool membership change,
-TCPing failures, UI refresh, and throttled safety wakes). Failed checks increase
-only that member's balance penalty; a successful check clears the penalty so a
-recovered member can immediately re-enter selection. Member probes are throttled
-to at most once per minute unless forced. `OutboundsStatusJSON` reports `health`,
-`failures`, `latency_ms`, `last_observed_at_ms`, and `last_succeeded_at_ms`
-without exposing credentials. The client targets extreme hang efficiency while
-keeping the VPN tunnel and the local mixed/SOCKS proxy fully usable. App traffic
-keeps the data path alive; control-plane work stays near zero while the UI is
-closed.
+member when forced (VPN start, network change, core degraded/reconnect, pool
+membership change, TCPing failures, UI refresh). Failed checks increase only
+that member's balance penalty; a successful check clears the penalty so a
+recovered member can immediately re-enter selection. There is no background
+member-health sweep. `OutboundsStatusJSON` reports `health`, `failures`,
+`latency_ms`, `last_observed_at_ms`, and `last_succeeded_at_ms` without exposing
+credentials. The client targets extreme hang efficiency while keeping the VPN
+tunnel and the local mixed/SOCKS proxy fully usable. App traffic keeps the data
+path alive; control-plane work stays near zero while the UI is closed.
 
-With power saving enabled (the default), there is no routine timer-based health
-polling. The bridge monitor sleeps until an event wakes it: network change
-callbacks, core status callbacks (degraded/error), pull-to-refresh, or opening
-the app. A failed check schedules one bounded confirmation check before recovery.
-Disabling power saving enables a five-minute safety check (which may also refresh
-member balance health when the throttle allows). Loopback proxy probes and the
-aggregate SOCKS/HTTP upstream probe run only on UI-driven refreshes. Unlock wakes
-and background logcat I/O are skipped. Power-saving-only setting changes apply
-without restarting the VPN tunnel.
+There is no routine timer-based health polling. The bridge monitor
+sleeps until an event wakes it: network change callbacks, core status callbacks
+(including registered `REMOTE_ENDPOINTS_CHANGED` / `RUNTIME_RECONNECTING` /
+`RUNTIME_CONNECTION_ISSUE`), pull-to-refresh, or opening the app. A failed check
+schedules one bounded confirmation check before recovery. Routine wakes prefer
+StatusCallback state already folded into `TcptunState`; full `StatusJSON`
+reconciliation, loopback proxy probes, and the aggregate SOCKS/HTTP upstream
+probe run only on UI-driven refreshes. Unlock wakes and background logcat I/O
+are skipped.
 Generated profiles use group mux with no warm spare, so the Go runtime can retire
 idle carriers. When flow analysis is disabled and no app route is configured, the
 bridge also skips Android UID ownership lookups entirely.

@@ -118,6 +118,7 @@ internal data class BridgeStatusEvent(
             "running",
             "degraded",
             "reconnecting",
+            "remote_endpoints_changed",
             "error",
             "stopped",
         )
@@ -343,6 +344,7 @@ object TcptunState {
                 bridgeEventReason = event.reason.ifBlank { "None" },
                 bridgeEventPhase = event.phase.ifBlank { "None" },
                 bridgeListen = event.listen,
+                // An empty remote explicitly means that no managed outbound is connected.
                 bridgeRemote = event.remote,
                 bridgeActiveConnections = event.activeConnections,
                 bridgeClientIps = event.clientIps,
@@ -494,6 +496,7 @@ object TcptunState {
             "stopped" -> "Stopped"
             "error" -> "Error"
             "core_ready", "running", "upstream_connecting", "upstream_connected", "degraded", "reconnecting",
+            "remote_endpoints_changed",
             "outbound_running", "outbound_stopping", "outbound_stopped", "outbound_error" -> "Running"
             else -> "Unknown"
         }
