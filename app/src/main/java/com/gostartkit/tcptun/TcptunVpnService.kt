@@ -140,6 +140,7 @@ class TcptunVpnService : VpnService() {
     @Volatile private var activeRouteLocalProxyTraffic = false
     @Volatile private var powerSavingMode = true
     @Volatile private var upstreamProbeIndex = 0
+    @Volatile private var lastMemberHealthProbeAtElapsedMs = 0L
     @Volatile private var runtimeSettingsApplyGeneration = 0
     private val runtimeSettingsApplyLock = Any()
     private var runtimeSettingsForceRestartPending = false
@@ -242,6 +243,9 @@ class TcptunVpnService : VpnService() {
                 TcptunState.setStatus("Running")
                 updateBridgeDiagnostics()
                 updateNotification(runningNotificationState(plan))
+                // Seed balance selection with explicit member health as soon as
+                // the pool is live (not only when the UI later refreshes).
+                requestMemberHealthProbe("vpn started")
         } catch (err: Exception) {
             if (generation != lifecycleGeneration.get()) {
                 TcptunState.appendLog("VPN start cancelled")
@@ -312,7 +316,9 @@ class TcptunVpnService : VpnService() {
             }
             runningPlan = nextPlan
             TcptunState.initializeProfileHealth(nextPlan.activeProfiles)
-            requestHealthCheck("active connections changed")
+            // Pool membership changed: force member probes so Start/StopOutbound
+            // immediately updates balance penalties for selection.
+            requestMemberHealthProbe("active connections changed")
             saveDesiredRunningPlan(this, nextPlan)
             updateNotification(runningNotificationState(nextPlan))
             updateBridgeDiagnostics()
@@ -400,7 +406,9 @@ class TcptunVpnService : VpnService() {
             }
             TcptunState.finishTcping(requestId)
             if (results.any { it.elapsedMs == null }) {
-                requestHealthCheck("TCPing failed on ${results.count { it.elapsedMs == null }} connection(s)")
+                requestMemberHealthProbe(
+                    "TCPing failed on ${results.count { it.elapsedMs == null }} connection(s)",
+                )
             }
         }
     }
@@ -516,8 +524,11 @@ class TcptunVpnService : VpnService() {
         runCatching { setUnderlyingNetworks(network?.let { arrayOf(it) }) }
             .onFailure { err -> TcptunState.appendLog("set underlying network failed: ${err.message}") }
         if (tun != null && !stopping) {
-            requestHealthCheck(reason)
-            if (!initialSelection && TcptunState.status == "Running") requestBridgeRestart(reason)
+            if (!initialSelection && TcptunState.status == "Running") {
+                requestBridgeRestart(reason)
+            } else {
+                requestMemberHealthProbe(reason)
+            }
         }
     }
 
@@ -575,6 +586,7 @@ class TcptunVpnService : VpnService() {
             activeSocksListenAll = false
             activeRouteLocalProxyTraffic = false
             powerSavingMode = true
+            lastMemberHealthProbeAtElapsedMs = 0L
             runningPlan = null
             TcptunState.updateDiagnostics {
                 it.copy(
@@ -752,6 +764,9 @@ class TcptunVpnService : VpnService() {
             )
             TcptunState.appendLog("tcptun bridge transaction restarted")
             updateBridgeDiagnostics()
+            // The previous runtime's balance observations were discarded by
+            // the restart, so seed health only after the replacement is ready.
+            requestMemberHealthProbe("bridge restarted: $reason")
         } catch (err: Exception) {
             TcptunState.error("tcptun bridge restart failed: ${err.message}")
             stopVpn(setStopped = false, clearSavedConfig = false)
@@ -894,12 +909,14 @@ class TcptunVpnService : VpnService() {
     private fun handleBridgeStatusEvent(event: BridgeStatusEvent) {
         val eventState = event.state.lowercase()
         if (eventState == "degraded") {
-            requestHealthCheck("tcptun reported degraded")
+            // Refresh per-member balance health so recovered or failing pool
+            // members re-score without waiting for a UI refresh.
+            requestMemberHealthProbe("tcptun reported degraded")
             return
         }
         if (eventState != "error" && eventState != "stopped") return
         if (stopping || bridgeRestarting || tun == null) return
-        requestHealthCheck("tcptun reported $eventState")
+        requestMemberHealthProbe("tcptun reported $eventState")
         requestBridgeRestart("tcptun reported $eventState")
     }
 
@@ -1031,10 +1048,16 @@ class TcptunVpnService : VpnService() {
         if (probeLocalProxy && !localProxyReachable) {
             return HealthFailure("local proxy $localProxyAddress is not accepting connections")
         }
-        if (shouldRunUpstreamProbe()) {
+        // Member probes update Go balance scores (observeHealthProbe). They are
+        // event-driven with a min interval and do not require the UI.
+        // Aggregate SOCKS/HTTP probes stay UI-only (expensive path through the pool).
+        if (shouldProbeMemberHealth()) {
             val targets = orderedUpstreamProbeTargets()
             probeActiveMembers(targets, monitorEpoch)
             if (monitorEpoch != monitorGeneration.get() || stopping) return null
+        }
+        if (shouldRunUpstreamProbe()) {
+            val targets = orderedUpstreamProbeTargets()
             val upstreamFailure = upstreamProbeFailure(targets)
             updateRawProfileHealth(upstreamFailure)
             upstreamFailure?.let { return HealthFailure(it) }
@@ -1244,6 +1267,19 @@ class TcptunVpnService : VpnService() {
             }
             return false
         }
+        return true
+    }
+
+    private fun shouldProbeMemberHealth(): Boolean {
+        val force = forceNextMemberHealthProbe.compareAndSet(true, false)
+        val nowElapsedMs = SystemClock.elapsedRealtime()
+        val allowed = BridgeHealthPolicy.shouldProbeMemberHealth(
+            force = force,
+            lastProbeAtMs = lastMemberHealthProbeAtElapsedMs,
+            nowMs = nowElapsedMs,
+        )
+        if (!allowed) return false
+        lastMemberHealthProbeAtElapsedMs = nowElapsedMs
         return true
     }
 
@@ -1495,6 +1531,7 @@ class TcptunVpnService : VpnService() {
         private const val KEY_RUNTIME_ROUTE_LOCAL_PROXY_TRAFFIC = "runtimeRouteLocalProxyTraffic"
         private const val KEY_RUNTIME_FLOW_ANALYSIS_APP = "runtimeFlowAnalysisApp"
         private val forceNextUpstreamProbe = AtomicBoolean(false)
+        private val forceNextMemberHealthProbe = AtomicBoolean(false)
         private val activeMonitorWakeCallback = AtomicReference<(() -> Unit)?>(null)
         private val UPSTREAM_PROBE_TARGETS = listOf(
             UpstreamProbeTarget("Google 204", "connectivitycheck.gstatic.com", path = "/generate_204", expectedStatus = 204),
@@ -1567,12 +1604,24 @@ class TcptunVpnService : VpnService() {
             activeMonitorWakeCallback.get()?.invoke()
         }
 
+        /**
+         * Event-driven health check that also forces per-member balance probes
+         * ([ProbeOutboundHealth]), bypassing the member-probe throttle so pool
+         * selection can recover without a UI refresh.
+         */
+        fun requestMemberHealthProbe(reason: String) {
+            forceNextMemberHealthProbe.set(true)
+            requestHealthCheck(reason)
+        }
+
         @Deprecated("Use requestHealthCheck", ReplaceWith("requestHealthCheck(reason)"))
         fun requestDenseHealthCheck(reason: String) = requestHealthCheck(reason)
 
         fun requestUiVisibleHealthCheck() {
-            // One full UI-driven refresh: status + local proxy + single upstream probe.
+            // Full UI-driven refresh: status + local proxy + member balance health
+            // + single aggregate upstream probe through the pool.
             forceNextUpstreamProbe.set(true)
+            forceNextMemberHealthProbe.set(true)
             TcptunState.appendLog("bridge health check requested: app visible")
             activeMonitorWakeCallback.get()?.invoke()
         }

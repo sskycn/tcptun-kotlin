@@ -12,6 +12,11 @@ package com.tcptun.client
  *
  * A failed check also gets one bounded confirmation timer so recovery can reach
  * its restart threshold without waiting for an unrelated event.
+ *
+ * Pool member health ([shouldProbeMemberHealth]) is separate from the expensive
+ * aggregate SOCKS/HTTP upstream probe ([shouldRunUpstreamProbe]): members can be
+ * probed on background events so balance selection receives observeHealthProbe
+ * updates without requiring the UI.
  */
 internal object BridgeHealthPolicy {
     /** One-shot retry used to confirm a failure before restarting the bridge. */
@@ -20,15 +25,39 @@ internal object BridgeHealthPolicy {
     /** Safety polling used only when the user disables power saving. */
     const val SAFETY_INTERVAL_MS = 300_000L
 
+    /**
+     * Minimum gap between non-forced per-member balance health probes.
+     * Forced probes (network change, degraded, UI refresh, pool membership
+     * change) bypass this throttle.
+     */
+    const val MEMBER_HEALTH_MIN_INTERVAL_MS = 60_000L
+
     /** Background safety checks only ask the engine status; loopback TCP is UI-facing. */
     fun shouldProbeLocalProxy(uiVisible: Boolean): Boolean = uiVisible
 
     /**
-     * Upstream latency probes are never timed. They run only when the UI is
-     * visible and a user-driven refresh forced the next probe.
+     * Aggregate SOCKS/TLS/HTTP upstream probes are never timed. They run only
+     * when the UI is visible and a user-driven refresh forced the next probe.
      */
     fun shouldRunUpstreamProbe(uiVisible: Boolean, force: Boolean): Boolean =
         uiVisible && force
+
+    /**
+     * Per-member [ProbeOutboundHealth] updates balance dynamic scores in Go.
+     * Forced probes always run; otherwise the minimum interval applies so event
+     * storms (connection count churn) do not hammer every pool member.
+     */
+    fun shouldProbeMemberHealth(
+        force: Boolean,
+        lastProbeAtMs: Long,
+        nowMs: Long,
+        minIntervalMs: Long = MEMBER_HEALTH_MIN_INTERVAL_MS,
+    ): Boolean {
+        if (force) return true
+        if (lastProbeAtMs <= 0L) return true
+        if (minIntervalMs <= 0L) return true
+        return nowMs - lastProbeAtMs >= minIntervalMs
+    }
 
     /**
      * Power saving has no routine timer. A detected failure still gets one

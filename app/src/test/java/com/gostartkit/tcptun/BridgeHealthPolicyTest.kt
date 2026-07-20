@@ -30,6 +30,50 @@ class BridgeHealthPolicyTest {
     }
 
     @Test
+    fun memberHealthProbeRunsWhenForcedRegardlessOfInterval() {
+        val now = 1_000_000L
+        assertTrue(
+            BridgeHealthPolicy.shouldProbeMemberHealth(
+                force = true,
+                lastProbeAtMs = now - 1_000L,
+                nowMs = now,
+            ),
+        )
+    }
+
+    @Test
+    fun memberHealthProbeRunsOnFirstCheckWithoutForce() {
+        assertTrue(
+            BridgeHealthPolicy.shouldProbeMemberHealth(
+                force = false,
+                lastProbeAtMs = 0L,
+                nowMs = 10_000L,
+            ),
+        )
+    }
+
+    @Test
+    fun memberHealthProbeRespectsMinimumIntervalWithoutForce() {
+        val last = 100_000L
+        val tooSoon = last + BridgeHealthPolicy.MEMBER_HEALTH_MIN_INTERVAL_MS - 1
+        val ready = last + BridgeHealthPolicy.MEMBER_HEALTH_MIN_INTERVAL_MS
+        assertFalse(
+            BridgeHealthPolicy.shouldProbeMemberHealth(
+                force = false,
+                lastProbeAtMs = last,
+                nowMs = tooSoon,
+            ),
+        )
+        assertTrue(
+            BridgeHealthPolicy.shouldProbeMemberHealth(
+                force = false,
+                lastProbeAtMs = last,
+                nowMs = ready,
+            ),
+        )
+    }
+
+    @Test
     fun powerSavingHasNoRoutineTimer() {
         assertNull(
             BridgeHealthPolicy.nextCheckDelayMs(
