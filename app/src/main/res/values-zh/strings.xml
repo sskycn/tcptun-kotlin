@@ -125,8 +125,10 @@
     <string name="socks_port">本地代理端口</string>
     <string name="socks_port_error">请输入 1 到 65535 之间的端口。</string>
     <string name="socks_listen_all">监听所有网卡</string>
+    <string name="route_local_proxy_traffic">本地代理走路由规则</string>
+    <string name="route_local_proxy_traffic_note">默认关闭。开启后，mixed/SOCKS 监听流量与 VPN（TUN）流量共用同一套托管路由规则。修改后需重启 VPN 生效。</string>
     <string name="route_management">路由管理</string>
-    <string name="route_management_note">规则优先从上到下匹配，并可指定任意连接；未命中流量使用活动连接动态池。离开页面时应用变更。</string>
+    <string name="route_management_note">规则优先从上到下匹配 VPN（TUN）流量。在设置中开启「本地代理走路由规则」后，mixed/SOCKS 也会按相同规则分流；未命中流量使用活动连接动态池。离开页面时应用变更。</string>
     <string name="route_rules_count">已启用 %1$d 条规则</string>
     <string name="empty_route_rules">还没有路由规则</string>
     <string name="add_route_rule">添加路由规则</string>
@@ -159,13 +161,13 @@
     <string name="socks_username">SOCKS 用户名</string>
     <string name="socks_password">SOCKS 密码</string>
     <string name="socks_auth">SOCKS 认证</string>
-    <string name="socks_settings_note">本地监听默认使用 SOCKS5；选择 mixed 后可同时接受 SOCKS5 和 HTTP 代理客户端。默认绑定 127.0.0.1，启用监听所有网卡后绑定 0.0.0.0。用户名和密码可留空。</string>
+    <string name="socks_settings_note">本地监听默认使用 SOCKS5；选择 mixed 后可同时接受 SOCKS5 和 HTTP 代理客户端。默认绑定 127.0.0.1，启用监听所有网卡后绑定 0.0.0.0。用户名和密码可留空。默认本地代理走默认出口；开启「本地代理走路由规则」后才会走托管路由。</string>
     <string name="seconds_value">%1$d 秒</string>
     <string name="recent_restart_reason">最近重启原因</string>
     <string name="transparent_proxy_settings">透明代理参数</string>
     <string name="power_saving_mode">省电模式</string>
     <string name="power_saving_note">极致挂机（默认开）：VPN 与 mixed 代理保持可用，不做常规定时轮询；检测到失败时仍会复检一次。关闭后启用每五分钟一次的安全检查。</string>
-    <string name="runtime_settings_note">编辑时会先保存设置；返回时仅当 MTU/本地代理监听与认证等隧道相关参数变化时，才会重启正在运行的 VPN。省电模式无需重启即可生效。</string>
+    <string name="runtime_settings_note">编辑时会先保存设置；返回时仅当 MTU/本地代理监听与认证/本地代理走路由等隧道相关参数变化时，才会重启正在运行的 VPN。省电模式无需重启即可生效。</string>
     <string name="native_tun_capabilities_note">原生 TUN 支持 TCP 和 UDP；DNS 默认在 Go 隧道内接管并启用 fake-IP。</string>
     <string name="vpn_traffic_mode">VPN 流量模式</string>
     <string name="tcp_udp">TCP + UDP</string>

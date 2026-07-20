@@ -126,8 +126,10 @@
     <string name="socks_port">Local proxy port</string>
     <string name="socks_port_error">Use a port from 1 to 65535.</string>
     <string name="socks_listen_all">Listen on all interfaces</string>
+    <string name="route_local_proxy_traffic">Route local proxy traffic</string>
+    <string name="route_local_proxy_traffic_note">Off by default. When enabled, mixed/SOCKS listener traffic uses the same managed route rules as VPN (TUN) traffic. Requires a VPN restart when changed.</string>
     <string name="route_management">Route management</string>
-    <string name="route_management_note">Rules are evaluated first from top to bottom and can target any connection. Unmatched traffic uses the active dynamic pool. Changes apply when you leave this page.</string>
+    <string name="route_management_note">Rules are evaluated first from top to bottom for VPN (TUN) traffic. Enable “Route local proxy traffic” in Settings to also apply them to mixed/SOCKS. Unmatched traffic uses the active dynamic pool. Changes apply when you leave this page.</string>
     <string name="route_rules_count">%1$d enabled rules</string>
     <string name="empty_route_rules">No route rules yet</string>
     <string name="add_route_rule">Add route rule</string>
@@ -160,13 +162,13 @@
     <string name="socks_username">SOCKS username</string>
     <string name="socks_password">SOCKS password</string>
     <string name="socks_auth">SOCKS auth</string>
-    <string name="socks_settings_note">The local listener uses SOCKS5 by default. Select mixed to accept both SOCKS5 and HTTP proxy clients. It binds to 127.0.0.1 by default; enable all interfaces to bind 0.0.0.0. Username/password are optional.</string>
+    <string name="socks_settings_note">The local listener uses SOCKS5 by default. Select mixed to accept both SOCKS5 and HTTP proxy clients. It binds to 127.0.0.1 by default; enable all interfaces to bind 0.0.0.0. Username/password are optional. Local proxy traffic uses the default outbound unless “Route local proxy traffic” is enabled.</string>
     <string name="seconds_value">%1$ds</string>
     <string name="recent_restart_reason">Last restart reason</string>
     <string name="transparent_proxy_settings">Transparent proxy settings</string>
     <string name="power_saving_mode">Power saving mode</string>
     <string name="power_saving_note">Extreme hang mode (default): VPN and mixed proxy stay up while the phone sleeps. There is no routine timer polling; failures still receive one confirmation check. Turning this mode off enables a five-minute safety check.</string>
-    <string name="runtime_settings_note">Settings are saved while editing. When you go back, only changes that affect the tunnel (MTU, local proxy bind/auth) restart the running VPN. Power saving applies without a restart.</string>
+    <string name="runtime_settings_note">Settings are saved while editing. When you go back, only changes that affect the tunnel (MTU, local proxy bind/auth, route local proxy) restart the running VPN. Power saving applies without a restart.</string>
     <string name="native_tun_capabilities_note">Native TUN supports TCP and UDP. Go handles DNS inside the tunnel and enables fake-IP by default.</string>
     <string name="vpn_traffic_mode">VPN traffic mode</string>
     <string name="tcp_udp">TCP + UDP</string>

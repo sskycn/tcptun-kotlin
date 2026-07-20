@@ -71,6 +71,13 @@ class BridgeHealthPolicyTest {
     }
 
     @Test
+    fun structuralRuntimeChangeIncludesRouteLocalProxyTraffic() {
+        val base = RuntimeSettings()
+        val enabled = base.copy(routeLocalProxyTraffic = true)
+        assertTrue(BridgeHealthPolicy.isStructuralRuntimeChange(base, enabled))
+    }
+
+    @Test
     fun forcedRuntimeRestartRebuildsNonSettingsConfiguration() {
         val settings = RuntimeSettings()
         assertTrue(

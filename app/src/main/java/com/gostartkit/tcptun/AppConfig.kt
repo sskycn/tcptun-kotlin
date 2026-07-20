@@ -7,8 +7,16 @@ import java.util.UUID
 
 internal const val DefaultLocalProxyProtocol = "socks5"
 internal const val AndroidTunInboundTag = "tun"
+internal const val AndroidLocalProxyInboundTag = "local"
 internal val LocalProxyProtocols = listOf(DefaultLocalProxyProtocol, "mixed")
 internal val AndroidTunNetworks = listOf("tcp", "udp")
+
+/** Inbound tags matched by managed route rules. TUN always; local mixed/SOCKS when enabled. */
+internal fun managedRouteInboundTags(routeLocalProxyTraffic: Boolean): JSONArray =
+    JSONArray().apply {
+        put(AndroidTunInboundTag)
+        if (routeLocalProxyTraffic) put(AndroidLocalProxyInboundTag)
+    }
 
 internal fun normalizeStoredServerHost(value: String): String =
     value.trim().removeSurrounding("[", "]")
@@ -189,6 +197,7 @@ data class AppConfig(
         socks5Username: String = "",
         socks5Password: String = "",
         managedRouteRules: List<ManagedRouteRule> = emptyList(),
+        routeLocalProxyTraffic: Boolean = false,
     ): String {
         if (rawConfigJson.isNotBlank()) {
             return prepareRawConfigForAndroid(
@@ -204,7 +213,7 @@ data class AppConfig(
         val normalizedLocalProxyProtocol = normalizeLocalProxyProtocol(localProxyProtocol)
         val networks = JSONArray().apply { AndroidTunNetworks.forEach(::put) }
         val inbound = JSONObject()
-            .put("tag", "local")
+            .put("tag", AndroidLocalProxyInboundTag)
             .put("type", normalizedLocalProxyProtocol)
             .put("address", JSONArray().put(normalizedListenAddr))
             .put("network", networks)
@@ -281,7 +290,7 @@ data class AppConfig(
         if (activeManagedRules.any { it.outbound == ManagedRouteOutbound.Direct }) {
             rules.put(
                 JSONObject()
-                    .put("inbound", JSONArray().put(AndroidTunInboundTag))
+                    .put("inbound", managedRouteInboundTags(routeLocalProxyTraffic))
                     .put("network", JSONArray().put("tcp"))
                     .put(
                         "domains",
@@ -296,7 +305,7 @@ data class AppConfig(
             rules.put(
                 rule.putMatchCondition(
                     JSONObject()
-                        .put("inbound", JSONArray().put(AndroidTunInboundTag))
+                        .put("inbound", managedRouteInboundTags(routeLocalProxyTraffic))
                         .put("outbound", rule.outbound.tag),
                 ),
             )

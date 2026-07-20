@@ -2262,6 +2262,17 @@ private fun SettingsPage(onBack: () -> Unit) {
                         ToggleRow(stringResource(R.string.socks_listen_all), settings.socksListenAll) { checked ->
                             saveSettings(settings.copy(socksListenAll = checked))
                         }
+                        ToggleRow(
+                            stringResource(R.string.route_local_proxy_traffic),
+                            settings.routeLocalProxyTraffic,
+                        ) { checked ->
+                            saveSettings(settings.copy(routeLocalProxyTraffic = checked))
+                        }
+                        Text(
+                            stringResource(R.string.route_local_proxy_traffic_note),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         OutlinedTextField(
                             value = settings.socksUsername,
                             onValueChange = { value -> saveSettings(settings.copy(socksUsername = value.take(255))) },
@@ -2317,6 +2328,10 @@ private fun SettingsPage(onBack: () -> Unit) {
                         DiagnosticsLine(stringResource(R.string.local_proxy_protocol), settings.localProxyProtocol)
                         DiagnosticsLine(stringResource(R.string.socks_listen), TcptunVpnService.localSocksListenAddr(settings))
                         DiagnosticsLine(stringResource(R.string.socks_auth), if (settings.socksUsername.isNotEmpty() || settings.socksPassword.isNotEmpty()) stringResource(R.string.enabled) else stringResource(R.string.disabled))
+                        DiagnosticsLine(
+                            stringResource(R.string.route_local_proxy_traffic),
+                            if (settings.routeLocalProxyTraffic) stringResource(R.string.enabled) else stringResource(R.string.disabled),
+                        )
                         DiagnosticsLine(stringResource(R.string.vpn_traffic_mode), stringResource(R.string.tcp_udp))
                         DiagnosticsLine(stringResource(R.string.diag_power_saving), if (diagnostics.powerSavingMode) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                     }

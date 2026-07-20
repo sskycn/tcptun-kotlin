@@ -179,6 +179,8 @@ preserves all supported `log`, `inbounds`, `outbounds`, `route`, and `dns`
 fields, removes the retired top-level `discovery` field from older saved
 configs. VPN rules use the platform inbound tag `tun`; a separate `android-vpn`
 SOCKS5/mixed inbound remains available for local or LAN proxy clients.
+Managed route rules match `tun` by default. Enable **Route local proxy traffic**
+in Settings to also match the local mixed/SOCKS inbound (`local`).
 
 Build the AAR through this Kotlin project wrapper:
 

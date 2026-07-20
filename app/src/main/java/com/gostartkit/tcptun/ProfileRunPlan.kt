@@ -86,6 +86,7 @@ internal fun ProfileRunPlan.toBridgeJson(
     socks5Username: String = "",
     socks5Password: String = "",
     managedRouteRules: List<ManagedRouteRule> = emptyList(),
+    routeLocalProxyTraffic: Boolean = false,
 ): String {
     val plan = normalized()
     val rawProfile = plan.profiles.singleOrNull()?.takeIf { it.rawConfigJson.isNotBlank() }
@@ -97,6 +98,7 @@ internal fun ProfileRunPlan.toBridgeJson(
             socks5Username = socks5Username,
             socks5Password = socks5Password,
             managedRouteRules = managedRouteRules,
+            routeLocalProxyTraffic = routeLocalProxyTraffic,
         )
     }
 
@@ -110,6 +112,7 @@ internal fun ProfileRunPlan.toBridgeJson(
                 verbose = verbose,
                 socks5Username = socks5Username,
                 socks5Password = socks5Password,
+                routeLocalProxyTraffic = routeLocalProxyTraffic,
             ),
         )
     }
@@ -147,7 +150,7 @@ internal fun ProfileRunPlan.toBridgeJson(
     if (activeRules.isNotEmpty()) {
         rules.put(
             JSONObject()
-                .put("inbound", JSONArray().put(AndroidTunInboundTag))
+                .put("inbound", managedRouteInboundTags(routeLocalProxyTraffic))
                 .put("network", JSONArray().put("tcp"))
                 .put("domains", JSONArray().put("connectivitycheck.gstatic.com").put("cp.cloudflare.com"))
                 .put("outbound", BalancedOutboundTag),
@@ -164,7 +167,7 @@ internal fun ProfileRunPlan.toBridgeJson(
         }
         val route = rule.putMatchCondition(
             JSONObject()
-                .put("inbound", JSONArray().put(AndroidTunInboundTag))
+                .put("inbound", managedRouteInboundTags(routeLocalProxyTraffic))
                 .put("outbound", targetTag),
         )
         if (targetProfile != null) {

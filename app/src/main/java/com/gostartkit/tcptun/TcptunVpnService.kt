@@ -40,6 +40,8 @@ data class RuntimeSettings(
     val socksListenAll: Boolean = false,
     val socksUsername: String = "",
     val socksPassword: String = "",
+    /** When true, managed route rules also match mixed/SOCKS local proxy traffic. Default off. */
+    val routeLocalProxyTraffic: Boolean = false,
     val flowAnalysisApp: String = "",
 )
 
@@ -135,6 +137,7 @@ class TcptunVpnService : VpnService() {
     @Volatile private var activeSocksPassword = ""
     @Volatile private var activeLocalProxyProtocol = DefaultLocalProxyProtocol
     @Volatile private var activeSocksListenAll = false
+    @Volatile private var activeRouteLocalProxyTraffic = false
     @Volatile private var powerSavingMode = true
     @Volatile private var upstreamProbeIndex = 0
     @Volatile private var runtimeSettingsApplyGeneration = 0
@@ -570,6 +573,7 @@ class TcptunVpnService : VpnService() {
             activeSocksPassword = ""
             activeLocalProxyProtocol = DefaultLocalProxyProtocol
             activeSocksListenAll = false
+            activeRouteLocalProxyTraffic = false
             powerSavingMode = true
             runningPlan = null
             TcptunState.updateDiagnostics {
@@ -618,6 +622,7 @@ class TcptunVpnService : VpnService() {
         activeSocksPassword = settings.socksPassword
         activeLocalProxyProtocol = settings.localProxyProtocol
         activeSocksListenAll = settings.socksListenAll
+        activeRouteLocalProxyTraffic = settings.routeLocalProxyTraffic
         powerSavingMode = settings.powerSavingMode
     }
 
@@ -630,6 +635,7 @@ class TcptunVpnService : VpnService() {
             socksListenAll = activeSocksListenAll,
             socksUsername = activeSocksUsername,
             socksPassword = activeSocksPassword,
+            routeLocalProxyTraffic = activeRouteLocalProxyTraffic,
         )
     }
 
@@ -1486,6 +1492,7 @@ class TcptunVpnService : VpnService() {
         private const val KEY_RUNTIME_SOCKS_LISTEN_ALL = "runtimeSocksListenAll"
         private const val KEY_RUNTIME_SOCKS_USERNAME = "runtimeSocksUsername"
         private const val KEY_RUNTIME_SOCKS_PASSWORD = "runtimeSocksPassword"
+        private const val KEY_RUNTIME_ROUTE_LOCAL_PROXY_TRAFFIC = "runtimeRouteLocalProxyTraffic"
         private const val KEY_RUNTIME_FLOW_ANALYSIS_APP = "runtimeFlowAnalysisApp"
         private val forceNextUpstreamProbe = AtomicBoolean(false)
         private val activeMonitorWakeCallback = AtomicReference<(() -> Unit)?>(null)
@@ -1515,6 +1522,7 @@ class TcptunVpnService : VpnService() {
                         socks5Username = runtimeSettings.socksUsername,
                         socks5Password = runtimeSettings.socksPassword,
                         managedRouteRules = RouteRuleStore.load(context),
+                        routeLocalProxyTraffic = runtimeSettings.routeLocalProxyTraffic,
                     ),
                 )
                 .putExtra(EXTRA_PROFILE_PLAN, plan.toJson().toString())
@@ -1584,6 +1592,7 @@ class TcptunVpnService : VpnService() {
                 socksListenAll = prefs.getBoolean(KEY_RUNTIME_SOCKS_LISTEN_ALL, false),
                 socksUsername = prefs.getString(KEY_RUNTIME_SOCKS_USERNAME, "").orEmpty(),
                 socksPassword = prefs.getString(KEY_RUNTIME_SOCKS_PASSWORD, "").orEmpty(),
+                routeLocalProxyTraffic = prefs.getBoolean(KEY_RUNTIME_ROUTE_LOCAL_PROXY_TRAFFIC, false),
                 flowAnalysisApp = normalizeFlowAnalysisApp(
                     prefs.getString(KEY_RUNTIME_FLOW_ANALYSIS_APP, "").orEmpty(),
                 ),
@@ -1594,6 +1603,7 @@ class TcptunVpnService : VpnService() {
             val normalizedPowerSavingMode = settings.powerSavingMode
             val normalizedSocksPort = settings.socksPort.coerceIn(1, 65535)
             val normalizedLocalProxyProtocol = normalizeLocalProxyProtocol(settings.localProxyProtocol)
+            val normalizedRouteLocalProxyTraffic = settings.routeLocalProxyTraffic
             val normalizedFlowAnalysisApp = normalizeFlowAnalysisApp(settings.flowAnalysisApp)
             val normalizedSettings = settings.copy(
                 powerSavingMode = normalizedPowerSavingMode,
@@ -1601,6 +1611,7 @@ class TcptunVpnService : VpnService() {
                 localProxyProtocol = normalizedLocalProxyProtocol,
                 socksUsername = settings.socksUsername,
                 socksPassword = settings.socksPassword,
+                routeLocalProxyTraffic = normalizedRouteLocalProxyTraffic,
                 flowAnalysisApp = normalizedFlowAnalysisApp,
             )
             context.applicationContext.getSharedPreferences(RUNTIME_PREFS, Context.MODE_PRIVATE)
@@ -1612,6 +1623,7 @@ class TcptunVpnService : VpnService() {
                 .putBoolean(KEY_RUNTIME_SOCKS_LISTEN_ALL, settings.socksListenAll)
                 .putString(KEY_RUNTIME_SOCKS_USERNAME, settings.socksUsername)
                 .putString(KEY_RUNTIME_SOCKS_PASSWORD, settings.socksPassword)
+                .putBoolean(KEY_RUNTIME_ROUTE_LOCAL_PROXY_TRAFFIC, normalizedRouteLocalProxyTraffic)
                 .putString(KEY_RUNTIME_FLOW_ANALYSIS_APP, normalizedFlowAnalysisApp)
                 .apply()
             TcptunState.setFlowAnalysisApp(normalizedFlowAnalysisApp)
@@ -1627,6 +1639,7 @@ class TcptunVpnService : VpnService() {
                 "runtime settings saved: proxy=${normalizedSettings.localProxyProtocol}://" +
                     "${localSocksListenAddr(normalizedSettings)} mtu=${normalizedSettings.mtu} " +
                     "power-saving=$normalizedPowerSavingMode " +
+                    "route-local-proxy=$normalizedRouteLocalProxyTraffic " +
                     "flow-analysis=${normalizedFlowAnalysisApp.ifBlank { "disabled" }}",
             )
         }

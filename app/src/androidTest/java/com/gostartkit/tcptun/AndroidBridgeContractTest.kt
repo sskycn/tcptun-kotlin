@@ -255,8 +255,46 @@ class AndroidBridgeContractTest {
             app.getJSONObject("attributes").getJSONArray("packages").getString(0),
         )
         assertEquals(3, rules.length())
+        for (index in 0 until rules.length()) {
+            val inbound = rules.getJSONObject(index).getJSONArray("inbound")
+            assertEquals(1, inbound.length())
+            assertEquals(AndroidTunInboundTag, inbound.getString(0))
+        }
         assertFalse(config.has("discovery"))
 
+        assertEngineStarts(config.toString())
+    }
+
+    @Test
+    fun managedRouteRulesCanIncludeLocalProxyInbound() {
+        val config = JSONObject(
+            AppConfig(
+                serverHost = "192.0.2.1",
+                serverPort = "443",
+                token = "route-local-proxy-test",
+                protocol = "native",
+            ).toBridgeJson(
+                localListenAddr = "127.0.0.1:18080",
+                managedRouteRules = listOf(
+                    ManagedRouteRule(
+                        type = ManagedRouteRuleType.DomainSuffix,
+                        value = "example.com",
+                        outbound = ManagedRouteOutbound.Direct,
+                    ),
+                ),
+                routeLocalProxyTraffic = true,
+            ),
+        )
+
+        val rules = config.getJSONObject("route").getJSONArray("rules")
+        assertTrue(rules.length() >= 1)
+        for (index in 0 until rules.length()) {
+            val inbound = rules.getJSONObject(index).getJSONArray("inbound")
+            assertEquals(2, inbound.length())
+            assertEquals(AndroidTunInboundTag, inbound.getString(0))
+            assertEquals(AndroidLocalProxyInboundTag, inbound.getString(1))
+        }
+        assertEquals(AndroidLocalProxyInboundTag, config.getJSONArray("inbounds").getJSONObject(0).getString("tag"))
         assertEngineStarts(config.toString())
     }
 
