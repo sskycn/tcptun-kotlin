@@ -42,6 +42,27 @@ class BridgeHealthPolicyTest {
     }
 
     @Test
+    fun memberHealthProbeBlockedUntilSettleWindowElapses() {
+        val now = 50_000L
+        assertFalse(
+            BridgeHealthPolicy.shouldProbeMemberHealth(
+                force = true,
+                lastProbeAtMs = 0L,
+                nowMs = now,
+                notBeforeMs = now + 1_000L,
+            ),
+        )
+        assertTrue(
+            BridgeHealthPolicy.shouldProbeMemberHealth(
+                force = true,
+                lastProbeAtMs = 0L,
+                nowMs = now + 1_000L,
+                notBeforeMs = now + 1_000L,
+            ),
+        )
+    }
+
+    @Test
     fun memberHealthProbeRunsOnFirstCheckWithoutForce() {
         assertTrue(
             BridgeHealthPolicy.shouldProbeMemberHealth(
@@ -71,6 +92,13 @@ class BridgeHealthPolicyTest {
                 nowMs = ready,
             ),
         )
+    }
+
+    @Test
+    fun transientMemberProbeFailuresAreRecognized() {
+        assertTrue(BridgeHealthPolicy.isTransientMemberProbeFailure("probe: no route to host"))
+        assertTrue(BridgeHealthPolicy.isTransientMemberProbeFailure("Network is unreachable"))
+        assertFalse(BridgeHealthPolicy.isTransientMemberProbeFailure("connection refused"))
     }
 
     @Test

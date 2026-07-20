@@ -30,6 +30,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 data class RuntimeSettings(
@@ -243,9 +244,13 @@ class TcptunVpnService : VpnService() {
                 TcptunState.setStatus("Running")
                 updateBridgeDiagnostics()
                 updateNotification(runningNotificationState(plan))
-                // Seed balance selection with explicit member health as soon as
-                // the pool is live (not only when the UI later refreshes).
-                requestMemberHealthProbe("vpn started")
+                // Wait for routing/tunnels to settle before the first member
+                // probe; immediate probes after multi-start often report
+                // "no route to host" and falsely degrade every pool member.
+                requestMemberHealthProbe(
+                    reason = "vpn started",
+                    delayMs = BridgeHealthPolicy.MEMBER_HEALTH_STARTUP_DELAY_MS,
+                )
         } catch (err: Exception) {
             if (generation != lifecycleGeneration.get()) {
                 TcptunState.appendLog("VPN start cancelled")
@@ -316,9 +321,11 @@ class TcptunVpnService : VpnService() {
             }
             runningPlan = nextPlan
             TcptunState.initializeProfileHealth(nextPlan.activeProfiles)
-            // Pool membership changed: force member probes so Start/StopOutbound
-            // immediately updates balance penalties for selection.
-            requestMemberHealthProbe("active connections changed")
+            // Pool membership changed: re-score after Start/StopOutbound settles.
+            requestMemberHealthProbe(
+                reason = "active connections changed",
+                delayMs = BridgeHealthPolicy.MEMBER_HEALTH_MEMBERSHIP_DELAY_MS,
+            )
             saveDesiredRunningPlan(this, nextPlan)
             updateNotification(runningNotificationState(nextPlan))
             updateBridgeDiagnostics()
@@ -525,9 +532,13 @@ class TcptunVpnService : VpnService() {
             .onFailure { err -> TcptunState.appendLog("set underlying network failed: ${err.message}") }
         if (tun != null && !stopping) {
             if (!initialSelection && TcptunState.status == "Running") {
+                // Restart path reseeds member probes after "vpn started".
                 requestBridgeRestart(reason)
             } else {
-                requestMemberHealthProbe(reason)
+                requestMemberHealthProbe(
+                    reason = reason,
+                    delayMs = BridgeHealthPolicy.MEMBER_HEALTH_STARTUP_DELAY_MS,
+                )
             }
         }
     }
@@ -587,6 +598,8 @@ class TcptunVpnService : VpnService() {
             activeRouteLocalProxyTraffic = false
             powerSavingMode = true
             lastMemberHealthProbeAtElapsedMs = 0L
+            memberHealthProbeNotBeforeElapsedMs.set(0L)
+            memberHealthProbeScheduleGeneration.incrementAndGet()
             runningPlan = null
             TcptunState.updateDiagnostics {
                 it.copy(
@@ -765,8 +778,11 @@ class TcptunVpnService : VpnService() {
             TcptunState.appendLog("tcptun bridge transaction restarted")
             updateBridgeDiagnostics()
             // The previous runtime's balance observations were discarded by
-            // the restart, so seed health only after the replacement is ready.
-            requestMemberHealthProbe("bridge restarted: $reason")
+            // the restart, so seed health only after the replacement settles.
+            requestMemberHealthProbe(
+                reason = "bridge restarted: $reason",
+                delayMs = BridgeHealthPolicy.MEMBER_HEALTH_STARTUP_DELAY_MS,
+            )
         } catch (err: Exception) {
             TcptunState.error("tcptun bridge restart failed: ${err.message}")
             stopVpn(setStopped = false, clearSavedConfig = false)
@@ -1078,6 +1094,7 @@ class TcptunVpnService : VpnService() {
         val timeoutMs = MEMBER_HEALTH_PROBE_TIMEOUT_MS.toLong() * targets.size * batches + MEMBER_HEALTH_PROBE_GRACE_MS
         val futures = memberHealthExecutor.invokeAll(tasks, timeoutMs, TimeUnit.MILLISECONDS)
         if (monitorEpoch != monitorGeneration.get() || stopping) return
+        val coreRefreshProfiles = mutableListOf<AppConfig>()
         futures.forEachIndexed { index, future ->
             val profile = profiles[index]
             if (profile.id !in runningPlan?.activeIds.orEmpty()) return@forEachIndexed
@@ -1100,7 +1117,19 @@ class TcptunVpnService : VpnService() {
                     lastCheckedAtMs = now,
                     lastSucceededAtMs = now,
                 )
+            } else if (
+                BridgeHealthPolicy.isTransientMemberProbeFailure(result.error) &&
+                (previous == null || previous.lastSucceededAtMs <= 0L)
+            ) {
+                // First-time setup failures (common right after multi-start) stay
+                // unknown in the UI; skip core status overwrite which would still
+                // surface the same transient "no route to host" string.
+                TcptunState.appendLog(
+                    "connection ${profile.name} health probe deferred: ${result.error}",
+                )
+                previous?.copy(lastCheckedAtMs = now) ?: ProfileHealth(lastCheckedAtMs = now)
             } else {
+                coreRefreshProfiles += profile
                 ProfileHealth(
                     status = ProfileHealthStatus.Degraded,
                     latencyMs = previous?.latencyMs,
@@ -1110,13 +1139,18 @@ class TcptunVpnService : VpnService() {
                     error = result.error,
                 )
             }
+            if (result.elapsedMs != null) {
+                coreRefreshProfiles += profile
+            }
             TcptunState.setProfileHealth(profile.id, health)
             if (previous?.status != health.status) {
-                val detail = health.latencyMs?.let { "${it}ms" } ?: health.error
+                val detail = health.latencyMs?.let { "${it}ms" } ?: health.error.ifBlank { "unknown" }
                 TcptunState.appendLog("connection ${profile.name} health: ${health.status.name.lowercase()} $detail")
             }
         }
-        refreshProfileHealthFromCore(profiles)
+        if (coreRefreshProfiles.isNotEmpty()) {
+            refreshProfileHealthFromCore(coreRefreshProfiles)
+        }
     }
 
     private fun updateRawProfileHealth(failure: String?) {
@@ -1271,12 +1305,19 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun shouldProbeMemberHealth(): Boolean {
-        val force = forceNextMemberHealthProbe.compareAndSet(true, false)
         val nowElapsedMs = SystemClock.elapsedRealtime()
+        val notBeforeMs = memberHealthProbeNotBeforeElapsedMs.get()
+        // Peek force without consuming while still inside the settle window so a
+        // delayed wake can still run the forced probe afterward.
+        if (notBeforeMs > 0L && nowElapsedMs < notBeforeMs) {
+            return false
+        }
+        val force = forceNextMemberHealthProbe.compareAndSet(true, false)
         val allowed = BridgeHealthPolicy.shouldProbeMemberHealth(
             force = force,
             lastProbeAtMs = lastMemberHealthProbeAtElapsedMs,
             nowMs = nowElapsedMs,
+            notBeforeMs = notBeforeMs,
         )
         if (!allowed) return false
         lastMemberHealthProbeAtElapsedMs = nowElapsedMs
@@ -1532,6 +1573,9 @@ class TcptunVpnService : VpnService() {
         private const val KEY_RUNTIME_FLOW_ANALYSIS_APP = "runtimeFlowAnalysisApp"
         private val forceNextUpstreamProbe = AtomicBoolean(false)
         private val forceNextMemberHealthProbe = AtomicBoolean(false)
+        /** ElapsedRealtime deadline; member probes are blocked until this time. */
+        private val memberHealthProbeNotBeforeElapsedMs = AtomicLong(0L)
+        private val memberHealthProbeScheduleGeneration = AtomicInteger()
         private val activeMonitorWakeCallback = AtomicReference<(() -> Unit)?>(null)
         private val UPSTREAM_PROBE_TARGETS = listOf(
             UpstreamProbeTarget("Google 204", "connectivitycheck.gstatic.com", path = "/generate_204", expectedStatus = 204),
@@ -1608,9 +1652,40 @@ class TcptunVpnService : VpnService() {
          * Event-driven health check that also forces per-member balance probes
          * ([ProbeOutboundHealth]), bypassing the member-probe throttle so pool
          * selection can recover without a UI refresh.
+         *
+         * @param delayMs settle window before the probe may run. Rapid multi-start
+         *   / membership changes are debounced to the latest schedule so only one
+         *   probe runs after the last event.
          */
-        fun requestMemberHealthProbe(reason: String) {
+        fun requestMemberHealthProbe(
+            reason: String,
+            delayMs: Long = 0L,
+        ) {
+            val delay = delayMs.coerceAtLeast(0L)
             forceNextMemberHealthProbe.set(true)
+            if (delay > 0L) {
+                val notBefore = SystemClock.elapsedRealtime() + delay
+                memberHealthProbeNotBeforeElapsedMs.updateAndGet { current ->
+                    maxOf(current, notBefore)
+                }
+                val generation = memberHealthProbeScheduleGeneration.incrementAndGet()
+                TcptunState.appendLog("member health probe scheduled in ${delay}ms: $reason")
+                Thread {
+                    try {
+                        Thread.sleep(delay)
+                        if (generation != memberHealthProbeScheduleGeneration.get()) return@Thread
+                        forceNextMemberHealthProbe.set(true)
+                        requestHealthCheck(reason)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                    }
+                }.apply {
+                    name = "TcptunMemberHealthDelay"
+                    isDaemon = true
+                    start()
+                }
+                return
+            }
             requestHealthCheck(reason)
         }
 
@@ -1619,9 +1694,11 @@ class TcptunVpnService : VpnService() {
 
         fun requestUiVisibleHealthCheck() {
             // Full UI-driven refresh: status + local proxy + member balance health
-            // + single aggregate upstream probe through the pool.
+            // + single aggregate upstream probe through the pool. Immediate; do not
+            // extend the settle window so pull-to-refresh stays responsive.
             forceNextUpstreamProbe.set(true)
             forceNextMemberHealthProbe.set(true)
+            memberHealthProbeNotBeforeElapsedMs.set(0L)
             TcptunState.appendLog("bridge health check requested: app visible")
             activeMonitorWakeCallback.get()?.invoke()
         }

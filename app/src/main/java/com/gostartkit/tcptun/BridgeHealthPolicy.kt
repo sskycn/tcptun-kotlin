@@ -28,9 +28,20 @@ internal object BridgeHealthPolicy {
     /**
      * Minimum gap between non-forced per-member balance health probes.
      * Forced probes (network change, degraded, UI refresh, pool membership
-     * change) bypass this throttle.
+     * change) bypass this throttle once the settle window has elapsed.
      */
     const val MEMBER_HEALTH_MIN_INTERVAL_MS = 60_000L
+
+    /**
+     * After VPN start / bridge restart, wait before the first member health
+     * probe so underlying routing and tunnel dials can settle. Probing too
+     * early commonly yields "no route to host" and falsely degrades every pool
+     * member right after multi-connection start.
+     */
+    const val MEMBER_HEALTH_STARTUP_DELAY_MS = 4_000L
+
+    /** Short settle after StartOutbound / StopOutbound pool membership changes. */
+    const val MEMBER_HEALTH_MEMBERSHIP_DELAY_MS = 2_000L
 
     /** Background safety checks only ask the engine status; loopback TCP is UI-facing. */
     fun shouldProbeLocalProxy(uiVisible: Boolean): Boolean = uiVisible
@@ -44,19 +55,34 @@ internal object BridgeHealthPolicy {
 
     /**
      * Per-member [ProbeOutboundHealth] updates balance dynamic scores in Go.
-     * Forced probes always run; otherwise the minimum interval applies so event
-     * storms (connection count churn) do not hammer every pool member.
+     * [notBeforeMs] blocks all probes (including forced) until the settle
+     * window ends. After that, forced probes always run; otherwise the minimum
+     * interval applies so event storms do not hammer every pool member.
      */
     fun shouldProbeMemberHealth(
         force: Boolean,
         lastProbeAtMs: Long,
         nowMs: Long,
+        notBeforeMs: Long = 0L,
         minIntervalMs: Long = MEMBER_HEALTH_MIN_INTERVAL_MS,
     ): Boolean {
+        if (notBeforeMs > 0L && nowMs < notBeforeMs) return false
         if (force) return true
         if (lastProbeAtMs <= 0L) return true
         if (minIntervalMs <= 0L) return true
         return nowMs - lastProbeAtMs >= minIntervalMs
+    }
+
+    /** Routing/setup failures that should not stick as user-visible health text. */
+    fun isTransientMemberProbeFailure(message: String): Boolean {
+        val text = message.lowercase()
+        return "no route to host" in text ||
+            "network is unreachable" in text ||
+            "enetunreach" in text ||
+            "ehostunreach" in text ||
+            "software caused connection abort" in text ||
+            "network down" in text ||
+            "enotconn" in text
     }
 
     /**
