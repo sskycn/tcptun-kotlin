@@ -103,14 +103,11 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -130,6 +127,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.pluralStringResource
@@ -142,6 +140,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
@@ -900,12 +899,17 @@ internal fun TcptunScreen(
                 )
             },
             bottomBar = {
-                val tcpingEnabled = canStartTcping(vpnState.status, state.activeProfiles.size)
+                val tcpingEnabled = canStartTcping(
+                    status = vpnState.status,
+                    activeProfileCount = state.activeProfiles.size,
+                    connectionsReady = vpnState.connectionsReady,
+                )
                 BottomStatus(
                     status = vpnState.status,
                     error = vpnState.lastError,
                     tcping = vpnState.tcping,
                     hasProfiles = state.profiles.isNotEmpty(),
+                    connectionsReady = vpnState.connectionsReady,
                     tcpingEnabled = tcpingEnabled,
                     onClick = {
                         if (!tcpingEnabled || vpnState.tcping.running) return@BottomStatus
@@ -1382,11 +1386,15 @@ private fun ProfileRow(
         label = "profileRowColor",
     )
     val density = LocalDensity.current
+    val layoutDirection = LocalLayoutDirection.current
     val actionWidth = 80.dp
-    val anchors = remember(density) {
+    val anchors = remember(density, layoutDirection) {
         DraggableAnchors {
             ProfileSwipeValue.Closed at 0f
-            ProfileSwipeValue.Actions at with(density) { -(actionWidth * 2).toPx() }
+            ProfileSwipeValue.Actions at swipeActionsOffset(
+                widthPx = with(density) { (actionWidth * 2).toPx() },
+                layoutDirection = layoutDirection,
+            )
         }
     }
     val swipeState = remember(profile.id, anchors) {
@@ -1560,6 +1568,10 @@ private fun ProfileRow(
 private enum class ProfileSwipeValue {
     Closed,
     Actions,
+}
+
+internal fun swipeActionsOffset(widthPx: Float, layoutDirection: LayoutDirection): Float {
+    return if (layoutDirection == LayoutDirection.Ltr) -widthPx else widthPx
 }
 
 @Composable
@@ -1828,16 +1840,18 @@ private fun BottomStatus(
     error: String,
     tcping: TcpingProgress,
     hasProfiles: Boolean,
+    connectionsReady: Boolean,
     tcpingEnabled: Boolean,
     onClick: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
     val tcpingMessage = tcpingStatusText(tcping)
+    val connectionsStarting = status == "Starting" || (status == "Running" && !connectionsReady)
     val text = when {
         error.isNotBlank() -> stringResource(R.string.error_prefix, error)
         tcpingMessage.isNotBlank() -> tcpingMessage
         status == "Running" && tcpingEnabled -> stringResource(R.string.connected_tap_test)
-        status == "Starting" -> stringResource(R.string.connecting)
+        connectionsStarting -> stringResource(R.string.connecting)
         status == "Stopping" -> stringResource(R.string.stopping)
         hasProfiles -> stringResource(R.string.not_connected_tap_profile)
         else -> stringResource(R.string.not_connected_add_profile)
@@ -1846,13 +1860,14 @@ private fun BottomStatus(
         error.isNotBlank() -> colors.error
         tcping.running -> colors.tertiary
         tcping.error.isNotBlank() && tcping.results.isEmpty() -> colors.error
-        tcping.results.any { it.elapsedMs != null } || status == "Running" -> colors.primary
-        status == "Starting" || status == "Stopping" -> colors.tertiary
+        status == "Running" && tcpingEnabled -> colors.primary
+        tcping.results.any { it.elapsedMs != null } && status == "Running" -> colors.primary
+        connectionsStarting || status == "Stopping" -> colors.tertiary
         else -> colors.onSurfaceVariant
     }
     val statusIcon = when {
         error.isNotBlank() -> Icons.Rounded.Speed
-        status == "Running" -> Icons.Rounded.Check
+        status == "Running" && connectionsReady -> Icons.Rounded.Check
         else -> Icons.Rounded.Speed
     }
     BottomAppBar(
@@ -2701,7 +2716,7 @@ private fun RouteManagementPage(onBack: () -> Unit) {
                         },
                     rule = rule,
                     profiles = routeProfiles,
-                    onClick = { editingRule = rule },
+                    onEdit = { editingRule = rule },
                     onEnabledChange = { enabled ->
                         persist(rules.toMutableList().also { it[index] = rule.copy(enabled = enabled) })
                     },
@@ -2765,7 +2780,7 @@ private fun ManagedRouteRuleRow(
     modifier: Modifier = Modifier,
     rule: ManagedRouteRule,
     profiles: List<AppConfig>,
-    onClick: () -> Unit,
+    onEdit: () -> Unit,
     onEnabledChange: (Boolean) -> Unit,
     dragging: Boolean,
     onDragStart: () -> Unit,
@@ -2774,45 +2789,80 @@ private fun ManagedRouteRuleRow(
     onDeleteRequest: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
-    val dismissState = rememberSwipeToDismissBoxState()
-
-    LaunchedEffect(dismissState.currentValue) {
-        if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart) {
-            onDeleteRequest()
-            dismissState.reset()
+    val density = LocalDensity.current
+    val layoutDirection = LocalLayoutDirection.current
+    val actionWidth = 80.dp
+    val anchors = remember(density, layoutDirection) {
+        DraggableAnchors {
+            ProfileSwipeValue.Closed at 0f
+            ProfileSwipeValue.Actions at swipeActionsOffset(
+                widthPx = with(density) { (actionWidth * 2).toPx() },
+                layoutDirection = layoutDirection,
+            )
         }
     }
+    val swipeState = remember(rule.id, anchors) {
+        AnchoredDraggableState(ProfileSwipeValue.Closed, anchors)
+    }
+    val scope = rememberCoroutineScope()
 
-    Box(modifier = modifier) {
-        SwipeToDismissBox(
-            modifier = Modifier.fillMaxWidth(),
-            state = dismissState,
-            enableDismissFromStartToEnd = false,
-            enableDismissFromEndToStart = !dragging,
-            backgroundContent = {
-                Row(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(colors.errorContainer, CardShape)
-                        .padding(horizontal = 24.dp),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Rounded.Delete, contentDescription = stringResource(R.string.delete), tint = colors.onErrorContainer)
-                }
-            },
+    Box(modifier = modifier.fillMaxWidth()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(CardShape)
+                .anchoredDraggable(
+                    state = swipeState,
+                    orientation = Orientation.Horizontal,
+                    enabled = !dragging,
+                ),
         ) {
+            Row(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(colors.surfaceContainerHighest),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                ProfileSwipeAction(
+                    modifier = Modifier.width(actionWidth),
+                    icon = Icons.Rounded.Edit,
+                    label = stringResource(R.string.edit),
+                    containerColor = colors.secondaryContainer,
+                    contentColor = colors.onSecondaryContainer,
+                    onClick = onEdit,
+                )
+                ProfileSwipeAction(
+                    modifier = Modifier.width(actionWidth),
+                    icon = Icons.Rounded.Delete,
+                    label = stringResource(R.string.delete),
+                    containerColor = colors.errorContainer,
+                    contentColor = colors.onErrorContainer,
+                    onClick = onDeleteRequest,
+                )
+            }
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 88.dp),
+                    .offset {
+                        IntOffset(
+                            x = swipeState.requireOffset().roundToInt(),
+                            y = 0,
+                        )
+                    },
                 shape = CardShape,
                 color = if (rule.enabled) colors.surfaceContainerLow else colors.surfaceContainer,
+                tonalElevation = 0.dp,
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable(onClick = onClick)
+                        .heightIn(min = 88.dp)
+                        .clickable(
+                            enabled = swipeState.settledValue == ProfileSwipeValue.Actions,
+                        ) {
+                            // Tap only closes an open swipe; edit is via the swipe action.
+                            scope.launch { swipeState.animateTo(ProfileSwipeValue.Closed) }
+                        }
                         .padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -2832,15 +2882,18 @@ private fun ManagedRouteRuleRow(
                             color = colors.onSurfaceVariant,
                         )
                     }
-                    Spacer(Modifier.width(100.dp))
+                    Spacer(Modifier.width(48.dp))
+                    Switch(
+                        checked = rule.enabled,
+                        onCheckedChange = onEnabledChange,
+                    )
                 }
             }
         }
         Row(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
-                .offset { IntOffset(dismissState.requireOffset().roundToInt(), 0) }
-                .padding(end = 6.dp),
+                .offset { IntOffset(swipeState.requireOffset().roundToInt(), 0) },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
@@ -2860,10 +2913,8 @@ private fun ManagedRouteRuleRow(
                     tint = colors.onSurfaceVariant,
                 )
             }
-            Switch(
-                checked = rule.enabled,
-                onCheckedChange = onEnabledChange,
-            )
+            // Keep the drag handle left of the in-row Switch (approx. switch width + padding).
+            Spacer(Modifier.width(58.dp))
         }
     }
 }
@@ -3625,6 +3676,7 @@ private fun needsNotificationPermission(context: Context): Boolean {
 
 private fun startVpn(context: Context, plan: ProfileRunPlan) {
     TcptunState.setStatus("Starting")
+    TcptunState.setConnectionsReady(false)
     TcptunState.appendLog("start requested")
     runCatching {
         val intent = TcptunVpnService.startIntent(context, plan)
@@ -3640,6 +3692,7 @@ private fun startVpn(context: Context, plan: ProfileRunPlan) {
 
 private fun stopVpn(context: Context) {
     TcptunState.setStatus("Stopping")
+    TcptunState.setConnectionsReady(false)
     TcptunState.appendLog("stop requested")
     runCatching {
         context.startService(TcptunVpnService.stopIntent(context))
@@ -3649,7 +3702,8 @@ private fun stopVpn(context: Context) {
 }
 
 private fun updateVpnOutbounds(context: Context, plan: ProfileRunPlan) {
-    TcptunState.appendLog("connection update requested")
+    // Disable TCPing until StartOutbound/StopOutbound finishes for every changed link.
+    TcptunState.markConnectionsBusy("connection update requested")
     runCatching {
         context.startService(TcptunVpnService.updateOutboundsIntent(context, plan))
     }.onFailure { err ->
@@ -3692,8 +3746,11 @@ internal fun nextActiveProfileIds(
     return if (profileIsRunning) activeIds - profileId else activeIds + profileId
 }
 
-internal fun canStartTcping(status: String, activeProfileCount: Int): Boolean =
-    status == "Running" && activeProfileCount > 0
+internal fun canStartTcping(
+    status: String,
+    activeProfileCount: Int,
+    connectionsReady: Boolean = true,
+): Boolean = status == "Running" && activeProfileCount > 0 && connectionsReady
 
 private fun isVpnTransitionStatus(status: String): Boolean {
     return status == "Starting" || status == "Stopping"

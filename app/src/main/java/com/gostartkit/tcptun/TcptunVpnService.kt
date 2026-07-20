@@ -63,6 +63,22 @@ private data class HealthFailure(
     val reason: String,
 )
 
+internal class ConnectionUpdateTracker {
+    private val latestGeneration = AtomicInteger()
+
+    @Synchronized
+    fun begin(): Int = latestGeneration.incrementAndGet()
+
+    fun isLatest(generation: Int): Boolean = generation == latestGeneration.get()
+
+    @Synchronized
+    fun runIfLatest(generation: Int, action: () -> Unit): Boolean {
+        if (!isLatest(generation)) return false
+        action()
+        return true
+    }
+}
+
 private data class MemberHealthProbeResult(
     val profile: AppConfig,
     val elapsedMs: Long? = null,
@@ -109,6 +125,7 @@ class TcptunVpnService : VpnService() {
         Thread(runnable, "TcptunMemberHealth").apply { isDaemon = true }
     }
     private val lifecycleGeneration = AtomicInteger()
+    private val connectionUpdateTracker = ConnectionUpdateTracker()
     private val monitorGeneration = AtomicInteger()
     private val monitorWakeGeneration = AtomicInteger()
     private val bridgeRestartRequestGeneration = AtomicInteger()
@@ -242,6 +259,7 @@ class TcptunVpnService : VpnService() {
                 TcptunState.resetProfileHealth(plan.activeProfiles)
                 startBridgeMonitor()
                 TcptunState.setStatus("Running")
+                TcptunState.setConnectionsReady(true)
                 updateBridgeDiagnostics()
                 updateNotification(runningNotificationState(plan))
                 // Wait for routing/tunnels to settle before the first member
@@ -285,18 +303,25 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun requestOutboundUpdate(intent: Intent) {
-        val generation = lifecycleGeneration.get()
+        val lifecycleGeneration = lifecycleGeneration.get()
+        val updateGeneration = connectionUpdateTracker.begin()
+        TcptunState.setConnectionsReady(false)
         lifecycleExecutor.execute {
-            if (generation != lifecycleGeneration.get()) return@execute
-            updateOutboundsNow(intent, generation)
+            if (lifecycleGeneration != this.lifecycleGeneration.get()) return@execute
+            updateOutboundsNow(intent, lifecycleGeneration, updateGeneration)
         }
     }
 
-    private fun updateOutboundsNow(intent: Intent, generation: Int) {
+    private fun updateOutboundsNow(
+        intent: Intent,
+        lifecycleGeneration: Int,
+        updateGeneration: Int,
+    ) {
         val nextPlan = intent.getStringExtra(EXTRA_PROFILE_PLAN)
             ?.let { raw -> runCatching { ProfileRunPlan.fromJson(JSONObject(raw)) }.getOrNull() }
             ?: run {
                 TcptunState.appendLog("connection update ignored: invalid profile plan")
+                markConnectionsReadyAfterUpdate(lifecycleGeneration, updateGeneration)
                 return
             }
         val currentPlan = runningPlan
@@ -311,14 +336,23 @@ class TcptunVpnService : VpnService() {
             startFromIntent(intent)
             return
         }
-        if (changedIds.isEmpty()) return
+        if (changedIds.isEmpty()) {
+            markConnectionsReadyAfterUpdate(lifecycleGeneration, updateGeneration)
+            return
+        }
 
         val changedProfiles = currentPlan.profiles.filter { it.id in changedIds }
         try {
+            TcptunState.setConnectionsReady(false)
             changedProfiles.forEach { profile ->
-                if (generation != lifecycleGeneration.get()) return
+                if (lifecycleGeneration != this.lifecycleGeneration.get()) {
+                    // A newer start/stop superseded this update; that lifecycle
+                    // owns connectionsReady.
+                    return
+                }
                 setOutboundRunning(profile, profile.id in nextPlan.activeIds)
             }
+            if (lifecycleGeneration != this.lifecycleGeneration.get()) return
             runningPlan = nextPlan
             TcptunState.initializeProfileHealth(nextPlan.activeProfiles)
             // Pool membership changed: re-score after Start/StopOutbound settles.
@@ -329,6 +363,7 @@ class TcptunVpnService : VpnService() {
             saveDesiredRunningPlan(this, nextPlan)
             updateNotification(runningNotificationState(nextPlan))
             updateBridgeDiagnostics()
+            markConnectionsReadyAfterUpdate(lifecycleGeneration, updateGeneration)
         } catch (err: Exception) {
             TcptunState.appendLog("connection update failed: ${err.message ?: err.javaClass.simpleName}")
             runCatching {
@@ -343,6 +378,24 @@ class TcptunVpnService : VpnService() {
             saveDesiredRunningPlan(this, currentPlan)
             runningPlan = currentPlan
             updateNotification(runningNotificationState(currentPlan))
+            markConnectionsReadyAfterUpdate(lifecycleGeneration, updateGeneration)
+        }
+    }
+
+    private fun markConnectionsReadyAfterUpdate(
+        lifecycleGeneration: Int,
+        updateGeneration: Int,
+    ) {
+        if (lifecycleGeneration != this.lifecycleGeneration.get()) return
+        connectionUpdateTracker.runIfLatest(updateGeneration) {
+            if (!stopping && tun != null && TcptunState.status == "Running") {
+                TcptunState.setConnectionsReady(true)
+            }
+        }
+        // A lifecycle transition can race the checks above from onStartCommand.
+        // Its queued lifecycle work owns the next ready=true transition.
+        if (lifecycleGeneration != this.lifecycleGeneration.get()) {
+            TcptunState.setConnectionsReady(false)
         }
     }
 
@@ -374,8 +427,14 @@ class TcptunVpnService : VpnService() {
         }
         tcpingExecutor.execute {
             val profiles = runningPlan?.activeProfiles.orEmpty()
-            if (tun == null || stopping || profiles.isEmpty()) {
-                TcptunState.failTcping(requestId, "no running connections")
+            if (
+                tun == null ||
+                stopping ||
+                profiles.isEmpty() ||
+                TcptunState.status != "Running" ||
+                !TcptunState.state.value.connectionsReady
+            ) {
+                TcptunState.failTcping(requestId, "connections are still starting")
                 return@execute
             }
             val results = mutableListOf<TcpingLinkResult>()
@@ -759,6 +818,7 @@ class TcptunVpnService : VpnService() {
         }
         lastBridgeRestartAtMs = now
         bridgeRestarting = true
+        TcptunState.setConnectionsReady(false)
         TcptunState.appendLog("restarting tcptun bridge transaction: $reason")
         TcptunState.updateDiagnostics { it.copy(lastRestartReason = reason, bridgeStatus = "Restarting") }
         try {
@@ -777,6 +837,9 @@ class TcptunVpnService : VpnService() {
             )
             TcptunState.appendLog("tcptun bridge transaction restarted")
             updateBridgeDiagnostics()
+            if (!stopping && tun != null) {
+                TcptunState.setConnectionsReady(true)
+            }
             // The previous runtime's balance observations were discarded by
             // the restart, so seed health only after the replacement settles.
             requestMemberHealthProbe(

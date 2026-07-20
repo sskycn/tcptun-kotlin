@@ -41,6 +41,12 @@ data class TcptunDiagnostics(
 data class TcptunRuntimeState(
     val status: String = "Stopped",
     val lastError: String = "",
+    /**
+     * True only after VPN/outbounds have finished starting or updating.
+     * TCPing and similar actions require this so users cannot probe while
+     * StartOutbound / bridge bring-up is still in progress.
+     */
+    val connectionsReady: Boolean = false,
     val diagnostics: TcptunDiagnostics = TcptunDiagnostics(),
     val tcping: TcpingProgress = TcpingProgress(),
     val profileHealth: Map<String, ProfileHealth> = emptyMap(),
@@ -228,20 +234,41 @@ object TcptunState {
     @Synchronized
     fun setStatus(value: String) {
         val current = _state.value
+        val terminal = value == "Stopped" || value == "Error"
+        val transitioning = value == "Starting" || value == "Stopping"
         _state.value = current.copy(
             status = value,
+            // Bring-up / teardown is never TCPing-ready; only an explicit ready
+            // mark after a successful start/update re-enables it.
+            connectionsReady = if (terminal || transitioning) false else current.connectionsReady,
             lastError = if (value == "Error") current.lastError else "",
             diagnostics = current.diagnostics.copy(
                 vpnStatus = value,
-                bridgeClientIps = if (value == "Stopped" || value == "Error") {
+                bridgeClientIps = if (terminal) {
                     emptyList()
                 } else {
                     current.diagnostics.bridgeClientIps
                 },
             ),
-            tcping = if (value == "Stopped" || value == "Error") TcpingProgress() else current.tcping,
-            profileHealth = if (value == "Stopped" || value == "Error") emptyMap() else current.profileHealth,
+            tcping = if (terminal) TcpingProgress() else current.tcping,
+            profileHealth = if (terminal) emptyMap() else current.profileHealth,
         )
+    }
+
+    @Synchronized
+    fun setConnectionsReady(ready: Boolean) {
+        val current = _state.value
+        if (current.connectionsReady == ready) return
+        _state.value = current.copy(connectionsReady = ready)
+    }
+
+    /** Call when a connection start/stop/update is requested but not finished. */
+    @Synchronized
+    fun markConnectionsBusy(reason: String = "") {
+        val current = _state.value
+        if (!current.connectionsReady && reason.isBlank()) return
+        _state.value = current.copy(connectionsReady = false)
+        if (reason.isNotBlank()) appendLog(reason)
     }
 
     @Synchronized
@@ -249,6 +276,7 @@ object TcptunState {
         val current = _state.value
         _state.value = current.copy(
             status = "Error",
+            connectionsReady = false,
             lastError = message,
             diagnostics = current.diagnostics.copy(vpnStatus = "Error", bridgeClientIps = emptyList()),
             tcping = TcpingProgress(),
