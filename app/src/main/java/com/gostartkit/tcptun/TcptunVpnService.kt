@@ -1095,6 +1095,7 @@ class TcptunVpnService : VpnService() {
         val futures = memberHealthExecutor.invokeAll(tasks, timeoutMs, TimeUnit.MILLISECONDS)
         if (monitorEpoch != monitorGeneration.get() || stopping) return
         val coreRefreshProfiles = mutableListOf<AppConfig>()
+        var retryTransientFailure = false
         futures.forEachIndexed { index, future ->
             val profile = profiles[index]
             if (profile.id !in runningPlan?.activeIds.orEmpty()) return@forEachIndexed
@@ -1109,6 +1110,8 @@ class TcptunVpnService : VpnService() {
             }
             val previous = TcptunState.state.value.profileHealth[profile.id]
             val now = System.currentTimeMillis()
+            val hasNoCompletedProbe = previous == null ||
+                (previous.lastSucceededAtMs <= 0L && previous.lastCheckedAtMs <= 0L)
             val health = if (result.elapsedMs != null) {
                 ProfileHealth(
                     status = ProfileHealthStatus.Healthy,
@@ -1119,14 +1122,15 @@ class TcptunVpnService : VpnService() {
                 )
             } else if (
                 BridgeHealthPolicy.isTransientMemberProbeFailure(result.error) &&
-                (previous == null || previous.lastSucceededAtMs <= 0L)
+                hasNoCompletedProbe
             ) {
-                // First-time setup failures (common right after multi-start) stay
-                // unknown in the UI; skip core status overwrite which would still
-                // surface the same transient "no route to host" string.
+                // Keep one first-time setup failure unknown in the UI and retry
+                // once after another settle window. A repeated failure falls
+                // through to Degraded so it cannot be hidden indefinitely.
                 TcptunState.appendLog(
                     "connection ${profile.name} health probe deferred: ${result.error}",
                 )
+                retryTransientFailure = true
                 previous?.copy(lastCheckedAtMs = now) ?: ProfileHealth(lastCheckedAtMs = now)
             } else {
                 coreRefreshProfiles += profile
@@ -1150,6 +1154,12 @@ class TcptunVpnService : VpnService() {
         }
         if (coreRefreshProfiles.isNotEmpty()) {
             refreshProfileHealthFromCore(coreRefreshProfiles)
+        }
+        if (retryTransientFailure && monitorEpoch == monitorGeneration.get() && !stopping) {
+            requestMemberHealthProbe(
+                reason = "retry transient member health failure",
+                delayMs = BridgeHealthPolicy.MEMBER_HEALTH_STARTUP_DELAY_MS,
+            )
         }
     }
 
@@ -1672,7 +1682,12 @@ class TcptunVpnService : VpnService() {
                 TcptunState.appendLog("member health probe scheduled in ${delay}ms: $reason")
                 Thread {
                     try {
-                        Thread.sleep(delay)
+                        while (generation == memberHealthProbeScheduleGeneration.get()) {
+                            val remainingMs = memberHealthProbeNotBeforeElapsedMs.get() -
+                                SystemClock.elapsedRealtime()
+                            if (remainingMs <= 0L) break
+                            Thread.sleep(remainingMs)
+                        }
                         if (generation != memberHealthProbeScheduleGeneration.get()) return@Thread
                         forceNextMemberHealthProbe.set(true)
                         requestHealthCheck(reason)
@@ -1699,6 +1714,7 @@ class TcptunVpnService : VpnService() {
             forceNextUpstreamProbe.set(true)
             forceNextMemberHealthProbe.set(true)
             memberHealthProbeNotBeforeElapsedMs.set(0L)
+            memberHealthProbeScheduleGeneration.incrementAndGet()
             TcptunState.appendLog("bridge health check requested: app visible")
             activeMonitorWakeCallback.get()?.invoke()
         }
