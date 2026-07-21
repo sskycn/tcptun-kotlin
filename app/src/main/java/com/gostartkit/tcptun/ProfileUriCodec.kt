@@ -39,10 +39,31 @@ object ProfileUriCodec {
         }
     }
 
-    /** Encodes through tcptun-go's current strict, versioned profile codec. */
+    /**
+     * Encodes a scannable QR payload for [config].
+     *
+     * Prefers the compact T3 form from tcptun-go. Older T2-era / URI-imported
+     * profiles often store a non-default raw path (for example `"/"` copied from
+     * REALITY SpiderX). Compact T2/T3 reject that, so this normalizes the raw
+     * path before encoding. It deliberately does not fall back to a protocol
+     * URI because that representation cannot preserve every current profile
+     * field. Returns null when T3 cannot represent the profile.
+     */
     fun encodeForQr(config: AppConfig): String? {
         if (config.rawConfigJson.isNotBlank()) return null
-        return TcptunProfileCodec.encode(config)
+        return runCatching {
+            // Normalize first so re-showing QR for legacy T2-imported profiles
+            // with polluted raw paths (path="/") does not throw from the Go codec.
+            TcptunProfileCodec.encode(normalizeForCompactQr(config))
+        }.getOrNull()
+    }
+
+    /** Compact T2/T3 only allow the default transport path on raw. */
+    private fun normalizeForCompactQr(config: AppConfig): AppConfig {
+        if (!config.transport.trim().equals("raw", ignoreCase = true)) return config
+        val path = config.path.trim()
+        if (path.isEmpty() || path == DefaultRawTransportPath) return config
+        return config.copy(path = DefaultRawTransportPath)
     }
 
     private fun decodeAuthorityProfile(protocol: String, raw: String): AppConfig {
@@ -78,7 +99,17 @@ object ProfileUriCodec {
         if (security == "reality-quic" && protocol != "native") {
             error("reality-quic requires native protocol")
         }
-        val path = uri.getQueryParameter("path") ?: uri.getQueryParameter("spx") ?: "/proxy"
+        val transport = transportFromType(type)
+        // Keep transport path independent of REALITY SpiderX. Falling back to
+        // spx for raw profiles produced non-default paths (e.g. "/") that break
+        // compact QR encoding even though raw ignores custom paths.
+        val path = uri.getQueryParameter("path")?.takeIf { it.isNotBlank() }
+            ?: if (transport != "raw") {
+                uri.getQueryParameter("spx")?.takeIf { it.isNotBlank() }
+            } else {
+                null
+            }
+            ?: DefaultRawTransportPath
         validateNetworks(uri.getQueryParameter("network"))
         return AppConfig(
             id = UUID.randomUUID().toString(),
@@ -86,11 +117,11 @@ object ProfileUriCodec {
             serverHost = host,
             serverPort = port.toString(),
             protocol = protocol,
-            transport = transportFromType(type),
+            transport = transport,
             token = token,
             sni = uri.getQueryParameter("sni").orEmpty()
                 .ifBlank { uri.getQueryParameter("serverName").orEmpty() },
-            path = path.ifBlank { "/" },
+            path = path,
             tls = security == "tls",
             tlsInsecure = uri.getBooleanParameterCompat("allowInsecure", false) ||
                 uri.getBooleanParameterCompat("tlsInsecure", false) ||
@@ -450,6 +481,7 @@ object ProfileUriCodec {
     }
 
     private const val TcptunUriVersion = "1"
+    private const val DefaultRawTransportPath = "/proxy"
     private fun encodeComponent(value: String): String {
         return URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
     }

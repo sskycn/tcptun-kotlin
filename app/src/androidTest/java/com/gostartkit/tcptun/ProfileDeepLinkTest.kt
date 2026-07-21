@@ -389,6 +389,102 @@ class ProfileDeepLinkTest {
     }
 
     @Test
+    fun encodeForQrDoesNotThrowOnCustomRawTransportPath() {
+        // Legacy T2-era / URI imports often stored SpiderX as path ("/").
+        // Compact T3 rejects non-default raw paths; QR encoding must still work.
+        val profile = AppConfig(
+            name = "raw-path-reality",
+            serverHost = "edge.example.com",
+            serverPort = "443",
+            protocol = "native",
+            transport = "raw",
+            token = "secret",
+            path = "/",
+            tunnelSecurity = "reality",
+            sni = "example.com",
+            realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
+            realityShortId = "a65f93c1dbc5d54a",
+            realityFingerprint = "chrome",
+            realitySpiderX = "/",
+            mux = true,
+        )
+        val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
+        assertTrue(qrPayload.isNotBlank())
+        assertTrue(qrPayload.startsWith("T3:"))
+        val bitmap = generateQrCodeBitmap(qrPayload, 512)
+        assertTrue(bitmap.width > 0 && bitmap.height > 0)
+        val decoded = ProfileUriCodec.decode(qrPayload).getOrThrow()
+        assertEquals(profile.serverHost, decoded.serverHost)
+        assertEquals(profile.token, decoded.token)
+        assertEquals("reality", decoded.tunnelSecurity)
+        assertEquals("/proxy", decoded.path)
+    }
+
+    @Test
+    fun legacyT2RealityProfileCanBeShownAsQr() {
+        // Mirrors the crash path: decode old T2, pollute raw path as older clients
+        // did with SpiderX="/", then open the QR dialog encoder.
+        val outbound = AppConfig(
+            name = "edge",
+            serverHost = "edge.example.com",
+            serverPort = "443",
+            protocol = "native",
+            transport = "raw",
+            token = "secret",
+            path = "/proxy",
+            tunnelSecurity = "reality",
+            sni = "example.com",
+            realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
+            realityShortId = "a65f93c1dbc5d54a",
+            realityFingerprint = "chrome",
+            realitySpiderX = "/",
+            mux = true,
+            muxMode = "group",
+        )
+        val t3 = requireNotNull(ProfileUriCodec.encodeForQr(outbound))
+        assertTrue(t3.startsWith("T3:"))
+        val fromT3 = ProfileUriCodec.decode(t3).getOrThrow()
+        // Stored the way older Android builds did after URI/T2 import.
+        val legacyStored = fromT3.copy(path = "/")
+        val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(legacyStored))
+        assertTrue(qrPayload.startsWith("T3:"))
+        generateQrCodeBitmap(qrPayload, 512)
+        val roundTrip = ProfileUriCodec.decode(qrPayload).getOrThrow()
+        assertEquals("reality", roundTrip.tunnelSecurity)
+        assertEquals("/", roundTrip.realitySpiderX)
+        assertEquals("/proxy", roundTrip.path)
+    }
+
+    @Test
+    fun realityUriImportDoesNotCopySpiderXIntoRawPath() {
+        val uri = "native://secret@edge.example.com:443" +
+            "?v=1&type=raw&security=reality&sni=example.com" +
+            "&pbk=BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY&sid=a65f93c1dbc5d54a" +
+            "&fp=chrome&spx=/#edge"
+        val profile = ProfileUriCodec.decode(uri).getOrThrow()
+        assertEquals("/proxy", profile.path)
+        assertEquals("/", profile.realitySpiderX)
+        assertTrue(requireNotNull(ProfileUriCodec.encodeForQr(profile)).startsWith("T3:"))
+    }
+
+    @Test
+    fun qrEncodingDoesNotFallBackToALossyProtocolUri() {
+        val profile = AppConfig(
+            name = "mixed-upstream",
+            serverHost = "edge.example.com",
+            serverPort = "443",
+            protocol = "native",
+            transport = "raw",
+            token = "secret",
+            upstreamProtocol = "mixed",
+        )
+
+        // T3 cannot preserve a mixed upstream protocol. Returning null is safer
+        // than emitting an authority URI that silently decodes as SOCKS5.
+        assertNull(ProfileUriCodec.encodeForQr(profile))
+    }
+
+    @Test
     fun connectionIdentityIgnoresProfileIdAndDisplayName() {
         val first = AppConfig(
             id = "one",

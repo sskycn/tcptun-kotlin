@@ -1684,9 +1684,31 @@ private fun ProfileQrCodeDialog(
     onDismiss: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
-    val uri = remember(profile) { requireNotNull(ProfileUriCodec.encodeForQr(profile)) }
+    // Keep the dialog non-fatal even if a future codec implementation violates
+    // encodeForQr's nullable/no-throw contract.
+    val payload = remember(profile) {
+        runCatching { ProfileUriCodec.encodeForQr(profile) }.getOrNull()
+    }
     // Higher target size keeps modules large after denser payloads + on-screen scaling.
-    val bitmap = remember(uri) { generateQrCodeBitmap(uri, 1024) }
+    val bitmap = remember(payload) {
+        payload?.let { value ->
+            runCatching { generateQrCodeBitmap(value, 1024) }.getOrNull()
+        }
+    }
+    if (payload == null || bitmap == null) {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text(stringResource(R.string.profile_qr_code)) },
+            text = { Text(stringResource(R.string.profile_qr_code_failed)) },
+            confirmButton = {
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.close))
+                }
+            },
+        )
+        return
+    }
+
     val profileMeta = listOf(profile.label(), profile.maskedAddress())
         .filter { it.isNotBlank() }
         .joinToString(" · ")

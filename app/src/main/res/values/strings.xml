@@ -13,6 +13,7 @@
     <string name="profile_qr_code">Profile QR code</string>
     <string name="profile_qr_code_description">QR code for %1$s</string>
     <string name="profile_qr_code_hint">Scan with TcpTun to import this profile</string>
+    <string name="profile_qr_code_failed">This profile could not be turned into a QR code.</string>
     <string name="scan_qr_code">Scan QR code</string>
     <string name="scan_profile_qr_code">Scan profile QR code</string>
     <string name="scan_qr_instruction">Place a profile QR code inside the frame</string>
