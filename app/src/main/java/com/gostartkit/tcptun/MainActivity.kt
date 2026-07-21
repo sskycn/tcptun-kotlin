@@ -181,6 +181,7 @@ private val VpnPlanCommandScope = CoroutineScope(SupervisorJob() + Dispatchers.M
 private val VpnPlanCommandGeneration = AtomicInteger()
 private val VpnPlanCommandJob = AtomicReference<Job?>(null)
 private val ProcessProfileMutationMutex = Mutex()
+private const val MaxProfileMutationAttempts = 4
 
 private val CardShape = RoundedCornerShape(16.dp)
 private val CardShapeCompact = RoundedCornerShape(12.dp)
@@ -712,16 +713,26 @@ internal fun TcptunScreen(
             },
         )
     }
-    suspend fun persistProfileStateLocked(next: ProfilesState): ProfilesState {
+    suspend fun commitProfileMutationLocked(
+        transform: (ProfilesState) -> ProfilesState,
+        validate: suspend (ProfilesState, ProfilesState) -> Unit = { _, _ -> },
+    ): Pair<ProfilesState, ProfilesState> {
         val generation = profileReloadGeneration.incrementAndGet()
         return withContext(NonCancellable) {
-            val saved = withContext(Dispatchers.IO) {
-                ProfileStore.save(context, next).getOrThrow()
-                ProfileStore.load(context)
+            repeat(MaxProfileMutationAttempts) {
+                val snapshot = withContext(Dispatchers.IO) { ProfileStore.snapshot(context) }
+                val next = withContext(Dispatchers.Default) { transform(snapshot.state) }
+                validate(snapshot.state, next)
+                val saved = withContext(Dispatchers.IO) {
+                    ProfileStore.saveIfCurrent(context, snapshot, next).getOrThrow()
+                }
+                if (saved != null) {
+                    if (generation == profileReloadGeneration.get()) storedState = saved
+                    TcptunState.notifyProfileStateChanged()
+                    return@withContext snapshot.state to saved
+                }
             }
-            if (generation == profileReloadGeneration.get()) storedState = saved
-            TcptunState.notifyProfileStateChanged()
-            saved
+            throw IllegalStateException("profile state changed repeatedly; please retry")
         }
     }
 
@@ -730,8 +741,7 @@ internal fun TcptunScreen(
     ): ProfilesState? {
         return try {
             profileMutationMutex.withLock {
-                val current = storedState ?: throw IllegalStateException("profile state is unavailable")
-                persistProfileStateLocked(transform(current))
+                commitProfileMutationLocked(transform).second
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -747,22 +757,25 @@ internal fun TcptunScreen(
 
     suspend fun storeValidatedProfile(profile: AppConfig): Pair<AppConfig, Boolean> =
         profileMutationMutex.withLock {
-            val current = storedState ?: throw IllegalStateException("profile state is unavailable")
             val identity = withContext(Dispatchers.Default) {
                 profileConnectionIdentity(profile)
                     ?: throw IllegalArgumentException("profile identity could not be created")
             }
-            val existingId = withContext(Dispatchers.Default) {
+            var storedProfile = profile
+            var added = false
+            commitProfileMutationLocked(transform = { current ->
                 current.profiles.firstOrNull { candidate ->
                     profileConnectionIdentity(candidate) == identity
-                }?.id
-            }
-            val existing = existingId?.let { id -> current.profiles.firstOrNull { it.id == id } }
-            if (existing != null) return@withLock existing to false
-
-            val next = current.copy(profiles = current.profiles + profile)
-            persistProfileStateLocked(next)
-            profile to true
+                }?.let { existing ->
+                    storedProfile = existing
+                    added = false
+                    current
+                } ?: current.copy(profiles = current.profiles + profile).also {
+                    storedProfile = profile
+                    added = true
+                }
+            })
+            storedProfile to added
         }
 
     fun openQrScanner() {
@@ -892,31 +905,39 @@ internal fun TcptunScreen(
     ): Boolean {
         return try {
             profileMutationMutex.withLock {
-                val current = storedState ?: throw IllegalStateException("profile state is unavailable")
-                val nextState = transform(current)
-                if (!shouldApplyRuntime(current)) {
-                    persistProfileStateLocked(nextState)
-                    return@withLock true
-                }
-                val plan = if (nextState.activeIds.isEmpty()) {
-                    null
-                } else {
-                    try {
-                        withContext(Dispatchers.Default) { nextState.runPlan() }
-                    } catch (error: Exception) {
-                        TcptunState.error(error.message ?: resources.getString(R.string.start_failed))
-                        showLogs = true
-                        return@withLock false
-                    }
-                }
-                val canUpdateOutbounds =
-                    TcptunState.status == "Running" && current.activeIds.isNotEmpty()
-                persistProfileStateLocked(nextState)
-                if (plan == null) {
+                var applyRuntime = false
+                var intendedOutboundUpdate = false
+                var plan: ProfileRunPlan? = null
+                commitProfileMutationLocked(
+                    transform = transform,
+                    validate = { current, nextState ->
+                        applyRuntime = shouldApplyRuntime(current)
+                        intendedOutboundUpdate =
+                            TcptunState.status == "Running" && current.activeIds.isNotEmpty()
+                        plan = if (!applyRuntime || nextState.activeIds.isEmpty()) {
+                            null
+                        } else {
+                            withContext(Dispatchers.Default) { nextState.runPlan() }
+                        }
+                    },
+                )
+                if (!applyRuntime) return@withLock true
+                val committedPlan = plan
+                if (committedPlan == null) {
                     stopVpn(context)
                 } else {
                     TcptunState.clearTcping()
-                    if (canUpdateOutbounds) updateVpnOutbounds(context, plan) else launchPlan(plan)
+                    if (intendedOutboundUpdate) {
+                        if (TcptunState.status == "Running") {
+                            updateVpnOutbounds(context, committedPlan)
+                        } else {
+                            TcptunState.appendLog(
+                                "profile runtime update skipped: VPN state changed to ${TcptunState.status}",
+                            )
+                        }
+                    } else {
+                        launchPlan(committedPlan)
+                    }
                 }
                 true
             }
@@ -924,6 +945,7 @@ internal fun TcptunScreen(
             throw cancelled
         } catch (error: Exception) {
             TcptunState.error(error.message ?: resources.getString(R.string.profile_save_failed))
+            showLogs = true
             false
         }
     }

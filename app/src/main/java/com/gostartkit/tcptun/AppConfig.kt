@@ -4,6 +4,7 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 
 internal const val DefaultLocalProxyProtocol = "socks5"
 internal const val AndroidTunInboundTag = "tun"
@@ -850,6 +851,11 @@ data class ProfilesState(
     }
 }
 
+internal data class ProfileStoreSnapshot(
+    val state: ProfilesState,
+    val mutationRevision: Long,
+)
+
 object ProfileStore {
     private const val PREFS = "tcptun"
     private const val KEY_STATE_VERSION = "profileStateVersion"
@@ -858,6 +864,15 @@ object ProfileStore {
     private const val KEY_ENABLED = "enabledProfileIds"
     private const val KEY_ACTIVE = "activeProfileIds"
     private const val STATE_VERSION_INDEPENDENT_OUTBOUNDS = 2
+    private val mutationRevision = AtomicLong()
+
+    internal fun currentMutationRevision(): Long = mutationRevision.get()
+
+    @Synchronized
+    internal fun snapshot(context: Context): ProfileStoreSnapshot {
+        val state = loadInternal(context.applicationContext)
+        return ProfileStoreSnapshot(state, mutationRevision.get())
+    }
 
     @Synchronized
     fun load(context: Context): ProfilesState = runCatching {
@@ -961,6 +976,8 @@ object ProfileStore {
             .remove(KEY_SELECTED)
             .remove(KEY_ENABLED)
             .apply()
+        mutationRevision.incrementAndGet()
+        Unit
     }
 
     @Synchronized
@@ -976,16 +993,37 @@ object ProfileStore {
     @Synchronized
     internal fun replaceActiveIdsIfCurrent(
         context: Context,
+        expectedMutationRevision: Long,
         expectedProfiles: List<AppConfig>,
         expectedActiveIds: Set<String>,
         replacementActiveIds: Set<String>,
     ): Result<Boolean> = runRecoverableCatching {
+        if (mutationRevision.get() != expectedMutationRevision) return@runRecoverableCatching false
         val current = loadInternal(context.applicationContext)
+        if (mutationRevision.get() != expectedMutationRevision) return@runRecoverableCatching false
         if (current.profiles != expectedProfiles || current.activeIds != expectedActiveIds) {
             return@runRecoverableCatching false
         }
         save(context, current.copy(activeIds = replacementActiveIds)).getOrThrow()
         true
+    }
+
+    @Synchronized
+    internal fun saveIfCurrent(
+        context: Context,
+        expected: ProfileStoreSnapshot,
+        next: ProfilesState,
+    ): Result<ProfilesState?> = runRecoverableCatching {
+        if (mutationRevision.get() != expected.mutationRevision) return@runRecoverableCatching null
+        val current = loadInternal(context.applicationContext)
+        if (
+            mutationRevision.get() != expected.mutationRevision ||
+            current != expected.state
+        ) {
+            return@runRecoverableCatching null
+        }
+        save(context, next).getOrThrow()
+        loadInternal(context.applicationContext)
     }
 
     private fun migrateSingleProfile(context: Context): ProfilesState {
