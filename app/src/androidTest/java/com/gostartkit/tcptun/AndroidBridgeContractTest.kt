@@ -182,6 +182,80 @@ class AndroidBridgeContractTest {
     }
 
     @Test
+    fun corruptOrDuplicateStoredProfilesCannotCrashUiStateLoading() {
+        val context = InstrumentationRegistry.getInstrumentation().context
+        val prefs = context.getSharedPreferences("tcptun", 0)
+        prefs.edit().clear().commit()
+        try {
+            prefs.edit().putInt("profiles", 7).commit()
+            assertEquals(emptyList<AppConfig>(), ProfileStore.load(context).profiles)
+
+            val first = AppConfig(id = "duplicate", name = "first", serverHost = "192.0.2.10", token = "one")
+            val second = AppConfig(id = "duplicate", name = "second", serverHost = "192.0.2.20", token = "two")
+            val blankId = AppConfig(id = "temporary", name = "third", serverHost = "192.0.2.30", token = "three")
+            prefs.edit()
+                .putInt("profileStateVersion", 2)
+                .putString(
+                    "profiles",
+                    JSONArray()
+                        .put(first.toJson())
+                        .put(JSONObject.NULL)
+                        .put(second.toJson())
+                        .put(blankId.toJson().put("id", " "))
+                        .toString(),
+                )
+                .putString("activeProfileIds", JSONArray().put("duplicate").toString())
+                .commit()
+
+            val loaded = ProfileStore.load(context)
+
+            assertEquals(3, loaded.profiles.size)
+            assertEquals(3, loaded.profiles.map(AppConfig::id).toSet().size)
+            assertTrue(loaded.profiles.all { it.id.isNotBlank() })
+            assertEquals(setOf("duplicate"), loaded.activeIds)
+        } finally {
+            prefs.edit().clear().commit()
+        }
+    }
+
+    @Test
+    fun corruptOrDuplicateStoredRouteRulesLoadSafelyWithUniqueKeys() {
+        val context = InstrumentationRegistry.getInstrumentation().context
+        val prefs = context.getSharedPreferences("tcptun_routes", 0)
+        prefs.edit().clear().commit()
+        try {
+            prefs.edit().putBoolean("managedRouteRules", true).commit()
+            assertEquals(emptyList<ManagedRouteRule>(), RouteRuleStore.load(context))
+
+            val encoded = JSONArray()
+                .put(
+                    JSONObject()
+                        .put("id", "duplicate")
+                        .put("type", ManagedRouteRuleType.DomainSuffix.name)
+                        .put("value", "example.com")
+                        .put("outbound", ManagedRouteOutbound.Proxy.name),
+                )
+                .put(JSONObject.NULL)
+                .put(
+                    JSONObject()
+                        .put("id", "duplicate")
+                        .put("type", ManagedRouteRuleType.DomainSuffix.name)
+                        .put("value", "example.org")
+                        .put("outbound", ManagedRouteOutbound.Direct.name),
+                )
+                .toString()
+            prefs.edit().putString("managedRouteRules", encoded).commit()
+
+            val loaded = RouteRuleStore.load(context)
+
+            assertEquals(2, loaded.size)
+            assertEquals(2, loaded.map(ManagedRouteRule::id).toSet().size)
+        } finally {
+            prefs.edit().clear().commit()
+        }
+    }
+
+    @Test
     fun stateFlowDropsStaleEngineAndSequenceEvents() {
         val firstEpoch = TcptunState.beginBridgeSession()
         val accepted = TcptunState.applyBridgeStatusEvent(

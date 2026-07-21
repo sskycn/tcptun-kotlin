@@ -3,6 +3,7 @@ package com.tcptun.client
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -35,8 +36,16 @@ class RouteManagementUiTest {
     @Test
     fun opensStructuredRouteRuleEditorFromTopBar() {
         val activity = composeRule.activity
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithContentDescription(activity.getString(R.string.more_options))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
         composeRule.onNodeWithContentDescription(activity.getString(R.string.more_options)).performClick()
         composeRule.onNodeWithText(activity.getString(R.string.route_management)).performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithContentDescription(activity.getString(R.string.add_route_rule))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
         composeRule.onNodeWithText(activity.getString(R.string.route_management)).assertIsDisplayed()
 
         composeRule.onNodeWithContentDescription(activity.getString(R.string.add_route_rule)).performClick()
@@ -52,9 +61,17 @@ class RouteManagementUiTest {
         RouteRuleStore.save(composeRule.activity, listOf(first, second)).getOrThrow()
 
         val activity = composeRule.activity
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithContentDescription(activity.getString(R.string.more_options))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
         composeRule.onNodeWithContentDescription(activity.getString(R.string.more_options)).performClick()
         composeRule.onNodeWithText(activity.getString(R.string.route_management)).performClick()
 
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithContentDescription(activity.getString(R.string.reorder_rule))
+                .fetchSemanticsNodes().size >= 2
+        }
         composeRule.onAllNodesWithContentDescription(activity.getString(R.string.reorder_rule))[0]
             .performTouchInput {
                 down(center)

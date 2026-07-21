@@ -1,21 +1,77 @@
 package com.tcptun.client
 
 import java.lang.reflect.Proxy
+import java.lang.reflect.Method
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
 import org.json.JSONArray
+
+internal fun Throwable.isFatalProcessError(): Boolean =
+    this is VirtualMachineError || this is ThreadDeath
+
+internal fun failureDescription(error: Throwable): String =
+    error.message?.take(4_096)?.trim().takeUnless { it.isNullOrEmpty() } ?: error.javaClass.simpleName
+
+internal inline fun <T> runRecoverableCatching(block: () -> T): Result<T> = try {
+    Result.success(block())
+} catch (error: Throwable) {
+    if (error.isFatalProcessError()) throw error
+    Result.failure(error)
+}
+
+private fun defaultCallbackResult(returnType: Class<*>): Any? = when (returnType) {
+    java.lang.Boolean.TYPE -> false
+    java.lang.Byte.TYPE -> 0.toByte()
+    java.lang.Short.TYPE -> 0.toShort()
+    java.lang.Integer.TYPE -> 0
+    java.lang.Long.TYPE -> 0L
+    java.lang.Float.TYPE -> 0f
+    java.lang.Double.TYPE -> 0.0
+    java.lang.Character.TYPE -> '\u0000'
+    else -> null
+}
+
+/** Prevents exceptions in Java proxies from crossing the gomobile/JNI callback boundary. */
+internal fun createSafeBridgeCallbackProxy(
+    callbackClass: Class<*>,
+    label: String,
+    invocation: (Method, Array<out Any?>?) -> Any?,
+): Any = Proxy.newProxyInstance(callbackClass.classLoader, arrayOf(callbackClass)) { proxy, method, args ->
+    if (method.declaringClass == Any::class.java) {
+        return@newProxyInstance when (method.name) {
+            "equals" -> proxy === args?.firstOrNull()
+            "hashCode" -> System.identityHashCode(proxy)
+            "toString" -> "SafeBridgeCallback($label)"
+            else -> defaultCallbackResult(method.returnType)
+        }
+    }
+    try {
+        invocation(method, args)
+    } catch (error: Throwable) {
+        if (error.isFatalProcessError()) throw error
+        try {
+            TcptunState.appendLog("$label callback failed: ${failureDescription(error)}")
+        } catch (loggingError: Throwable) {
+            if (loggingError.isFatalProcessError()) throw loggingError
+        }
+        defaultCallbackResult(method.returnType)
+    }
+}
 
 /** Validates through the gomobile core without creating or starting a service. */
 internal fun validateTcptunConfig(configJson: String) {
     try {
         val bridgeClass = Class.forName("androidbridge.Androidbridge")
         bridgeClass.getMethod("validateConfig", String::class.java).invoke(null, configJson)
-    } catch (err: ReflectiveOperationException) {
-        val cause = err.cause ?: err
-        throw IllegalArgumentException(cause.message ?: cause.javaClass.name, cause)
-    } catch (err: LinkageError) {
-        throw IllegalStateException(
-            "androidbridge validation API is unavailable. Rebuild app/libs/androidbridge.aar.",
-            err,
-        )
+    } catch (error: Throwable) {
+        if (error.isFatalProcessError()) throw error
+        val cause = error.cause ?: error
+        if (cause.isFatalProcessError()) throw cause
+        if (error is ReflectiveOperationException && error.cause != null) {
+            throw IllegalArgumentException(failureDescription(cause), cause)
+        }
+        throw IllegalStateException("androidbridge validation API is unavailable. Rebuild app/libs/androidbridge.aar.", cause)
     }
 }
 
@@ -47,6 +103,7 @@ interface TcptunBridge {
     fun status(): String
     fun statusJson(): String
     fun setLogCallback(onLog: (String) -> Unit)
+    fun clearLogCallback()
     fun setStatusCallback(onStatus: (String) -> Unit)
     fun clearStatusCallback()
     fun registerEvent(event: String)
@@ -62,22 +119,28 @@ interface TcptunBridge {
 
 /** Owns exactly one gomobile Engine for the lifetime of one VpnService. */
 class ReflectionTcptunBridge : TcptunBridge {
-    private val bridgeClass: Class<*> by lazy {
+    private val engineLock = ReentrantReadWriteLock()
+    @Volatile private var closed = false
+    private val bridgeClassDelegate = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         try {
             Class.forName("androidbridge.Androidbridge")
-        } catch (err: ClassNotFoundException) {
+        } catch (error: Throwable) {
+            if (error.isFatalProcessError()) throw error
             throw IllegalStateException(
                 "androidbridge AAR is missing. Run ./scripts/build-androidbridge.sh, then rebuild and reinstall the app.",
-                err,
+                error,
             )
         }
     }
-    private val engine: Any by lazy {
+    private val bridgeClass: Class<*> get() = bridgeClassDelegate.value
+    private val engineDelegate = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         try {
             bridgeClass.getMethod("newEngine").invoke(null)
                 ?: throw IllegalStateException("androidbridge.NewEngine returned null")
-        } catch (err: ReflectiveOperationException) {
-            val cause = err.cause ?: err
+        } catch (error: Throwable) {
+            if (error.isFatalProcessError()) throw error
+            val cause = error.cause ?: error
+            if (cause.isFatalProcessError()) throw cause
             throw IllegalStateException(
                 "androidbridge Engine API is missing. Rebuild app/libs/androidbridge.aar from the current tcptun-go checkout.",
                 cause,
@@ -92,6 +155,11 @@ class ReflectionTcptunBridge : TcptunBridge {
     private var appIdentityProvider: Any? = null
     private var flowCallback: Any? = null
 
+    private inline fun <T> withOpenEngine(action: (Any) -> T): T = engineLock.read {
+        check(!closed) { "androidbridge Engine is already closed" }
+        action(engineDelegate.value)
+    }
+
     override fun configure(configJson: String) {
         invokeEngine("configure", arrayOf(String::class.java), configJson)
     }
@@ -99,7 +167,7 @@ class ReflectionTcptunBridge : TcptunBridge {
     override fun setTun(fd: Int, mtu: Int) {
         invokeEngine(
             "setTun",
-            arrayOf(Long::class.javaPrimitiveType!!, Long::class.javaPrimitiveType!!),
+            arrayOf(java.lang.Long.TYPE, java.lang.Long.TYPE),
             fd.toLong(),
             mtu.toLong(),
         )
@@ -126,7 +194,7 @@ class ReflectionTcptunBridge : TcptunBridge {
     override fun stopOutbound(tag: String, force: Boolean, timeoutMillis: Long) {
         invokeEngine(
             "stopOutbound",
-            arrayOf(String::class.java, Boolean::class.javaPrimitiveType!!, Long::class.javaPrimitiveType!!),
+            arrayOf(String::class.java, java.lang.Boolean.TYPE, java.lang.Long.TYPE),
             tag,
             force,
             timeoutMillis,
@@ -142,25 +210,24 @@ class ReflectionTcptunBridge : TcptunBridge {
     }
 
     private fun invokeProbe(methodName: String, tag: String, host: String, port: Int, timeoutMillis: Long): Long {
-        val method = engine.javaClass.methods.singleOrNull {
-            it.name == methodName && it.parameterTypes.size == 4
-        } ?: throw IllegalStateException(
-            "androidbridge.Engine.$methodName is unavailable. Rebuild app/libs/androidbridge.aar.",
-        )
-        val portArgument: Any = when (method.parameterTypes[2]) {
-            Int::class.javaPrimitiveType, Int::class.javaObjectType -> port
-            else -> port.toLong()
-        }
-        val timeoutArgument: Any = when (method.parameterTypes[3]) {
-            Int::class.javaPrimitiveType, Int::class.javaObjectType -> timeoutMillis.toInt()
-            else -> timeoutMillis
-        }
-        return try {
-            (method.invoke(engine, tag, host, portArgument, timeoutArgument) as? Number)?.toLong()
+        return withOpenEngine { engine ->
+            val method = engine.javaClass.methods.singleOrNull {
+                it.name == methodName && it.parameterTypes.size == 4
+            } ?: throw IllegalStateException(
+                "androidbridge.Engine.$methodName is unavailable. Rebuild app/libs/androidbridge.aar.",
+            )
+            val portArgument: Any = when (method.parameterTypes[2]) {
+                java.lang.Integer.TYPE, Int::class.javaObjectType -> port
+                else -> port.toLong()
+            }
+            val timeoutArgument: Any = when (method.parameterTypes[3]) {
+                java.lang.Integer.TYPE, Int::class.javaObjectType -> timeoutMillis.toInt()
+                else -> timeoutMillis
+            }
+            invokeMethod(engine, method, tag, host, portArgument, timeoutArgument)
+                .let { it as? Number }
+                ?.toLong()
                 ?: throw IllegalStateException("androidbridge.Engine.$methodName returned no elapsed time")
-        } catch (err: ReflectiveOperationException) {
-            val cause = err.cause ?: err
-            throw IllegalStateException(cause.message ?: cause.javaClass.name, cause)
         }
     }
 
@@ -171,12 +238,21 @@ class ReflectionTcptunBridge : TcptunBridge {
     }
 
     override fun close() {
-        invokeEngine("close")
-        logCallback = null
-        statusCallback = null
-        socketProtector = null
-        appIdentityProvider = null
-        flowCallback = null
+        engineLock.write {
+            if (closed) return
+            closed = true
+            try {
+                if (engineDelegate.isInitialized()) {
+                    invokeMethod(engineDelegate.value, engineDelegate.value.javaClass.getMethod("close"))
+                }
+            } finally {
+                logCallback = null
+                statusCallback = null
+                socketProtector = null
+                appIdentityProvider = null
+                flowCallback = null
+            }
+        }
     }
 
     override fun status(): String = (invokeEngine("status") as? String).orEmpty()
@@ -185,9 +261,9 @@ class ReflectionTcptunBridge : TcptunBridge {
 
     override fun setLogCallback(onLog: (String) -> Unit) {
         val callbackClass = callbackClass("androidbridge.LogCallback") ?: return
-        val callback = Proxy.newProxyInstance(callbackClass.classLoader, arrayOf(callbackClass)) { _, method, args ->
+        val callback = createSafeBridgeCallbackProxy(callbackClass, "tcptun log") { method, args ->
             if (method.name.equals("onLog", ignoreCase = true) && !args.isNullOrEmpty()) {
-                onLog(args[0].toString())
+                onLog(args[0]?.toString().orEmpty())
             }
             null
         }
@@ -195,11 +271,16 @@ class ReflectionTcptunBridge : TcptunBridge {
         invokeEngine("setLogCallback", arrayOf(callbackClass), callback)
     }
 
+    override fun clearLogCallback() {
+        clearCallback("androidbridge.LogCallback", "setLogCallback")
+        logCallback = null
+    }
+
     override fun setStatusCallback(onStatus: (String) -> Unit) {
         val callbackClass = callbackClass("androidbridge.StatusCallback") ?: return
-        val callback = Proxy.newProxyInstance(callbackClass.classLoader, arrayOf(callbackClass)) { _, method, args ->
+        val callback = createSafeBridgeCallbackProxy(callbackClass, "tcptun status") { method, args ->
             if (method.name.equals("onStatus", ignoreCase = true) && !args.isNullOrEmpty()) {
-                onStatus(args[0].toString())
+                onStatus(args[0]?.toString().orEmpty())
             }
             null
         }
@@ -222,10 +303,10 @@ class ReflectionTcptunBridge : TcptunBridge {
 
     override fun setSocketProtector(onProtect: (Int) -> Boolean) {
         val callbackClass = callbackClass("androidbridge.SocketProtector") ?: return
-        val callback = Proxy.newProxyInstance(callbackClass.classLoader, arrayOf(callbackClass)) { _, method, args ->
+        val callback = createSafeBridgeCallbackProxy(callbackClass, "socket protector") { method, args ->
             if (method.name.equals("protect", ignoreCase = true) && !args.isNullOrEmpty()) {
-                val fd = (args[0] as? Number)?.toInt() ?: return@newProxyInstance false
-                return@newProxyInstance onProtect(fd)
+                val fd = (args[0] as? Number)?.toInt() ?: return@createSafeBridgeCallbackProxy false
+                return@createSafeBridgeCallbackProxy onProtect(fd)
             }
             false
         }
@@ -240,9 +321,9 @@ class ReflectionTcptunBridge : TcptunBridge {
 
     override fun setAppIdentityProvider(onIdentify: (String) -> String?) {
         val callbackClass = callbackClass("androidbridge.AppIdentityProvider") ?: return
-        val callback = Proxy.newProxyInstance(callbackClass.classLoader, arrayOf(callbackClass)) { _, method, args ->
+        val callback = createSafeBridgeCallbackProxy(callbackClass, "app identity") { method, args ->
             if (method.name.equals("identifyApp", ignoreCase = true) && !args.isNullOrEmpty()) {
-                return@newProxyInstance onIdentify(args[0].toString()).orEmpty()
+                return@createSafeBridgeCallbackProxy onIdentify(args[0]?.toString().orEmpty()).orEmpty()
             }
             ""
         }
@@ -262,9 +343,9 @@ class ReflectionTcptunBridge : TcptunBridge {
     override fun setFlowCallback(onFlow: (String) -> Unit) {
         val callbackClass = callbackClass("androidbridge.FlowCallback")
             ?: throw IllegalStateException("androidbridge.FlowCallback is unavailable. Rebuild app/libs/androidbridge.aar.")
-        val callback = Proxy.newProxyInstance(callbackClass.classLoader, arrayOf(callbackClass)) { _, method, args ->
+        val callback = createSafeBridgeCallbackProxy(callbackClass, "flow analysis") { method, args ->
             if (method.name.equals("onFlow", ignoreCase = true) && !args.isNullOrEmpty()) {
-                onFlow(args[0].toString())
+                onFlow(args[0]?.toString().orEmpty())
             }
             null
         }
@@ -280,8 +361,11 @@ class ReflectionTcptunBridge : TcptunBridge {
     private fun callbackClass(name: String): Class<*>? {
         return try {
             Class.forName(name)
-        } catch (err: ClassNotFoundException) {
-            TcptunState.appendLog("$name is not available: ${err.message}")
+        } catch (error: Throwable) {
+            if (error.isFatalProcessError()) throw error
+            val cause = error.cause
+            if (cause != null && cause.isFatalProcessError()) throw cause
+            TcptunState.appendLog("$name is not available: ${failureDescription(error)}")
             null
         }
     }
@@ -289,7 +373,10 @@ class ReflectionTcptunBridge : TcptunBridge {
     private fun clearCallback(className: String, methodName: String) {
         val callbackClass = try {
             Class.forName(className)
-        } catch (_: ClassNotFoundException) {
+        } catch (error: Throwable) {
+            if (error.isFatalProcessError()) throw error
+            val cause = error.cause
+            if (cause != null && cause.isFatalProcessError()) throw cause
             return
         }
         invokeEngine(methodName, arrayOf(callbackClass), null)
@@ -300,11 +387,25 @@ class ReflectionTcptunBridge : TcptunBridge {
         parameterTypes: Array<Class<*>> = emptyArray(),
         vararg args: Any?,
     ): Any? {
+        return withOpenEngine { engine ->
+            val method = try {
+                engine.javaClass.getMethod(name, *parameterTypes)
+            } catch (error: Throwable) {
+                if (error.isFatalProcessError()) throw error
+                throw IllegalStateException(failureDescription(error), error)
+            }
+            invokeMethod(engine, method, *args)
+        }
+    }
+
+    private fun invokeMethod(target: Any, method: Method, vararg args: Any?): Any? {
         return try {
-            engine.javaClass.getMethod(name, *parameterTypes).invoke(engine, *args)
-        } catch (err: ReflectiveOperationException) {
-            val cause = err.cause ?: err
-            throw IllegalStateException(cause.message ?: cause.javaClass.name, cause)
+            method.invoke(target, *args)
+        } catch (error: Throwable) {
+            if (error.isFatalProcessError()) throw error
+            val cause = error.cause ?: error
+            if (cause.isFatalProcessError()) throw cause
+            throw IllegalStateException(failureDescription(cause), cause)
         }
     }
 }

@@ -10,6 +10,7 @@ internal const val AndroidTunInboundTag = "tun"
 internal const val AndroidLocalProxyInboundTag = "local"
 internal val LocalProxyProtocols = listOf(DefaultLocalProxyProtocol, "mixed")
 internal val AndroidTunNetworks = listOf("tcp", "udp")
+private const val MaxProfileIdLength = 256
 
 /** Inbound tags matched by managed route rules. TUN always; local mixed/SOCKS when enabled. */
 internal fun managedRouteInboundTags(routeLocalProxyTraffic: Boolean): JSONArray =
@@ -106,6 +107,7 @@ data class AppConfig(
         }
 
     fun validate(): String? {
+        if (!hasSafeStorageSize()) return "profile data is too large"
         if (name.isBlank()) return "profile name is required"
         if (rawConfigJson.isNotBlank()) return validateRawConfig(rawConfigJson)
         if (serverHost.isBlank()) return "server address is required"
@@ -114,6 +116,7 @@ data class AppConfig(
         if (protocol !in Protocols) return "unsupported protocol: $protocol"
         if (transport !in Transports) return "unsupported transport: $transport"
         if (upstreamProtocol !in UpstreamProtocols) return "unsupported upstream protocol: $upstreamProtocol"
+        if (protocol != "native" && token.isBlank()) return "$protocol credential is required"
         val normalizedSecurity = tunnelSecurity.trim().lowercase()
         if (normalizedSecurity !in TunnelSecurityTypes) return "unsupported security: $tunnelSecurity"
         if (normalizedSecurity.isNotBlank() && tls) return "TLS cannot be combined with tunnel security"
@@ -190,6 +193,35 @@ data class AppConfig(
         }
         if (path.isBlank()) return "path is required"
         return null
+    }
+
+    internal fun hasSafeStorageSize(): Boolean {
+        if (id.length > MaxProfileIdLength || rawConfigJson.length > MaxProfileImportLength) return false
+        if (rawConfigJson.isNotBlank() && runRecoverableCatching {
+                requireSafeJsonNesting(rawConfigJson)
+            }.isFailure
+        ) {
+            return false
+        }
+        return listOf(
+            name,
+            serverHost,
+            serverPort,
+            protocol,
+            transport,
+            token,
+            sni,
+            path,
+            tunnelSecurity,
+            flow,
+            realityPublicKey,
+            realityShortId,
+            realityFingerprint,
+            realitySpiderX,
+            muxMode,
+            muxUdpMode,
+            upstreamProtocol,
+        ).all { it.length <= MaxProfileUriLength }
     }
 
     fun toBridgeJson(
@@ -333,6 +365,7 @@ data class AppConfig(
         verbose: Boolean,
         routeLocalProxyTraffic: Boolean,
     ): String {
+        requireSafeJsonNesting(rawConfigJson)
         val root = JSONObject(rawConfigJson)
         // tcptun-go removed the top-level discovery config in 30ff0a1 and now
         // rejects it through strict JSON decoding. Keep previously saved full
@@ -618,6 +651,7 @@ data class AppConfig(
 
     private fun validateRawConfig(raw: String): String? {
         return runCatching {
+            requireSafeJsonNesting(raw)
             val root = JSONObject(raw)
             if (root.has("mode")) return@runCatching "legacy mode-based configuration is not supported"
             val outbounds = root.optJSONArray("outbounds")
@@ -709,7 +743,7 @@ data class AppConfig(
         }
     }
 
-    fun save(context: Context) {
+    fun save(context: Context): Result<Unit> {
         val current = ProfileStore.load(context)
         val profiles = current.profiles.toMutableList()
         val index = profiles.indexOfFirst { it.id == id }
@@ -718,7 +752,7 @@ data class AppConfig(
         } else {
             profiles.add(this)
         }
-        ProfileStore.save(context, current.copy(profiles = profiles))
+        return ProfileStore.save(context, current.copy(profiles = profiles))
     }
 
     fun label(): String {
@@ -735,7 +769,10 @@ data class AppConfig(
 
     fun maskedAddress(): String {
         if (rawConfigJson.isNotBlank()) {
-            val root = runCatching { JSONObject(rawConfigJson) }.getOrNull()
+            val root = runCatching {
+                requireSafeJsonNesting(rawConfigJson)
+                JSONObject(rawConfigJson)
+            }.getOrNull()
             val inbounds = root?.optJSONArray("inbounds")?.length() ?: 0
             val outbounds = root?.optJSONArray("outbounds")?.length() ?: 0
             return "$inbounds inbounds · $outbounds outbounds"
@@ -822,27 +859,60 @@ object ProfileStore {
     private const val KEY_ACTIVE = "activeProfileIds"
     private const val STATE_VERSION_INDEPENDENT_OUTBOUNDS = 2
 
-    fun load(context: Context): ProfilesState {
+    @Synchronized
+    fun load(context: Context): ProfilesState = runCatching {
+        loadInternal(context.applicationContext)
+    }.getOrElse {
+        ProfilesState(emptyList())
+    }
+
+    private fun loadInternal(context: Context): ProfilesState {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val raw = prefs.getString(KEY_PROFILES, null)
         if (!raw.isNullOrBlank()) {
+            if (raw.length > MaxStoredProfilesLength) return ProfilesState(emptyList())
+            requireSafeJsonNesting(raw)
             val arr = JSONArray(raw)
+            if (arr.length() > MaxStoredProfileCount) return ProfilesState(emptyList())
+            var repaired = false
+            val seenIds = mutableSetOf<String>()
             val profiles = buildList {
                 for (i in 0 until arr.length()) {
-                    val profile = AppConfig.fromJson(arr.getJSONObject(i))
-                    if (profile.serverHost.isNotBlank() || profile.rawConfigJson.isNotBlank()) {
-                        add(profile)
+                    val json = arr.optJSONObject(i)
+                    if (json == null) {
+                        repaired = true
+                        continue
                     }
+                    val decoded = runCatching { AppConfig.fromJson(json) }.getOrNull()
+                    if (decoded == null || !decoded.hasSafeStorageSize() ||
+                        (decoded.serverHost.isBlank() && decoded.rawConfigJson.isBlank())
+                    ) {
+                        repaired = true
+                        continue
+                    }
+                    val storedId = decoded.id.trim()
+                    val normalizedId = storedId
+                        .takeIf { it.isNotBlank() && it.length <= MaxProfileIdLength && seenIds.add(it) }
+                        ?: generateUniqueProfileId(seenIds).also { repaired = true }
+                    if (normalizedId != decoded.id) repaired = true
+                    add(decoded.copy(id = normalizedId))
                 }
             }
-            val stateVersion = prefs.getInt(KEY_STATE_VERSION, 0)
-            val storedActive = prefs.getString(KEY_ACTIVE, null)
+            val stateVersion = runCatching { prefs.getInt(KEY_STATE_VERSION, 0) }.getOrDefault(0)
+            val storedActive = runCatching { prefs.getString(KEY_ACTIVE, null) }.getOrNull()
                 ?.takeIf { stateVersion >= STATE_VERSION_INDEPENDENT_OUTBOUNDS }
                 ?.let { encoded ->
                     runCatching {
+                        if (encoded.length > MaxStoredProfilesLength) error("active profile data is too large")
+                        requireSafeJsonNesting(encoded)
                         val active = JSONArray(encoded)
                         buildSet {
-                            for (index in 0 until active.length()) add(active.getString(index))
+                            for (index in 0 until active.length()) {
+                                active.optString(index)
+                                    .trim()
+                                    .takeIf { it.isNotBlank() && it.length <= MaxProfileIdLength }
+                                    ?.let(::add)
+                            }
                         }
                     }.getOrNull()
                 }
@@ -850,9 +920,10 @@ object ProfileStore {
             val activeIds = storedActive.orEmpty().filterTo(linkedSetOf()) { it in knownIds }
             val state = ProfilesState(profiles, activeIds)
             if (
+                repaired ||
                 profiles.size != arr.length() ||
                 stateVersion < STATE_VERSION_INDEPENDENT_OUTBOUNDS ||
-                !prefs.contains(KEY_ACTIVE)
+                !runCatching { prefs.contains(KEY_ACTIVE) }.getOrDefault(false)
             ) {
                 save(context, state)
             }
@@ -863,25 +934,58 @@ object ProfileStore {
         return migrated
     }
 
-    fun save(context: Context, state: ProfilesState) {
-        val knownIds = state.profiles.mapTo(mutableSetOf(), AppConfig::id)
+    @Synchronized
+    fun save(context: Context, state: ProfilesState): Result<Unit> = runCatching {
+        require(state.profiles.size <= MaxStoredProfileCount) { "too many profiles" }
+        require(state.profiles.all(AppConfig::hasSafeStorageSize)) { "profile data is too large" }
+        val seenIds = mutableSetOf<String>()
+        val normalizedProfiles = state.profiles.map { profile ->
+            val storedId = profile.id.trim()
+            val normalizedId = storedId
+                .takeIf { it.isNotBlank() && it.length <= MaxProfileIdLength && seenIds.add(it) }
+                ?: generateUniqueProfileId(seenIds)
+            if (profile.id == normalizedId) profile else profile.copy(id = normalizedId)
+        }
+        val knownIds = normalizedProfiles.mapTo(mutableSetOf(), AppConfig::id)
         val normalizedActiveIds = state.activeIds.filterTo(linkedSetOf()) { it in knownIds }
         val arr = JSONArray()
-        state.profiles.forEach { arr.put(it.toJson()) }
+        normalizedProfiles.forEach { arr.put(it.toJson()) }
         val active = JSONArray()
-        state.profiles.filter { it.id in normalizedActiveIds }.forEach { active.put(it.id) }
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        normalizedProfiles.filter { it.id in normalizedActiveIds }.forEach { active.put(it.id) }
+        val encodedProfiles = arr.toString()
+        require(encodedProfiles.length <= MaxStoredProfilesLength) { "stored profile data is too large" }
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putInt(KEY_STATE_VERSION, STATE_VERSION_INDEPENDENT_OUTBOUNDS)
-            .putString(KEY_PROFILES, arr.toString())
+            .putString(KEY_PROFILES, encodedProfiles)
             .putString(KEY_ACTIVE, active.toString())
             .remove(KEY_SELECTED)
             .remove(KEY_ENABLED)
             .apply()
     }
 
-    fun clearActive(context: Context) {
+    @Synchronized
+    fun clearActive(context: Context): Result<Unit> {
         val state = load(context)
-        if (state.activeIds.isNotEmpty()) save(context, state.copy(activeIds = emptySet()))
+        return if (state.activeIds.isNotEmpty()) {
+            save(context, state.copy(activeIds = emptySet()))
+        } else {
+            Result.success(Unit)
+        }
+    }
+
+    @Synchronized
+    internal fun replaceActiveIdsIfCurrent(
+        context: Context,
+        expectedProfiles: List<AppConfig>,
+        expectedActiveIds: Set<String>,
+        replacementActiveIds: Set<String>,
+    ): Result<Boolean> = runRecoverableCatching {
+        val current = loadInternal(context.applicationContext)
+        if (current.profiles != expectedProfiles || current.activeIds != expectedActiveIds) {
+            return@runRecoverableCatching false
+        }
+        save(context, current.copy(activeIds = replacementActiveIds)).getOrThrow()
+        true
     }
 
     private fun migrateSingleProfile(context: Context): ProfilesState {
@@ -903,5 +1007,13 @@ object ProfileStore {
             mux = prefs.getBoolean("mux", true),
         )
         return ProfilesState(listOf(profile))
+    }
+
+    private fun generateUniqueProfileId(seenIds: MutableSet<String>): String {
+        var id: String
+        do {
+            id = UUID.randomUUID().toString()
+        } while (!seenIds.add(id))
+        return id
     }
 }

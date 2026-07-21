@@ -13,12 +13,16 @@ private val RejectedPeerUniStreamPattern = Regex(
 )
 
 internal fun transientQuicRetryDelayMillis(error: Throwable): Long? {
-    for (cause in generateSequence(error as Throwable?) { it.cause }) {
-        val message = cause.message.orEmpty()
+    var cause: Throwable? = error
+    var depth = 0
+    while (cause != null && depth < MAX_CAUSE_DEPTH) {
+        val message = cause.message.orEmpty().take(MAX_RETRY_ERROR_LENGTH)
         MuxBackoffRemainingPattern.find(message)?.let { match ->
             val value = match.groupValues[1].toDoubleOrNull() ?: return null
             val multiplier = if (match.groupValues[2] == "s") 1_000.0 else 1.0
-            return (ceil(value * multiplier).toLong() + 50L).coerceAtLeast(1L)
+            val milliseconds = ceil(value * multiplier)
+            if (!milliseconds.isFinite() || milliseconds > Long.MAX_VALUE - 50L) return null
+            return (milliseconds.toLong() + 50L).coerceAtLeast(1L)
         }
         if (
             CanceledQuicStreamPattern.containsMatchIn(message) ||
@@ -29,6 +33,8 @@ internal fun transientQuicRetryDelayMillis(error: Throwable): Long? {
             // the next attempt will either succeed or expose the exact backoff.
             return 100L
         }
+        cause = cause.cause
+        depth += 1
     }
     return null
 }
@@ -43,7 +49,12 @@ internal fun probeOutboundWithTransientQuicRetry(
 ): Long {
     require(totalTimeoutMillis > 0) { "TCPing total timeout must be positive" }
     require(attemptTimeoutMillis > 0) { "TCPing attempt timeout must be positive" }
-    val deadline = nowMillis() + totalTimeoutMillis
+    val startedAt = nowMillis()
+    val deadline = if (startedAt > Long.MAX_VALUE - totalTimeoutMillis) {
+        Long.MAX_VALUE
+    } else {
+        startedAt + totalTimeoutMillis
+    }
     while (true) {
         if (!isActive()) throw CancellationException("TCPing request was canceled")
         val remaining = deadline - nowMillis()
@@ -64,3 +75,6 @@ internal fun probeOutboundWithTransientQuicRetry(
         }
     }
 }
+
+private const val MAX_CAUSE_DEPTH = 32
+private const val MAX_RETRY_ERROR_LENGTH = 4_096

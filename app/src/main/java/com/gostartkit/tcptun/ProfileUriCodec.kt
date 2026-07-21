@@ -10,8 +10,15 @@ import java.util.UUID
 
 object ProfileUriCodec {
     fun decode(raw: String): Result<AppConfig> {
-        val trimmed = raw.trim()
         return runCatching {
+            if (raw.length > MaxProfileImportLength) error("profile payload is too large")
+            val trimmed = raw.trim()
+            if (trimmed.isBlank()) error("profile payload is empty")
+            val looksLikeJson = trimmed.indexOf('{') >= 0 && trimmed.lastIndexOf('}') > trimmed.indexOf('{')
+            if (!looksLikeJson && trimmed.length > MaxProfileUriLength) {
+                error("profile URI is too large")
+            }
+            if (looksLikeJson) requireSafeJsonNesting(trimmed)
             when {
                 ProfileDeepLinkCodec.isSupportedLink(trimmed) -> {
                     val profileUri = ProfileDeepLinkCodec.decode(trimmed).getOrThrow()
@@ -29,14 +36,19 @@ object ProfileUriCodec {
     }
 
     fun encode(config: AppConfig): String? {
-        if (config.rawConfigJson.isNotBlank()) return null
-        return when (config.protocol) {
-            "native" -> encodeAuthorityProfile("native", config)
-            "vless" -> encodeAuthorityProfile("vless", config)
-            "trojan" -> encodeAuthorityProfile("trojan", config)
-            "vmess" -> encodeVMess(config)
-            else -> null
-        }
+        return runCatching {
+            if (config.rawConfigJson.isNotBlank()) return@runCatching null
+            val validationConfig = if (config.name.isBlank()) config.copy(name = "profile") else config
+            if (validationConfig.validate() != null) return@runCatching null
+            val encoded = when (config.protocol) {
+                "native" -> encodeAuthorityProfile("native", config)
+                "vless" -> encodeAuthorityProfile("vless", config)
+                "trojan" -> encodeAuthorityProfile("trojan", config)
+                "vmess" -> encodeVMess(config)
+                else -> null
+            }
+            encoded?.takeIf { it.length <= MaxProfileUriLength }
+        }.getOrNull()
     }
 
     /**
@@ -164,7 +176,10 @@ object ProfileUriCodec {
 
     private fun decodeVMess(raw: String): AppConfig {
         val encoded = raw.substringAfter("://").substringBefore("#").trim()
-        val obj = JSONObject(String(decodeBase64(encoded), StandardCharsets.UTF_8))
+        val decodedJson = String(decodeBase64(encoded), StandardCharsets.UTF_8)
+        require(decodedJson.length <= MaxProfileImportLength) { "VMess profile is too large" }
+        requireSafeJsonNesting(decodedJson)
+        val obj = JSONObject(decodedJson)
         val host = obj.optString("add")
         val port = obj.optString("port")
         if (host.isBlank()) error("missing VMess server host")
@@ -223,7 +238,9 @@ object ProfileUriCodec {
     }
 
     private fun decodeJsonProfile(raw: String): AppConfig {
-        val obj = JSONObject(extractJsonObject(raw))
+        val extracted = extractJsonObject(raw)
+        requireSafeJsonNesting(extracted)
+        val obj = JSONObject(extracted)
         if (obj.has("serverHost") || obj.has("serverPort")) {
             return AppConfig.fromJson(obj).copy(id = UUID.randomUUID().toString())
         }

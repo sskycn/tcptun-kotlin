@@ -3,6 +3,7 @@ package com.tcptun.client
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
@@ -42,8 +43,15 @@ class ProfileDeleteUndoUiTest {
         ProfileStore.save(composeRule.activity, ProfilesState(profiles = listOf(profile)))
         composeRule.activityRule.scenario.recreate()
 
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText(profile.name).fetchSemanticsNodes().isNotEmpty()
+        }
         composeRule.onNodeWithText(profile.name).performTouchInput { swipeLeft() }
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.delete)).performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText(composeRule.activity.getString(R.string.undo))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
         val undo = composeRule.onNodeWithText(composeRule.activity.getString(R.string.undo))
         undo.assertIsDisplayed()
         composeRule.mainClock.advanceTimeBy(7_000)
@@ -62,6 +70,10 @@ class ProfileDeleteUndoUiTest {
         ProfileStore.save(composeRule.activity, ProfilesState(profiles = listOf(first, second)))
         composeRule.activityRule.scenario.recreate()
 
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithContentDescription(composeRule.activity.getString(R.string.reorder_profile))
+                .fetchSemanticsNodes().size >= 2
+        }
         composeRule.onAllNodesWithContentDescription(composeRule.activity.getString(R.string.reorder_profile))[0]
             .performTouchInput {
                 down(center)

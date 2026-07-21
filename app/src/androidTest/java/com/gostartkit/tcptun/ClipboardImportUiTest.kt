@@ -3,6 +3,8 @@ package com.tcptun.client
 import android.content.ClipData
 import android.content.ClipboardManager
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -83,11 +85,22 @@ class ClipboardImportUiTest {
         composeRule.activityRule.scenario.recreate()
 
         val currentActivity = composeRule.activity
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithContentDescription(currentActivity.getString(R.string.actions))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
         composeRule.onNodeWithContentDescription(currentActivity.getString(R.string.actions)).performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText(currentActivity.getString(R.string.import_from_clipboard))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
         composeRule.onNodeWithText(currentActivity.getString(R.string.import_from_clipboard)).performClick()
 
         composeRule.waitUntil(timeoutMillis = 5_000) {
             ProfileStore.load(currentActivity).profiles.any { it.rawConfigJson.isNotBlank() }
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText("tcptun-json").fetchSemanticsNodes().isNotEmpty()
         }
         composeRule.onNodeWithText("tcptun-json").assertIsDisplayed()
         val remainingText = currentActivity.getSystemService(ClipboardManager::class.java)?.primaryClip

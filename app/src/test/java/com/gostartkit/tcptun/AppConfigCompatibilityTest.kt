@@ -83,4 +83,30 @@ class AppConfigCompatibilityTest {
             ).validate(),
         )
     }
+
+    @Test
+    fun rejectsOversizedProfileFieldsBeforeEncodingOrPersistence() {
+        val profile = AppConfig(
+            name = "oversized",
+            serverHost = "x".repeat(MaxProfileUriLength + 1),
+            serverPort = "443",
+        )
+
+        assertEquals("profile data is too large", profile.validate())
+    }
+
+    @Test
+    fun nonNativeProfilesRequireCredentials() {
+        listOf("vless", "vmess", "trojan").forEach { protocol ->
+            val profile = AppConfig(
+                name = protocol,
+                serverHost = "edge.example.com",
+                serverPort = "443",
+                protocol = protocol,
+                token = "",
+            )
+
+            assertEquals("$protocol credential is required", profile.validate())
+        }
+    }
 }

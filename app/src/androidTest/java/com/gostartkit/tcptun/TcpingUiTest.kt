@@ -1,6 +1,7 @@
 package com.tcptun.client
 
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -46,6 +47,9 @@ class TcpingUiTest {
         composeRule.activityRule.scenario.recreate()
 
         val readyText = composeRule.activity.getString(R.string.connected_tap_test)
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText(readyText).fetchSemanticsNodes().isNotEmpty()
+        }
         composeRule.onNodeWithText(readyText)
             .assertHasClickAction()
             .performClick()

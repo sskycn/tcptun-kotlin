@@ -9,22 +9,33 @@ internal data class InterfaceIpv4Address(
 )
 
 internal fun readInterfaceIpv4Addresses(): List<InterfaceIpv4Address> {
-    return runCatching { NetworkInterface.getNetworkInterfaces()?.toList().orEmpty() }
+    val interfaces = runCatching { NetworkInterface.getNetworkInterfaces()?.toList().orEmpty() }
         .getOrDefault(emptyList())
-        .asSequence()
-        .filter { networkInterface ->
-            runCatching { networkInterface.isUp && !networkInterface.isLoopback }
-                .getOrDefault(false)
-        }
-        .flatMap { networkInterface ->
-            networkInterface.inetAddresses.toList().asSequence()
-                .filterIsInstance<Inet4Address>()
-                .filterNot { address -> address.isLoopbackAddress || address.isLinkLocalAddress }
-                .map { address -> InterfaceIpv4Address(networkInterface.name, address.hostAddress.orEmpty()) }
-        }
-        .filter { it.address.isNotBlank() }
-        .distinct()
-        .toList()
+    return runCatching {
+        interfaces
+            .asSequence()
+            .flatMap { networkInterface ->
+                runCatching {
+                    if (!networkInterface.isUp || networkInterface.isLoopback) return@runCatching emptyList()
+                    val interfaceName = networkInterface.name?.trim().orEmpty()
+                    if (interfaceName.isBlank()) return@runCatching emptyList()
+                    networkInterface.inetAddresses
+                        ?.toList()
+                        .orEmpty()
+                        .filterIsInstance<Inet4Address>()
+                        .filterNot { address -> address.isLoopbackAddress || address.isLinkLocalAddress }
+                        .mapNotNull { address ->
+                            address.hostAddress
+                                ?.trim()
+                                ?.takeIf(String::isNotBlank)
+                                ?.let { InterfaceIpv4Address(interfaceName, it) }
+                        }
+                }.getOrDefault(emptyList())
+                    .asSequence()
+            }
+            .distinct()
+            .toList()
+    }.getOrDefault(emptyList())
 }
 
 /**

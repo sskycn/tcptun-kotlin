@@ -105,7 +105,9 @@ class VpnServiceLifecycleTest {
                     TcptunState.status == "Stopped"
                 }
                 assertEquals("Stopped", TcptunState.diagnostics.bridgeStatus)
-                Thread.sleep(300)
+                waitUntil("VPN destroy cleanup completes", timeoutMillis = 10_000) {
+                    TcptunState.logs.any { it == "tcptun destroy cleanup completed" }
+                }
             }
         } finally {
             context.startService(TcptunVpnService.stopIntent(context))

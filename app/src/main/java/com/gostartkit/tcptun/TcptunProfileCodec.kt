@@ -5,13 +5,17 @@ import org.json.JSONObject
 /** Uses tcptun-go as the single source of truth for versioned share-profile payloads. */
 internal object TcptunProfileCodec {
     fun encode(profile: AppConfig): String {
-        return invoke("encodeProfile", profile.toBridgeProfileJson().toString())
+        val encoded = invoke("encodeProfile", profile.toBridgeProfileJson().toString())
             .takeIf(String::isNotBlank)
             ?: throw IllegalStateException("androidbridge.EncodeProfile returned an empty payload")
+        require(encoded.length <= MaxProfileUriLength) { "encoded profile is too large" }
+        return encoded
     }
 
     fun decode(value: String): AppConfig {
         val profileJson = invoke("decodeProfile", value)
+        require(profileJson.length <= MaxProfileImportLength) { "decoded profile is too large" }
+        requireSafeJsonNesting(profileJson)
         return AppConfig.fromJson(JSONObject(profileJson))
     }
 

@@ -87,6 +87,28 @@ class ProfileDeepLinkTest {
     }
 
     @Test
+    fun oversizedExternalProfilePayloadsAreRejectedBeforeParsing() {
+        val oversizedUri = "native://token@example.com:443#" + "x".repeat(MaxProfileUriLength)
+        val oversizedJson = "{" + " ".repeat(MaxProfileImportLength) + "}"
+
+        assertTrue(ProfileUriCodec.decode(oversizedUri).isFailure)
+        assertTrue(ProfileUriCodec.decode(oversizedJson).isFailure)
+    }
+
+    @Test
+    fun invalidStoredProfileCannotThrowDuringShareabilityCheck() {
+        val invalid = AppConfig(
+            name = "invalid",
+            serverHost = "example.com",
+            serverPort = "443",
+            protocol = "native",
+            transport = "unsupported",
+        )
+
+        assertNull(ProfileUriCodec.encode(invalid))
+    }
+
+    @Test
     fun legacyTcptunUriPreservesAllGoMuxParameters() {
         val uri = "tcptun://secret@example.com:443" +
             "?v=1&protocol=native&type=raw&network=tcp%2Cudp&path=%2Ftunnel" +

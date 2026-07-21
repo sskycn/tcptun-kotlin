@@ -56,6 +56,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -77,16 +78,21 @@ private enum class CameraPermissionState {
     Denied,
 }
 
+internal const val QrCameraReadyTestTag = "qr-camera-ready"
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun QrScannerPage(
     onBack: () -> Unit,
-    onProfileScanned: (String) -> Boolean,
+    onProfileScanned: (String, onComplete: (Boolean) -> Unit) -> Unit,
 ) {
     val context = LocalContext.current
     var permissionState by remember {
         mutableStateOf(
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            if (runCatching {
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+                }.getOrDefault(PackageManager.PERMISSION_DENIED) == PackageManager.PERMISSION_GRANTED
+            ) {
                 CameraPermissionState.Granted
             } else {
                 CameraPermissionState.Requesting
@@ -108,7 +114,8 @@ internal fun QrScannerPage(
 
     LaunchedEffect(permissionState) {
         if (permissionState == CameraPermissionState.Requesting) {
-            permissionLauncher.launch(Manifest.permission.CAMERA)
+            runCatching { permissionLauncher.launch(Manifest.permission.CAMERA) }
+                .onFailure { permissionState = CameraPermissionState.Denied }
         }
     }
 
@@ -190,14 +197,17 @@ internal fun QrScannerPage(
                         },
                         onCameraError = { cameraError = true },
                         onScannerError = { scannerRuntimeError = true },
-                        onCodeDetected = { code ->
-                            val accepted = onProfileScanned(code)
-                            invalidProfileCode = !accepted
-                            accepted
+                        onCodeDetected = { code, onComplete ->
+                            onProfileScanned(code) { accepted ->
+                                invalidProfileCode = !accepted
+                                onComplete(accepted)
+                            }
                         },
                     )
                     ScannerFrameOverlay(
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .then(if (camera != null) Modifier.testTag(QrCameraReadyTestTag) else Modifier),
                     )
                     Surface(
                         modifier = Modifier
@@ -229,12 +239,17 @@ internal fun QrScannerPage(
                                     )
                                 }
                             }
-                            if (camera?.cameraInfo?.hasFlashUnit() == true) {
+                            val activeCamera = camera
+                            val hasFlash = runCatching { activeCamera?.cameraInfo?.hasFlashUnit() == true }
+                                .getOrDefault(false)
+                            if (activeCamera != null && hasFlash) {
                                 FilledTonalButton(
                                     onClick = {
                                         val next = !torchEnabled
-                                        camera?.cameraControl?.enableTorch(next)
-                                        torchEnabled = next
+                                        runCatching { activeCamera.cameraControl.enableTorch(next) }.fold(
+                                            onSuccess = { torchEnabled = next },
+                                            onFailure = { scannerRuntimeError = true },
+                                        )
                                     },
                                 ) {
                                     Icon(
@@ -328,15 +343,24 @@ private fun QrCameraPreview(
     onCameraReady: (Camera?) -> Unit,
     onCameraError: (Throwable) -> Unit,
     onScannerError: (Throwable) -> Unit,
-    onCodeDetected: (String) -> Boolean,
+    onCodeDetected: (String, onComplete: (Boolean) -> Unit) -> Unit,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val previewView = remember(context) {
-        PreviewView(context).apply {
-            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-            scaleType = PreviewView.ScaleType.FILL_CENTER
+    val previewViewResult = remember(context) {
+        runCatching {
+            PreviewView(context).apply {
+                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                scaleType = PreviewView.ScaleType.FILL_CENTER
+            }
         }
+    }
+    val previewView = previewViewResult.getOrNull()
+    if (previewView == null) {
+        val error = previewViewResult.exceptionOrNull()
+            ?: IllegalStateException("camera preview could not be created")
+        LaunchedEffect(error) { runCatching { onCameraError(error) } }
+        return
     }
     val currentOnCameraReady by rememberUpdatedState(onCameraReady)
     val currentOnCameraError by rememberUpdatedState(onCameraError)
@@ -349,18 +373,34 @@ private fun QrCameraPreview(
     )
 
     DisposableEffect(context, lifecycleOwner, previewView, bindingKey) {
-        val analysisExecutor = Executors.newSingleThreadExecutor()
-        val mainExecutor = ContextCompat.getMainExecutor(context)
+        val analysisExecutor = runRecoverableCatching { Executors.newSingleThreadExecutor() }
+            .getOrElse { error ->
+                runRecoverableCatching { currentOnCameraError(error) }
+                return@DisposableEffect onDispose {
+                    runRecoverableCatching { currentOnCameraReady(null) }
+                }
+            }
+        val mainExecutor = runCatching { ContextCompat.getMainExecutor(context) }.getOrElse { error ->
+            runCatching { onCameraError(error) }
+            return@DisposableEffect onDispose { runCatching { analysisExecutor.shutdownNow() } }
+        }
         var disposed = false
         var cameraProvider: ProcessCameraProvider? = null
         var previewUseCase: Preview? = null
         var analysisUseCase: ImageAnalysis? = null
         var barcodeScanner: BarcodeScanner? = null
         var analyzer: MlKitQrAnalyzer? = null
-        val providerFuture = ProcessCameraProvider.getInstance(context)
+        val providerFuture = runCatching { ProcessCameraProvider.getInstance(context) }.getOrElse { error ->
+            runCatching { currentOnCameraError(error) }
+            return@DisposableEffect onDispose {
+                runCatching { analysisExecutor.shutdownNow() }
+                runCatching { currentOnCameraReady(null) }
+            }
+        }
 
-        providerFuture.addListener(
-            {
+        runCatching {
+            providerFuture.addListener(
+                {
                 if (disposed) return@addListener
                 try {
                     val provider = providerFuture.get()
@@ -379,14 +419,18 @@ private fun QrCameraPreview(
                     cameraProvider = provider
                     previewUseCase = preview
                     analysisUseCase = analysis
-                    val maxZoomRatio = boundCamera.cameraInfo.zoomState.value?.maxZoomRatio ?: 1f
+                    val maxZoomRatio = boundCamera.cameraInfo.zoomState.value?.maxZoomRatio
+                        ?.takeIf { it.isFinite() && it >= 1f }
+                        ?: 1f
                     val zoomOptions = ZoomSuggestionOptions.Builder { suggestedRatio ->
                         if (disposed) return@Builder false
                         val zoomState = boundCamera.cameraInfo.zoomState.value ?: return@Builder false
-                        boundCamera.cameraControl.setZoomRatio(
-                            suggestedRatio.coerceIn(zoomState.minZoomRatio, zoomState.maxZoomRatio),
-                        )
-                        true
+                        val ratio = safeCameraZoomRatio(
+                            suggested = suggestedRatio,
+                            minimum = zoomState.minZoomRatio,
+                            maximum = zoomState.maxZoomRatio,
+                        ) ?: return@Builder false
+                        runCatching { boundCamera.cameraControl.setZoomRatio(ratio) }.isSuccess
                     }
                         .setMaxSupportedZoomRatio(maxZoomRatio)
                         .build()
@@ -401,38 +445,55 @@ private fun QrCameraPreview(
                         scanner = scanner,
                         onCodeDetected = { code, resume ->
                             mainExecutor.execute {
-                                if (!disposed && !currentOnCodeDetected(code)) resume()
+                                if (!disposed) {
+                                    try {
+                                        currentOnCodeDetected(code) { accepted ->
+                                            if (!accepted) resume()
+                                        }
+                                    } catch (error: Throwable) {
+                                        runCatching { currentOnScannerError(error) }
+                                        resume()
+                                    }
+                                }
                             }
                         },
                         onError = { error ->
                             mainExecutor.execute {
-                                if (!disposed) currentOnScannerError(error)
+                                if (!disposed) runCatching { currentOnScannerError(error) }
                             }
                         },
                     )
                     analysis.setAnalyzer(analysisExecutor, imageAnalyzer)
                     analyzer = imageAnalyzer
-                    if (!disposed) currentOnCameraReady(boundCamera)
+                    if (!disposed) runCatching { currentOnCameraReady(boundCamera) }
                 } catch (error: Throwable) {
-                    if (!disposed) currentOnCameraError(error)
+                    if (!disposed) runCatching { currentOnCameraError(error) }
                 }
-            },
-            mainExecutor,
-        )
+                },
+                mainExecutor,
+            )
+        }.onFailure { error ->
+            if (!disposed) runCatching { currentOnCameraError(error) }
+        }
 
         onDispose {
             disposed = true
-            analyzer?.close()
-            analysisUseCase?.clearAnalyzer()
-            barcodeScanner?.close()
+            runCatching { analyzer?.close() }
+            runCatching { analysisUseCase?.clearAnalyzer() }
+            runCatching { barcodeScanner?.close() }
             cameraProvider?.let { provider ->
-                previewUseCase?.let { provider.unbind(it) }
-                analysisUseCase?.let { provider.unbind(it) }
+                previewUseCase?.let { runCatching { provider.unbind(it) } }
+                analysisUseCase?.let { runCatching { provider.unbind(it) } }
             }
-            analysisExecutor.shutdownNow()
-            currentOnCameraReady(null)
+            runCatching { analysisExecutor.shutdownNow() }
+            runCatching { currentOnCameraReady(null) }
         }
     }
+}
+
+internal fun safeCameraZoomRatio(suggested: Float, minimum: Float, maximum: Float): Float? {
+    if (!suggested.isFinite() || !minimum.isFinite() || !maximum.isFinite() || minimum > maximum) return null
+    return suggested.coerceIn(minimum, maximum)
 }
 
 private class MlKitQrAnalyzer(
@@ -448,36 +509,55 @@ private class MlKitQrAnalyzer(
     @ExperimentalGetImage
     override fun analyze(image: ImageProxy) {
         if (closed.get() || awaitingResult.get() || !processing.compareAndSet(false, true)) {
-            image.close()
+            closeImageSafely(image)
             return
         }
         val mediaImage = image.image
         if (mediaImage == null) {
             processing.set(false)
-            image.close()
+            closeImageSafely(image)
             return
         }
         try {
             scanner.process(InputImage.fromMediaImage(mediaImage, image.imageInfo.rotationDegrees))
                 .addOnSuccessListener { barcodes ->
-                    val code = barcodes.firstNotNullOfOrNull { it.rawValue?.takeIf(String::isNotBlank) }
-                    if (!closed.get() && code != null && awaitingResult.compareAndSet(false, true)) {
-                        onCodeDetected(code) { awaitingResult.set(false) }
+                    try {
+                        val code = barcodes.firstNotNullOfOrNull { it.rawValue?.takeIf(String::isNotBlank) }
+                        if (!closed.get() && code != null && awaitingResult.compareAndSet(false, true)) {
+                            try {
+                                onCodeDetected(code) { awaitingResult.set(false) }
+                            } catch (error: Throwable) {
+                                awaitingResult.set(false)
+                                reportError(error)
+                            }
+                        }
+                        errorReported.set(false)
+                    } catch (error: Throwable) {
+                        reportError(error)
                     }
-                    errorReported.set(false)
                 }
                 .addOnFailureListener { error ->
-                    if (!closed.get() && errorReported.compareAndSet(false, true)) onError(error)
+                    reportError(error)
                 }
                 .addOnCompleteListener {
                     processing.set(false)
-                    image.close()
+                    closeImageSafely(image)
                 }
         } catch (error: Throwable) {
             processing.set(false)
-            image.close()
-            if (!closed.get() && errorReported.compareAndSet(false, true)) onError(error)
+            closeImageSafely(image)
+            reportError(error)
         }
+    }
+
+    private fun reportError(error: Throwable) {
+        if (!closed.get() && errorReported.compareAndSet(false, true)) {
+            runCatching { onError(error) }
+        }
+    }
+
+    private fun closeImageSafely(image: ImageProxy) {
+        runCatching { image.close() }
     }
 
     fun close() {

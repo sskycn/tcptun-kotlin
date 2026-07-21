@@ -57,6 +57,7 @@ private const val BalancedOutboundTag = "profile-pool"
 internal fun AppConfig.runtimeOutboundTag(): String {
     if (rawConfigJson.isBlank()) return profileOutboundTag(id)
 
+    requireSafeJsonNesting(rawConfigJson)
     val root = JSONObject(rawConfigJson)
     val configuredDefault = root.optJSONObject("route")
         ?.optString("default_outbound")

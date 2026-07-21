@@ -27,5 +27,11 @@ class AndroidAppIdentityProviderTest {
     fun rejectsUnsupportedOrMalformedSources() {
         assertNull(parseProxyFlowSource("icmp", "127.0.0.1:1"))
         assertNull(parseProxyFlowSource("tcp", "not-an-endpoint"))
+        assertNull(parseProxyFlowSource("tcp", "example.com:443"))
+        assertNull(parseProxyFlowSource("tcp", "[]:443"))
+        assertNull(parseProxyFlowSource("tcp", "999.0.0.1:443"))
+        assertNull(parseProxyFlowSource("tcp", "127.0.0.1:+443"))
+        assertNull(parseProxyFlowSource("tcp", "127.0.0.1:65536"))
+        assertNull(parseProxyFlowSource("tcp", "[::1]:${"1".repeat(600)}"))
     }
 }

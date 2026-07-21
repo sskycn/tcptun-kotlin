@@ -137,6 +137,9 @@ internal data class BridgeStatusEvent(
 
 object TcptunState {
     private const val MAX_LOGS = 80
+    private const val MAX_LOG_LENGTH = 4_096
+    private const val MAX_STATUS_EVENT_JSON_LENGTH = 64 * 1024
+    private const val MAX_STATUS_FIELD_LENGTH = 4 * 1024
     private const val MAX_FLOW_EVENTS = 256
     private const val LOG_TAG = "TcpTun"
 
@@ -165,7 +168,7 @@ object TcptunState {
 
     @Synchronized
     fun beginBridgeSession(): Long {
-        bridgeEpoch += 1
+        bridgeEpoch = if (bridgeEpoch == Long.MAX_VALUE) 1L else bridgeEpoch + 1L
         bridgeSessionId = -1L
         bridgeSequence = -1L
         flowSessionId = -1L
@@ -191,9 +194,21 @@ object TcptunState {
         return bridgeEpoch
     }
 
+    /** Invalidates callbacks from a stopped engine before a replacement session starts. */
+    @Synchronized
+    internal fun endBridgeSession(epoch: Long): Boolean {
+        if (epoch <= 0L || epoch != bridgeEpoch) return false
+        bridgeEpoch = if (bridgeEpoch == Long.MAX_VALUE) 1L else bridgeEpoch + 1L
+        bridgeSessionId = -1L
+        bridgeSequence = -1L
+        flowSessionId = -1L
+        flowSequence = -1L
+        return true
+    }
+
     @Synchronized
     fun setFlowAnalysisApp(packageName: String) {
-        val normalized = packageName.trim()
+        val normalized = normalizeFlowAnalysisApp(packageName)
         val current = _state.value
         if (normalized == current.flowAnalysisApp) return
         flowSessionId = -1L
@@ -274,16 +289,17 @@ object TcptunState {
 
     @Synchronized
     fun error(message: String) {
+        val safeMessage = message.take(MAX_STATUS_FIELD_LENGTH).trim().ifBlank { "Unknown error" }
         val current = _state.value
         _state.value = current.copy(
             status = "Error",
             connectionsReady = false,
-            lastError = message,
+            lastError = safeMessage,
             diagnostics = current.diagnostics.copy(vpnStatus = "Error", bridgeClientIps = emptyList()),
             tcping = TcpingProgress(),
             profileHealth = emptyMap(),
         )
-        appendLog("error: $message")
+        appendLog("error: $safeMessage")
     }
 
     @Synchronized
@@ -295,29 +311,36 @@ object TcptunState {
     @Synchronized
     internal fun applyBridgeStatusEvent(epoch: Long, eventJson: String): BridgeStatusEvent? {
         if (epoch != bridgeEpoch) return null
-        val event = runCatching {
+        if (eventJson.length > MAX_STATUS_EVENT_JSON_LENGTH) {
+            appendLog("tcptun status ignored: event is too large")
+            return null
+        }
+        val event = runRecoverableCatching {
+            requireSafeJsonNesting(eventJson)
             val json = JSONObject(eventJson)
             BridgeStatusEvent(
                 sessionId = json.optLong("session_id", 0),
                 sequence = json.optLong("sequence", 0),
-                state = json.optString("state"),
-                reason = json.optString("reason"),
-                phase = json.optString("phase"),
-                listen = json.optString("listen"),
-                remote = json.optString("remote"),
-                activeConnections = json.optInt("active_connections", 0),
+                state = json.optStatusString("state"),
+                reason = json.optStatusString("reason"),
+                phase = json.optStatusString("phase"),
+                listen = json.optStatusString("listen"),
+                remote = json.optStatusString("remote"),
+                activeConnections = json.optInt("active_connections", 0).coerceAtLeast(0),
                 clientIps = normalizeClientIps(
                     buildList {
                         json.optJSONArray("client_ips")?.let { values ->
-                            for (index in 0 until values.length()) add(values.optString(index))
+                            for (index in 0 until minOf(values.length(), MAX_CLIENT_IP_CANDIDATES)) {
+                                add(values.optString(index))
+                            }
                         }
                     },
                 ),
-                muxSources = json.optInt("mux_sources", 0),
-                muxSessions = json.optInt("mux_sessions", 0),
-                muxStreams = json.optInt("mux_streams", 0),
+                muxSources = json.optInt("mux_sources", 0).coerceAtLeast(0),
+                muxSessions = json.optInt("mux_sessions", 0).coerceAtLeast(0),
+                muxStreams = json.optInt("mux_streams", 0).coerceAtLeast(0),
                 recoverable = json.optBoolean("recoverable", false),
-                lastError = json.optString("last_error"),
+                lastError = json.optStatusString("last_error"),
                 timestampMs = json.optLong("timestamp_ms", 0),
             )
         }.getOrElse { err ->
@@ -364,7 +387,7 @@ object TcptunState {
 
     @Synchronized
     fun appendLog(line: String) {
-        val clean = line.trim()
+        val clean = line.take(MAX_LOG_LENGTH).trim()
         if (clean.isEmpty()) return
         // Keep in-app log history for later inspection; avoid logcat I/O while hanging
         // in the background with the UI closed.
@@ -384,7 +407,8 @@ object TcptunState {
     @Synchronized
     fun notifyProfileStateChanged() {
         val current = _state.value
-        _state.value = current.copy(profileStateRevision = current.profileStateRevision + 1)
+        val nextRevision = if (current.profileStateRevision == Long.MAX_VALUE) 1L else current.profileStateRevision + 1L
+        _state.value = current.copy(profileStateRevision = nextRevision)
     }
 
     @Synchronized
@@ -419,7 +443,7 @@ object TcptunState {
 
     @Synchronized
     fun beginTcping(targetLabel: String, total: Int): Long {
-        tcpingRequestId += 1
+        tcpingRequestId = if (tcpingRequestId == Long.MAX_VALUE) 1L else tcpingRequestId + 1L
         val current = _state.value
         _state.value = current.copy(
             tcping = TcpingProgress(
@@ -480,7 +504,7 @@ object TcptunState {
 
     @Synchronized
     fun clearTcping() {
-        tcpingRequestId += 1
+        tcpingRequestId = if (tcpingRequestId == Long.MAX_VALUE) 1L else tcpingRequestId + 1L
         _state.value = _state.value.copy(tcping = TcpingProgress())
     }
 
@@ -500,5 +524,12 @@ object TcptunState {
             "outbound_running", "outbound_stopping", "outbound_stopped", "outbound_error" -> "Running"
             else -> "Unknown"
         }
+    }
+
+    private fun JSONObject.optStatusString(name: String): String {
+        val value = opt(name)
+        if (value == null || value === JSONObject.NULL) return ""
+        if (value !is String) return ""
+        return value.take(MAX_STATUS_FIELD_LENGTH).trim()
     }
 }

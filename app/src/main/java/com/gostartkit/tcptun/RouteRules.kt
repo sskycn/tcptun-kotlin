@@ -6,6 +6,11 @@ import org.json.JSONObject
 import java.net.InetAddress
 import java.util.UUID
 
+private const val MaxManagedRouteRuleValueLength = 4096
+private const val MaxManagedRouteRuleIdLength = 256
+private const val MaxStoredRouteRulesLength = 2 * 1024 * 1024
+private const val MaxStoredRouteRuleCount = 1024
+
 enum class ManagedRouteRuleType(val jsonKey: String) {
     Domain("domains"),
     DomainSuffix("domain_suffixes"),
@@ -43,7 +48,7 @@ data class ManagedRouteRule(
 
     fun isValid(): Boolean {
         val normalized = normalized().value
-        if (normalized.isBlank()) return false
+        if (normalized.isBlank() || normalized.length > MaxManagedRouteRuleValueLength) return false
         return when (type) {
             ManagedRouteRuleType.Domain,
             ManagedRouteRuleType.DomainSuffix -> normalized.none(Char::isWhitespace) && '.' in normalized
@@ -77,16 +82,24 @@ object RouteRuleStore {
     private const val KEY_RULES = "managedRouteRules"
 
     fun load(context: Context): List<ManagedRouteRule> {
-        val raw = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_RULES, null)
-            ?: return emptyList()
         return runCatching {
+            val raw = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_RULES, null)
+                ?: return@runCatching emptyList()
+            if (raw.length > MaxStoredRouteRulesLength) return@runCatching emptyList()
+            requireSafeJsonNesting(raw)
             val array = JSONArray(raw)
+            if (array.length() > MaxStoredRouteRuleCount) return@runCatching emptyList()
+            val seenIds = mutableSetOf<String>()
             buildList {
                 for (index in 0 until array.length()) {
                     val json = array.optJSONObject(index) ?: continue
+                    val storedId = json.optString("id").trim()
+                    val id = storedId
+                        .takeIf { it.isNotBlank() && it.length <= MaxManagedRouteRuleIdLength && seenIds.add(it) }
+                        ?: generateUniqueRouteRuleId(seenIds)
                     val rule = ManagedRouteRule(
-                        id = json.optString("id").ifBlank { UUID.randomUUID().toString() },
+                        id = id,
                         type = runCatching { ManagedRouteRuleType.valueOf(json.optString("type")) }
                             .getOrDefault(ManagedRouteRuleType.DomainSuffix),
                         value = json.optString("value"),
@@ -103,7 +116,15 @@ object RouteRuleStore {
 
     fun save(context: Context, rules: List<ManagedRouteRule>): Result<Unit> {
         return runCatching {
-            val normalized = rules.map(ManagedRouteRule::normalized)
+            require(rules.size <= MaxStoredRouteRuleCount) { "too many route rules" }
+            val seenIds = mutableSetOf<String>()
+            val normalized = rules.map { rule ->
+                val storedId = rule.id.trim()
+                val id = storedId
+                    .takeIf { it.isNotBlank() && it.length <= MaxManagedRouteRuleIdLength && seenIds.add(it) }
+                    ?: generateUniqueRouteRuleId(seenIds)
+                rule.copy(id = id).normalized()
+            }
             require(normalized.all(ManagedRouteRule::isValid)) { "invalid route rule" }
             val array = JSONArray()
             normalized.forEach { rule ->
@@ -117,15 +138,34 @@ object RouteRuleStore {
                         .put("enabled", rule.enabled),
                 )
             }
+            val encoded = array.toString()
+            require(encoded.length <= MaxStoredRouteRulesLength) { "stored route rule data is too large" }
             context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit()
-                .putString(KEY_RULES, array.toString())
+                .putString(KEY_RULES, encoded)
                 .apply()
         }
+    }
+
+    private fun generateUniqueRouteRuleId(seenIds: MutableSet<String>): String {
+        var id: String
+        do {
+            id = UUID.randomUUID().toString()
+        } while (!seenIds.add(id))
+        return id
     }
 }
 
 private fun isNumericIp(value: String): Boolean {
+    if (':' !in value) {
+        val octets = value.split('.', limit = 5)
+        return octets.size == 4 && octets.all { octet ->
+            octet.isNotEmpty() &&
+                octet.all(Char::isDigit) &&
+                octet.toIntOrNull() in 0..255
+        }
+    }
+    // A colon makes this an IPv6 literal, so getByName cannot interpret it as a hostname.
     if (!value.matches(Regex("[0-9a-fA-F:.]+"))) return false
     return runCatching { InetAddress.getByName(value) }.isSuccess
 }

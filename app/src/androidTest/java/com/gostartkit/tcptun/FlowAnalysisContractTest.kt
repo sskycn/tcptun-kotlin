@@ -41,6 +41,17 @@ class FlowAnalysisContractTest {
     fun rejectsMalformedOrUnattributedEvents() {
         assertNull(parseFlowAnalysisEvent("not-json"))
         assertNull(parseFlowAnalysisEvent("""{"session_id":1,"sequence":1,"type":"sent","network":"udp","destination":"1.1.1.1:53"}"""))
+        assertNull(
+            parseFlowAnalysisEvent(
+                """{"session_id":1,"sequence":1,"type":"sent","network":"udp","destination":53,"app":{"id":"com.example.target"}}""",
+            ),
+        )
+        assertNull(parseFlowAnalysisEvent(" ".repeat(MAX_FLOW_ANALYSIS_EVENT_JSON_LENGTH + 1)))
+        assertNull(
+            parseFlowAnalysisEvent(
+                eventJson(sequence = 1).replace("example.com:443", "x".repeat(4 * 1024 + 1)),
+            ),
+        )
     }
 
     @Test

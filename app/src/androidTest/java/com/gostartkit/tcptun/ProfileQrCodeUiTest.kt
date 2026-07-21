@@ -2,6 +2,8 @@ package com.tcptun.client
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -51,15 +53,21 @@ class ProfileQrCodeUiTest {
         ProfileStore.save(composeRule.activity, ProfilesState(profiles = listOf(profile)))
         composeRule.activityRule.scenario.recreate()
 
-        composeRule.onNodeWithContentDescription(composeRule.activity.getString(R.string.show_qr_code))
+        val showQr = composeRule.activity.getString(R.string.show_qr_code)
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithContentDescription(showQr).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithContentDescription(showQr)
             .performClick()
 
         // Dialog opened without crashing; profile name also appears in the list row.
+        val qrDescription = composeRule.activity.getString(R.string.profile_qr_code_description, profile.name)
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithContentDescription(qrDescription).fetchSemanticsNodes().isNotEmpty()
+        }
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.profile_qr_code))
             .assertIsDisplayed()
-        composeRule.onNodeWithContentDescription(
-            composeRule.activity.getString(R.string.profile_qr_code_description, profile.name),
-        ).assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(qrDescription).assertIsDisplayed()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.close)).performClick()
     }
 
@@ -78,10 +86,18 @@ class ProfileQrCodeUiTest {
         ProfileStore.save(composeRule.activity, ProfilesState(profiles = listOf(profile)))
         composeRule.activityRule.scenario.recreate()
 
-        composeRule.onNodeWithContentDescription(composeRule.activity.getString(R.string.show_qr_code))
+        val showQr = composeRule.activity.getString(R.string.show_qr_code)
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithContentDescription(showQr).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithContentDescription(showQr)
             .performClick()
 
-        composeRule.onNodeWithText(composeRule.activity.getString(R.string.profile_qr_code_failed))
+        val failure = composeRule.activity.getString(R.string.profile_qr_code_failed)
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText(failure).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithText(failure)
             .assertIsDisplayed()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.close)).performClick()
     }

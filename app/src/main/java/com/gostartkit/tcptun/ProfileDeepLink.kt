@@ -11,6 +11,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 internal const val MaxProfileUriLength = 64 * 1024
+internal const val MaxProfileImportLength = 512 * 1024
+internal const val MaxStoredProfilesLength = 8 * 1024 * 1024
+internal const val MaxStoredProfileCount = 256
 
 internal val SupportedProfileUriSchemes: Set<String> =
     (AppConfig.Protocols + "tcptun").toSet()
@@ -22,6 +25,7 @@ internal const val ProfileDeepLinkVersion = "v1"
 
 internal object ProfileDeepLinkCodec {
     fun encode(profileUri: String): String {
+        require(profileUri.length <= MaxProfileUriLength) { "invalid profile URI length" }
         val value = profileUri.trim()
         require(value.isNotBlank() && value.length <= MaxProfileUriLength) { "invalid profile URI length" }
         require(Uri.parse(value).scheme?.lowercase(Locale.ROOT) in SupportedProfileUriSchemes) {
@@ -37,6 +41,7 @@ internal object ProfileDeepLinkCodec {
     }
 
     fun decode(raw: String): Result<String> = runCatching {
+        if (raw.length > MaxProfileUriLength) error("invalid profile link length")
         val value = raw.trim()
         if (value.isBlank() || value.length > MaxProfileUriLength) error("invalid profile link length")
         val uri = Uri.parse(value)
@@ -82,21 +87,26 @@ internal data class PendingProfileUri(
 )
 
 internal fun profileUriFromIntent(intent: Intent?): String? {
-    if (intent?.action != Intent.ACTION_VIEW) return null
-    val uri = intent.data ?: return null
-    val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return null
-    val value = uri.toString().trim()
-    if (value.isBlank() || value.length > MaxProfileUriLength) return null
-    return when {
-        scheme in SupportedProfileUriSchemes -> value
-        scheme == ProfileDeepLinkScheme && ProfileDeepLinkCodec.isSupportedLink(value) -> value
-        else -> null
-    }
+    return runCatching {
+        if (intent?.action != Intent.ACTION_VIEW) return@runCatching null
+        val uri = intent.data ?: return@runCatching null
+        val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return@runCatching null
+        val rawValue = uri.toString()
+        if (rawValue.length > MaxProfileUriLength) return@runCatching null
+        val value = rawValue.trim()
+        if (value.isBlank() || value.length > MaxProfileUriLength) return@runCatching null
+        when {
+            scheme in SupportedProfileUriSchemes -> value
+            scheme == ProfileDeepLinkScheme && ProfileDeepLinkCodec.isSupportedLink(value) -> value
+            else -> null
+        }
+    }.getOrNull()
 }
 
 internal fun profileConnectionIdentity(config: AppConfig): String? {
     if (config.rawConfigJson.isNotBlank()) {
         return runCatching {
+            requireSafeJsonNesting(config.rawConfigJson)
             "json:" + canonicalJsonValue(JSONObject(config.rawConfigJson))
         }.getOrNull()
     }

@@ -44,4 +44,19 @@ class HotspotNetworkTest {
 
         assertNull(selected)
     }
+
+    @Test
+    fun malformedAndPublicAddressesAreIgnored() {
+        val selected = selectHotspotIpv4Address(
+            addresses = listOf(
+                InterfaceIpv4Address("wlan0", "not-an-address"),
+                InterfaceIpv4Address("ap0", "8.8.8.8"),
+                InterfaceIpv4Address("softap0", "172.31.255.255"),
+            ),
+            tetheredInterfaceNames = null,
+            excludedInterfaceNames = emptySet(),
+        )
+
+        assertEquals(InterfaceIpv4Address("softap0", "172.31.255.255"), selected)
+    }
 }
