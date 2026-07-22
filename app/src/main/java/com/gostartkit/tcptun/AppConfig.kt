@@ -857,6 +857,11 @@ internal data class ProfileStoreSnapshot(
 )
 
 object ProfileStore {
+    private data class EncodedState(
+        val profiles: String,
+        val activeIds: String,
+    )
+
     private const val PREFS = "tcptun"
     private const val KEY_STATE_VERSION = "profileStateVersion"
     private const val KEY_PROFILES = "profiles"
@@ -870,15 +875,20 @@ object ProfileStore {
 
     @Synchronized
     internal fun snapshot(context: Context): ProfileStoreSnapshot {
-        val state = loadInternal(context.applicationContext)
+        val state = loadRecoveringInternal(context.applicationContext)
         return ProfileStoreSnapshot(state, mutationRevision.get())
     }
 
     @Synchronized
-    fun load(context: Context): ProfilesState = runCatching {
-        loadInternal(context.applicationContext)
-    }.getOrElse {
-        ProfilesState(emptyList())
+    fun load(context: Context): ProfilesState = loadRecoveringInternal(context.applicationContext)
+
+    private fun loadRecoveringInternal(context: Context): ProfilesState = try {
+        loadInternal(context)
+    } catch (error: Throwable) {
+        if (error.isFatalProcessError()) throw error
+        ProfilesState(emptyList()).also { empty ->
+            runRecoverableCatching { writeState(context, empty) }
+        }
     }
 
     private fun loadInternal(context: Context): ProfilesState {
@@ -950,7 +960,11 @@ object ProfileStore {
     }
 
     @Synchronized
-    fun save(context: Context, state: ProfilesState): Result<Unit> = runCatching {
+    fun save(context: Context, state: ProfilesState): Result<Unit> = runRecoverableCatching {
+        writeState(context.applicationContext, state)
+    }
+
+    private fun encodeState(state: ProfilesState): EncodedState {
         require(state.profiles.size <= MaxStoredProfileCount) { "too many profiles" }
         require(state.profiles.all(AppConfig::hasSafeStorageSize)) { "profile data is too large" }
         val seenIds = mutableSetOf<String>()
@@ -969,15 +983,22 @@ object ProfileStore {
         normalizedProfiles.filter { it.id in normalizedActiveIds }.forEach { active.put(it.id) }
         val encodedProfiles = arr.toString()
         require(encodedProfiles.length <= MaxStoredProfilesLength) { "stored profile data is too large" }
-        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        return EncodedState(encodedProfiles, active.toString())
+    }
+
+    private fun writeState(context: Context, state: ProfilesState) {
+        writeEncodedState(context, encodeState(state))
+    }
+
+    private fun writeEncodedState(context: Context, encoded: EncodedState) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putInt(KEY_STATE_VERSION, STATE_VERSION_INDEPENDENT_OUTBOUNDS)
-            .putString(KEY_PROFILES, encodedProfiles)
-            .putString(KEY_ACTIVE, active.toString())
+            .putString(KEY_PROFILES, encoded.profiles)
+            .putString(KEY_ACTIVE, encoded.activeIds)
             .remove(KEY_SELECTED)
             .remove(KEY_ENABLED)
             .apply()
         mutationRevision.incrementAndGet()
-        Unit
     }
 
     @Synchronized
@@ -994,18 +1015,93 @@ object ProfileStore {
     internal fun replaceActiveIdsIfCurrent(
         context: Context,
         expectedMutationRevision: Long,
-        expectedProfiles: List<AppConfig>,
         expectedActiveIds: Set<String>,
         replacementActiveIds: Set<String>,
+        commitLock: Any? = null,
+        canCommit: () -> Boolean = { true },
     ): Result<Boolean> = runRecoverableCatching {
         if (mutationRevision.get() != expectedMutationRevision) return@runRecoverableCatching false
-        val current = loadInternal(context.applicationContext)
+        val current = loadRecoveringInternal(context.applicationContext)
         if (mutationRevision.get() != expectedMutationRevision) return@runRecoverableCatching false
-        if (current.profiles != expectedProfiles || current.activeIds != expectedActiveIds) {
+        if (current.activeIds != expectedActiveIds) {
             return@runRecoverableCatching false
         }
-        save(context, current.copy(activeIds = replacementActiveIds)).getOrThrow()
-        true
+        val encoded = encodeState(current.copy(activeIds = replacementActiveIds))
+        guardedWrite(
+            context = context.applicationContext,
+            encoded = encoded,
+            expectedMutationRevision = expectedMutationRevision,
+            commitLock = commitLock,
+            canCommit = canCommit,
+        )
+    }
+
+    @Synchronized
+    internal fun clearActiveIfCurrent(
+        context: Context,
+        expectedMutationRevision: Long,
+        commitLock: Any,
+        canCommit: () -> Boolean,
+    ): Result<Boolean> = runRecoverableCatching {
+        if (mutationRevision.get() != expectedMutationRevision) return@runRecoverableCatching false
+        val current = loadRecoveringInternal(context.applicationContext)
+        if (mutationRevision.get() != expectedMutationRevision) return@runRecoverableCatching false
+        if (current.activeIds.isEmpty()) return@runRecoverableCatching true
+        val encoded = encodeState(current.copy(activeIds = emptySet()))
+        guardedWrite(
+            context = context.applicationContext,
+            encoded = encoded,
+            expectedMutationRevision = expectedMutationRevision,
+            commitLock = commitLock,
+            canCommit = canCommit,
+        )
+    }
+
+    @Synchronized
+    internal fun alignActiveIdsWithPlanIfCurrent(
+        context: Context,
+        expectedMutationRevision: Long,
+        plan: ProfileRunPlan,
+        commitLock: Any,
+        canCommit: () -> Boolean,
+    ): Result<Boolean> = runRecoverableCatching {
+        if (mutationRevision.get() != expectedMutationRevision) return@runRecoverableCatching false
+        val current = loadRecoveringInternal(context.applicationContext)
+        if (mutationRevision.get() != expectedMutationRevision) return@runRecoverableCatching false
+        val currentById = current.profiles.associateBy(AppConfig::id)
+        if (
+            plan.activeIds.any { it !in currentById } ||
+            plan.profiles.any { profile -> currentById[profile.id] != profile }
+        ) {
+            return@runRecoverableCatching false
+        }
+        if (current.activeIds == plan.activeIds) return@runRecoverableCatching true
+        val encoded = encodeState(current.copy(activeIds = plan.activeIds))
+        guardedWrite(
+            context = context.applicationContext,
+            encoded = encoded,
+            expectedMutationRevision = expectedMutationRevision,
+            commitLock = commitLock,
+            canCommit = canCommit,
+        )
+    }
+
+    private fun guardedWrite(
+        context: Context,
+        encoded: EncodedState,
+        expectedMutationRevision: Long,
+        commitLock: Any?,
+        canCommit: () -> Boolean,
+    ): Boolean {
+        val writeIfCurrent = {
+            if (mutationRevision.get() != expectedMutationRevision || !canCommit()) {
+                false
+            } else {
+                writeEncodedState(context, encoded)
+                true
+            }
+        }
+        return if (commitLock == null) writeIfCurrent() else synchronized(commitLock) { writeIfCurrent() }
     }
 
     @Synchronized
@@ -1015,15 +1111,15 @@ object ProfileStore {
         next: ProfilesState,
     ): Result<ProfilesState?> = runRecoverableCatching {
         if (mutationRevision.get() != expected.mutationRevision) return@runRecoverableCatching null
-        val current = loadInternal(context.applicationContext)
+        val current = loadRecoveringInternal(context.applicationContext)
         if (
             mutationRevision.get() != expected.mutationRevision ||
             current != expected.state
         ) {
             return@runRecoverableCatching null
         }
-        save(context, next).getOrThrow()
-        loadInternal(context.applicationContext)
+        writeState(context.applicationContext, next)
+        loadRecoveringInternal(context.applicationContext)
     }
 
     private fun migrateSingleProfile(context: Context): ProfilesState {
