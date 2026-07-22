@@ -156,7 +156,7 @@ class AndroidBridgeContractTest {
 
     @Test
     fun legacyCheckboxSelectionIsNotMigratedAsRunningConnections() {
-        val context = InstrumentationRegistry.getInstrumentation().context
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
         val prefs = context.getSharedPreferences("tcptun", 0)
         val first = AppConfig(id = "legacy-first", name = "first", serverHost = "192.0.2.10", token = "one")
         val second = AppConfig(id = "legacy-second", name = "second", serverHost = "192.0.2.20", token = "two")
@@ -183,7 +183,7 @@ class AndroidBridgeContractTest {
 
     @Test
     fun corruptOrDuplicateStoredProfilesCannotCrashUiStateLoading() {
-        val context = InstrumentationRegistry.getInstrumentation().context
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
         val prefs = context.getSharedPreferences("tcptun", 0)
         prefs.edit().clear().commit()
         try {
@@ -220,7 +220,7 @@ class AndroidBridgeContractTest {
 
     @Test
     fun corruptOrDuplicateStoredRouteRulesLoadSafelyWithUniqueKeys() {
-        val context = InstrumentationRegistry.getInstrumentation().context
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
         val prefs = context.getSharedPreferences("tcptun_routes", 0)
         prefs.edit().clear().commit()
         try {

@@ -6,7 +6,7 @@ import org.json.JSONObject
 import java.net.InetAddress
 import java.util.UUID
 
-private const val MaxManagedRouteRuleValueLength = 4096
+internal const val MaxManagedRouteRuleValueLength = 4096
 private const val MaxManagedRouteRuleIdLength = 256
 private const val MaxStoredRouteRulesLength = 2 * 1024 * 1024
 private const val MaxStoredRouteRuleCount = 1024
@@ -82,14 +82,14 @@ object RouteRuleStore {
     private const val KEY_RULES = "managedRouteRules"
 
     fun load(context: Context): List<ManagedRouteRule> {
-        return runCatching {
+        return runRecoverableCatching {
             val raw = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getString(KEY_RULES, null)
-                ?: return@runCatching emptyList()
-            if (raw.length > MaxStoredRouteRulesLength) return@runCatching emptyList()
+                ?: return@runRecoverableCatching emptyList()
+            if (raw.length > MaxStoredRouteRulesLength) return@runRecoverableCatching emptyList()
             requireSafeJsonNesting(raw)
             val array = JSONArray(raw)
-            if (array.length() > MaxStoredRouteRuleCount) return@runCatching emptyList()
+            if (array.length() > MaxStoredRouteRuleCount) return@runRecoverableCatching emptyList()
             val seenIds = mutableSetOf<String>()
             buildList {
                 for (index in 0 until array.length()) {
@@ -115,7 +115,7 @@ object RouteRuleStore {
     }
 
     fun save(context: Context, rules: List<ManagedRouteRule>): Result<Unit> {
-        return runCatching {
+        return runRecoverableCatching {
             require(rules.size <= MaxStoredRouteRuleCount) { "too many route rules" }
             val seenIds = mutableSetOf<String>()
             val normalized = rules.map { rule ->
@@ -140,10 +140,11 @@ object RouteRuleStore {
             }
             val encoded = array.toString()
             require(encoded.length <= MaxStoredRouteRulesLength) { "stored route rule data is too large" }
-            context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val committed = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putString(KEY_RULES, encoded)
-                .apply()
+                .commit()
+            check(committed) { "failed to persist route rules" }
         }
     }
 

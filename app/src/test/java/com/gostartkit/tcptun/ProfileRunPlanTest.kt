@@ -2,6 +2,7 @@ package com.tcptun.client
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class ProfileRunPlanTest {
@@ -29,6 +30,35 @@ class ProfileRunPlanTest {
         assertEquals(first, profileOutboundTag("profile-one"))
         assertEquals(32, first.length)
         assertNotEquals(first, profileOutboundTag("profile-two"))
+    }
+
+    @Test
+    fun normalizationRejectsProfileListsAboveTheStorageLimit() {
+        val profiles = List(MaxStoredProfileCount + 1) { index ->
+            validProfile("profile-$index", "192.0.2.10")
+        }
+
+        assertThrows(IllegalArgumentException::class.java) {
+            ProfileRunPlan(profiles).normalized()
+        }
+    }
+
+    @Test
+    fun normalizationRejectsOversizedOrExcessActiveProfileIds() {
+        val profile = validProfile("primary", "192.0.2.10")
+
+        assertThrows(IllegalArgumentException::class.java) {
+            ProfileRunPlan(
+                profiles = listOf(profile.copy(id = "x".repeat(MaxProfileIdLength + 1))),
+            ).normalized()
+        }
+
+        assertThrows(IllegalArgumentException::class.java) {
+            ProfileRunPlan(
+                profiles = listOf(profile),
+                activeIds = List(MaxStoredProfileCount + 1) { "id-$it" }.toSet(),
+            ).normalized()
+        }
     }
 
     private fun validProfile(id: String, host: String) = AppConfig(

@@ -11,7 +11,7 @@ internal const val AndroidTunInboundTag = "tun"
 internal const val AndroidLocalProxyInboundTag = "local"
 internal val LocalProxyProtocols = listOf(DefaultLocalProxyProtocol, "mixed")
 internal val AndroidTunNetworks = listOf("tcp", "udp")
-private const val MaxProfileIdLength = 256
+internal const val MaxProfileIdLength = 256
 
 /** Inbound tags matched by managed route rules. TUN always; local mixed/SOCKS when enabled. */
 internal fun managedRouteInboundTags(routeLocalProxyTraffic: Boolean): JSONArray =
@@ -874,6 +874,21 @@ object ProfileStore {
     internal fun currentMutationRevision(): Long = mutationRevision.get()
 
     @Synchronized
+    internal fun runIfRevisionCurrent(
+        expectedMutationRevision: Long,
+        commitLock: Any,
+        canCommit: () -> Boolean,
+        action: () -> Unit,
+    ): Boolean = synchronized(commitLock) {
+        if (mutationRevision.get() != expectedMutationRevision || !canCommit()) {
+            false
+        } else {
+            action()
+            true
+        }
+    }
+
+    @Synchronized
     internal fun snapshot(context: Context): ProfileStoreSnapshot {
         val state = loadRecoveringInternal(context.applicationContext)
         return ProfileStoreSnapshot(state, mutationRevision.get())
@@ -991,13 +1006,14 @@ object ProfileStore {
     }
 
     private fun writeEncodedState(context: Context, encoded: EncodedState) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        val committed = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putInt(KEY_STATE_VERSION, STATE_VERSION_INDEPENDENT_OUTBOUNDS)
             .putString(KEY_PROFILES, encoded.profiles)
             .putString(KEY_ACTIVE, encoded.activeIds)
             .remove(KEY_SELECTED)
             .remove(KEY_ENABLED)
-            .apply()
+            .commit()
+        check(committed) { "failed to persist profile state" }
         mutationRevision.incrementAndGet()
     }
 
@@ -1014,15 +1030,19 @@ object ProfileStore {
     @Synchronized
     internal fun replaceActiveIdsIfCurrent(
         context: Context,
-        expectedMutationRevision: Long,
+        expectedMutationRevision: Long?,
         expectedActiveIds: Set<String>,
         replacementActiveIds: Set<String>,
         commitLock: Any? = null,
         canCommit: () -> Boolean = { true },
     ): Result<Boolean> = runRecoverableCatching {
-        if (mutationRevision.get() != expectedMutationRevision) return@runRecoverableCatching false
+        if (expectedMutationRevision != null && mutationRevision.get() != expectedMutationRevision) {
+            return@runRecoverableCatching false
+        }
         val current = loadRecoveringInternal(context.applicationContext)
-        if (mutationRevision.get() != expectedMutationRevision) return@runRecoverableCatching false
+        if (expectedMutationRevision != null && mutationRevision.get() != expectedMutationRevision) {
+            return@runRecoverableCatching false
+        }
         if (current.activeIds != expectedActiveIds) {
             return@runRecoverableCatching false
         }
@@ -1060,14 +1080,18 @@ object ProfileStore {
     @Synchronized
     internal fun alignActiveIdsWithPlanIfCurrent(
         context: Context,
-        expectedMutationRevision: Long,
+        expectedMutationRevision: Long?,
         plan: ProfileRunPlan,
         commitLock: Any,
         canCommit: () -> Boolean,
     ): Result<Boolean> = runRecoverableCatching {
-        if (mutationRevision.get() != expectedMutationRevision) return@runRecoverableCatching false
+        if (expectedMutationRevision != null && mutationRevision.get() != expectedMutationRevision) {
+            return@runRecoverableCatching false
+        }
         val current = loadRecoveringInternal(context.applicationContext)
-        if (mutationRevision.get() != expectedMutationRevision) return@runRecoverableCatching false
+        if (expectedMutationRevision != null && mutationRevision.get() != expectedMutationRevision) {
+            return@runRecoverableCatching false
+        }
         val currentById = current.profiles.associateBy(AppConfig::id)
         if (
             plan.activeIds.any { it !in currentById } ||
@@ -1089,12 +1113,15 @@ object ProfileStore {
     private fun guardedWrite(
         context: Context,
         encoded: EncodedState,
-        expectedMutationRevision: Long,
+        expectedMutationRevision: Long?,
         commitLock: Any?,
         canCommit: () -> Boolean,
     ): Boolean {
         val writeIfCurrent = {
-            if (mutationRevision.get() != expectedMutationRevision || !canCommit()) {
+            if (
+                (expectedMutationRevision != null && mutationRevision.get() != expectedMutationRevision) ||
+                !canCommit()
+            ) {
                 false
             } else {
                 writeEncodedState(context, encoded)

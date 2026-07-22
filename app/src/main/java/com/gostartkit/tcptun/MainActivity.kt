@@ -152,11 +152,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tcptun.client.ui.theme.TcpTunTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import org.json.JSONObject
 import java.net.Inet4Address
 import java.net.Inet6Address
@@ -180,8 +182,14 @@ private const val PullRefreshSettleMillis = 350L
 private val VpnPlanCommandScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 private val VpnPlanCommandGeneration = AtomicInteger()
 private val VpnPlanCommandJob = AtomicReference<Job?>(null)
+private val VpnPlanUpdateReadyBaseline = AtomicReference<Boolean?>(null)
 private val ProcessProfileMutationMutex = Mutex()
+private val QrCodeGenerationMutex = Mutex()
 private const val MaxProfileMutationAttempts = 4
+private const val MaxProfileNameInputLength = 512
+private const val MaxProfileHostInputLength = 2_048
+private const val MaxProfileChoiceInputLength = 256
+private const val MaxRealityKeyInputLength = 4_096
 
 private val CardShape = RoundedCornerShape(16.dp)
 private val CardShapeCompact = RoundedCornerShape(12.dp)
@@ -190,6 +198,31 @@ private val DialogShape = RoundedCornerShape(28.dp)
 private val QrCardShape = RoundedCornerShape(20.dp)
 private val ListContentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
 private val ListItemSpacing = 8.dp
+
+private fun AppConfig.boundedForEditor(): AppConfig = copy(
+    name = name.take(MaxProfileNameInputLength),
+    serverHost = serverHost.take(MaxProfileHostInputLength),
+    serverPort = serverPort.filter(Char::isDigit).take(5),
+    protocol = protocol.take(MaxProfileChoiceInputLength),
+    transport = transport.take(MaxProfileChoiceInputLength),
+    token = token.take(MaxProfileUriLength),
+    sni = sni.take(MaxProfileHostInputLength),
+    path = path.take(MaxProfileUriLength),
+    tunnelSecurity = tunnelSecurity.take(MaxProfileChoiceInputLength),
+    flow = flow.take(MaxProfileChoiceInputLength),
+    realityPublicKey = realityPublicKey.take(MaxRealityKeyInputLength),
+    realityShortId = realityShortId.take(MaxProfileChoiceInputLength),
+    realityFingerprint = realityFingerprint.take(MaxProfileChoiceInputLength),
+    realitySpiderX = realitySpiderX.take(MaxProfileUriLength),
+    muxMode = muxMode.take(MaxProfileChoiceInputLength),
+    muxUdpMode = muxUdpMode.take(MaxProfileChoiceInputLength),
+    upstreamProtocol = upstreamProtocol.take(MaxProfileChoiceInputLength),
+    rawConfigJson = rawConfigJson.take(MaxProfileImportLength),
+)
+
+private fun reportUiError(message: String) {
+    TcptunState.appendLog("UI error: ${message.trim().ifBlank { "Unknown error" }}")
+}
 
 private data class LocalIpInfo(
     val underlyingInterface: String = "",
@@ -704,14 +737,19 @@ internal fun TcptunScreen(
                     pendingConfig = plan
                     runCatching { vpnLauncher.launch(prepare) }.onFailure { error ->
                         pendingConfig = null
-                        TcptunState.error(error.message ?: resources.getString(R.string.start_failed))
+                        reportUiError(error.message ?: resources.getString(R.string.start_failed))
                     }
                 }
             },
             onFailure = { error ->
-                TcptunState.error(error.message ?: resources.getString(R.string.start_failed))
+                reportUiError(error.message ?: resources.getString(R.string.start_failed))
             },
         )
+    }
+    fun requireProfileMutationAllowed() {
+        check(!isVpnTransitionStatus(TcptunState.status)) {
+            resources.getString(R.string.profile_save_failed)
+        }
     }
     suspend fun commitProfileMutationLocked(
         transform: (ProfilesState) -> ProfilesState,
@@ -720,9 +758,11 @@ internal fun TcptunScreen(
         val generation = profileReloadGeneration.incrementAndGet()
         return withContext(NonCancellable) {
             repeat(MaxProfileMutationAttempts) {
+                requireProfileMutationAllowed()
                 val snapshot = withContext(Dispatchers.IO) { ProfileStore.snapshot(context) }
                 val next = withContext(Dispatchers.Default) { transform(snapshot.state) }
                 validate(snapshot.state, next)
+                requireProfileMutationAllowed()
                 val saved = withContext(Dispatchers.IO) {
                     ProfileStore.saveIfCurrent(context, snapshot, next).getOrThrow()
                 }
@@ -746,7 +786,7 @@ internal fun TcptunScreen(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            TcptunState.error(error.message ?: resources.getString(R.string.profile_save_failed))
+            reportUiError(error.message ?: resources.getString(R.string.profile_save_failed))
             null
         }
     }
@@ -779,6 +819,7 @@ internal fun TcptunScreen(
         }
 
     fun openQrScanner() {
+        if (isVpnTransitionStatus(vpnState.status)) return
         scannerImportJob?.cancel()
         scannerImportJob = null
         scannerSessionGeneration += 1
@@ -823,11 +864,12 @@ internal fun TcptunScreen(
     }
 
     fun importFromClipboard() {
+        if (isVpnTransitionStatus(vpnState.status)) return
         screenScope.launch {
             try {
                 val link = withContext(Dispatchers.IO) { clipboardText(context).getOrThrow() }.trim()
                 if (link.isBlank()) {
-                    TcptunState.error(emptyClipboard)
+                    reportUiError(emptyClipboard)
                     return@launch
                 }
                 val profile = decodeValidatedProfile(link)
@@ -836,7 +878,7 @@ internal fun TcptunScreen(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                TcptunState.error(invalidClipboard)
+                reportUiError(invalidClipboard)
             }
         }
     }
@@ -877,7 +919,7 @@ internal fun TcptunScreen(
             runCatching { notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }
                 .onFailure { error ->
                     pendingNotificationConfig = null
-                    TcptunState.error(error.message ?: resources.getString(R.string.start_failed))
+                    reportUiError(error.message ?: resources.getString(R.string.start_failed))
                 }
             return
         }
@@ -889,12 +931,12 @@ internal fun TcptunScreen(
                     pendingConfig = plan
                     runCatching { vpnLauncher.launch(prepare) }.onFailure { error ->
                         pendingConfig = null
-                        TcptunState.error(error.message ?: resources.getString(R.string.start_failed))
+                        reportUiError(error.message ?: resources.getString(R.string.start_failed))
                     }
                 }
             },
             onFailure = { error ->
-                TcptunState.error(error.message ?: resources.getString(R.string.start_failed))
+                reportUiError(error.message ?: resources.getString(R.string.start_failed))
             },
         )
     }
@@ -904,47 +946,52 @@ internal fun TcptunScreen(
         transform: (ProfilesState) -> ProfilesState,
     ): Boolean {
         return try {
+            var pendingInteractiveStart: ProfileRunPlan? = null
             profileMutationMutex.withLock {
-                var applyRuntime = false
-                var intendedOutboundUpdate = false
-                var plan: ProfileRunPlan? = null
-                commitProfileMutationLocked(
-                    transform = transform,
-                    validate = { current, nextState ->
-                        applyRuntime = shouldApplyRuntime(current)
-                        intendedOutboundUpdate =
-                            TcptunState.status == "Running" && current.activeIds.isNotEmpty()
-                        plan = if (!applyRuntime || nextState.activeIds.isEmpty()) {
-                            null
-                        } else {
-                            withContext(Dispatchers.Default) { nextState.runPlan() }
-                        }
-                    },
-                )
-                if (!applyRuntime) return@withLock true
-                val committedPlan = plan
-                if (committedPlan == null) {
-                    stopVpn(context)
-                } else {
-                    TcptunState.clearTcping()
-                    if (intendedOutboundUpdate) {
-                        if (TcptunState.status == "Running") {
-                            updateVpnOutbounds(context, committedPlan)
-                        } else {
-                            TcptunState.appendLog(
-                                "profile runtime update skipped: VPN state changed to ${TcptunState.status}",
-                            )
-                        }
+                withContext(NonCancellable) {
+                    var applyRuntime = false
+                    var intendedOutboundUpdate = false
+                    var plan: ProfileRunPlan? = null
+                    commitProfileMutationLocked(
+                        transform = transform,
+                        validate = { current, nextState ->
+                            applyRuntime = shouldApplyRuntime(current)
+                            intendedOutboundUpdate =
+                                TcptunState.status == "Running" && current.activeIds.isNotEmpty()
+                            plan = if (!applyRuntime || nextState.activeIds.isEmpty()) {
+                                null
+                            } else {
+                                withContext(Dispatchers.Default) { nextState.runPlan() }
+                            }
+                        },
+                    )
+                    if (!applyRuntime) return@withContext true
+                    val committedPlan = plan
+                    if (committedPlan == null) {
+                        stopVpn(context.applicationContext)
                     } else {
-                        launchPlan(committedPlan)
+                        TcptunState.clearTcping()
+                        if (intendedOutboundUpdate) {
+                            if (TcptunState.status == "Running") {
+                                updateVpnOutbounds(context.applicationContext, committedPlan)
+                            } else {
+                                TcptunState.appendLog(
+                                    "profile runtime update skipped: VPN state changed to ${TcptunState.status}",
+                                )
+                            }
+                        } else {
+                            pendingInteractiveStart = committedPlan
+                        }
                     }
+                    true
                 }
-                true
             }
+            pendingInteractiveStart?.let(::launchPlan)
+            true
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            TcptunState.error(error.message ?: resources.getString(R.string.profile_save_failed))
+            reportUiError(error.message ?: resources.getString(R.string.profile_save_failed))
             showLogs = true
             false
         }
@@ -965,6 +1012,7 @@ internal fun TcptunScreen(
     }
 
     fun deleteProfile(profile: AppConfig) {
+        if (isVpnTransitionStatus(vpnState.status)) return
         screenScope.launch {
             var profileIndex = -1
             var deletedProfile: AppConfig? = null
@@ -1012,6 +1060,7 @@ internal fun TcptunScreen(
     }
 
     fun startProfileDrag(profileId: String) {
+        if (isVpnTransitionStatus(vpnState.status)) return
         draggedProfileId = profileId
         draggedProfileOffset = 0f
         profilesBeforeDrag = state.profiles
@@ -1148,6 +1197,7 @@ internal fun TcptunScreen(
             snackbarHost = { AutoDismissSnackbarHost(snackbarHostState) },
             floatingActionButton = {
                 MainActionsFab(
+                    enabled = !isVpnTransitionStatus(vpnState.status),
                     onImport = ::importFromClipboard,
                     onScan = ::openQrScanner,
                 )
@@ -1245,7 +1295,15 @@ internal fun TcptunScreen(
                 }
                 if (state.profiles.isEmpty()) {
                     item {
-                        EmptyState(onAdd = { editingProfile = AppConfig(id = UUID.randomUUID().toString(), name = "proxy") })
+                        EmptyState(
+                            enabled = !isVpnTransitionStatus(vpnState.status),
+                            onAdd = {
+                                editingProfile = AppConfig(
+                                    id = UUID.randomUUID().toString(),
+                                    name = "proxy",
+                                )
+                            },
+                        )
                     }
                 }
             }
@@ -1289,6 +1347,7 @@ internal fun TcptunScreen(
     pendingDeepLinkProfile?.let { profile ->
         ConfirmProfileImportDialog(
             profile = profile,
+            enabled = !isVpnTransitionStatus(vpnState.status),
             onConfirm = {
                 pendingDeepLinkProfile = null
                 screenScope.launch {
@@ -1435,6 +1494,7 @@ private suspend fun SnackbarHostState.showDismissibleSnackbar(
 @Composable
 private fun ConfirmProfileImportDialog(
     profile: AppConfig,
+    enabled: Boolean,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1459,7 +1519,7 @@ private fun ConfirmProfileImportDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onConfirm) {
+            Button(onClick = onConfirm, enabled = enabled) {
                 Text(stringResource(R.string.add_profile))
             }
         },
@@ -1573,6 +1633,7 @@ private fun TopBar(
 
 @Composable
 private fun MainActionsFab(
+    enabled: Boolean,
     onImport: () -> Unit,
     onScan: () -> Unit,
 ) {
@@ -1587,6 +1648,7 @@ private fun MainActionsFab(
             containerColor = colors.surfaceContainer,
         ) {
             DropdownMenuItem(
+                enabled = enabled,
                 leadingIcon = {
                     Icon(Icons.Rounded.QrCodeScanner, contentDescription = null)
                 },
@@ -1601,6 +1663,7 @@ private fun MainActionsFab(
                 ),
             )
             DropdownMenuItem(
+                enabled = enabled,
                 leadingIcon = {
                     Icon(Icons.Rounded.ContentPaste, contentDescription = null)
                 },
@@ -1615,7 +1678,7 @@ private fun MainActionsFab(
                 ),
             )
         }
-        FloatingActionButton(onClick = { menuExpanded = true }) {
+        FloatingActionButton(onClick = { if (enabled) menuExpanded = true }) {
             Icon(
                 Icons.Rounded.Add,
                 contentDescription = stringResource(R.string.actions),
@@ -1707,7 +1770,7 @@ private fun ProfileRow(
                 .anchoredDraggable(
                     state = swipeState,
                     orientation = Orientation.Horizontal,
-                    enabled = !dragging,
+                    enabled = enabled && !dragging,
                 ),
         ) {
             Row(
@@ -1722,6 +1785,7 @@ private fun ProfileRow(
                     label = stringResource(R.string.edit),
                     containerColor = colors.secondaryContainer,
                     contentColor = colors.onSecondaryContainer,
+                    enabled = enabled,
                     onClick = onEdit,
                 )
                 ProfileSwipeAction(
@@ -1730,6 +1794,7 @@ private fun ProfileRow(
                     label = stringResource(R.string.delete),
                     containerColor = colors.errorContainer,
                     contentColor = colors.onErrorContainer,
+                    enabled = enabled,
                     onClick = onDeleteRequest,
                 )
             }
@@ -1846,6 +1911,7 @@ private fun ProfileRow(
                     .draggable(
                         state = rememberDraggableState(onDelta = onDrag),
                         orientation = Orientation.Vertical,
+                        enabled = enabled,
                         onDragStarted = { onDragStart() },
                         onDragStopped = { onDragEnd() },
                     ),
@@ -1880,13 +1946,14 @@ private fun ProfileSwipeAction(
     label: String,
     containerColor: Color,
     contentColor: Color,
+    enabled: Boolean,
     onClick: () -> Unit,
 ) {
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(containerColor)
-            .clickable(onClick = onClick),
+            .clickable(enabled = enabled, onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -1985,11 +2052,16 @@ private fun ProfileQrCodeDialog(
     val colors = MaterialTheme.colorScheme
     val bitmapResult by produceState<Result<Bitmap>?>(initialValue = null, profile) {
         value = withContext(Dispatchers.Default) {
-            runRecoverableCatching {
-                val payload = ProfileUriCodec.encodeForQr(profile)
-                    ?: throw IllegalArgumentException("profile cannot be encoded as a QR code")
-                // Higher target size keeps modules large after denser payloads + on-screen scaling.
-                generateQrCodeBitmap(payload, 1024)
+            QrCodeGenerationMutex.withLock {
+                currentCoroutineContext().ensureActive()
+                val result = runRecoverableCatching {
+                    val payload = ProfileUriCodec.encodeForQr(profile)
+                        ?: throw IllegalArgumentException("profile cannot be encoded as a QR code")
+                    // 768 px remains crisp on-screen while bounding peak bitmap/matrix memory.
+                    generateQrCodeBitmap(payload, 768)
+                }
+                currentCoroutineContext().ensureActive()
+                result
             }
         }
     }
@@ -2139,7 +2211,7 @@ private fun ProfileQrCodeDialog(
 }
 
 @Composable
-private fun EmptyState(onAdd: () -> Unit) {
+private fun EmptyState(enabled: Boolean, onAdd: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     Column(
         modifier = Modifier
@@ -2167,7 +2239,7 @@ private fun EmptyState(onAdd: () -> Unit) {
             textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(4.dp))
-        FilledTonalButton(onClick = onAdd) {
+        FilledTonalButton(onClick = onAdd, enabled = enabled) {
             Text(stringResource(R.string.add_profile))
         }
     }
@@ -2578,7 +2650,7 @@ private fun SettingsPage(onBack: () -> Unit) {
                     },
                     onFailure = { error ->
                         savingSettings = false
-                        TcptunState.error(error.message ?: startFailedMessage)
+                        reportUiError(error.message ?: startFailedMessage)
                     },
                 )
             }
@@ -2789,7 +2861,7 @@ private fun FlowAnalysisPage(onBack: () -> Unit) {
                         onFailure = { error ->
                             selectionSaving = false
                             flowLeaveRequested = false
-                            TcptunState.error(error.message ?: startFailedMessage)
+                            reportUiError(error.message ?: startFailedMessage)
                         },
                     )
                 }
@@ -3377,6 +3449,7 @@ private fun ManagedRouteRuleRow(
                     label = stringResource(R.string.edit),
                     containerColor = colors.secondaryContainer,
                     contentColor = colors.onSecondaryContainer,
+                    enabled = enabled,
                     onClick = onEdit,
                 )
                 ProfileSwipeAction(
@@ -3385,6 +3458,7 @@ private fun ManagedRouteRuleRow(
                     label = stringResource(R.string.delete),
                     containerColor = colors.errorContainer,
                     contentColor = colors.onErrorContainer,
+                    enabled = enabled,
                     onClick = onDeleteRequest,
                 )
             }
@@ -3506,7 +3580,9 @@ private fun ManagedRouteRuleDialog(
     onSave: (ManagedRouteRule) -> Unit,
 ) {
     var type by remember(rule.id) { mutableStateOf(rule.type) }
-    var value by remember(rule.id) { mutableStateOf(rule.value) }
+    var value by remember(rule.id) {
+        mutableStateOf(rule.value.take(MaxManagedRouteRuleValueLength))
+    }
     var outbound by remember(rule.id) { mutableStateOf(rule.outbound) }
     var outboundProfileId by remember(rule.id) { mutableStateOf(rule.outboundProfileId) }
     var enabled by remember(rule.id) { mutableStateOf(rule.enabled) }
@@ -3554,7 +3630,7 @@ private fun ManagedRouteRuleDialog(
                 OutlinedTextField(
                     value = value,
                     onValueChange = {
-                        value = it
+                        value = it.take(MaxManagedRouteRuleValueLength)
                         invalid = false
                     },
                     label = {
@@ -3745,7 +3821,7 @@ private fun DiagnosticsLine(label: String, value: String) {
 
 @Composable
 private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (AppConfig) -> Unit) {
-    var config by remember(initial.id) { mutableStateOf(initial) }
+    var config by remember(initial.id) { mutableStateOf(initial.boundedForEditor()) }
     var useFullConfig by remember(initial.id) { mutableStateOf(initial.rawConfigJson.isNotBlank()) }
     var formError by remember(initial.id) { mutableStateOf("") }
     var validating by remember(initial.id) { mutableStateOf(false) }
@@ -3783,7 +3859,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                         } catch (failure: Exception) {
                             val message = failure.message?.takeIf(String::isNotBlank) ?: invalidProfileMessage
                             formError = message
-                            TcptunState.error(message)
+                            reportUiError(message)
                         } finally {
                             validating = false
                         }
@@ -3816,7 +3892,9 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                 ) {
                         OutlinedTextField(
                             value = config.name,
-                            onValueChange = { config = config.copy(name = it) },
+                            onValueChange = {
+                                config = config.copy(name = it.take(MaxProfileNameInputLength))
+                            },
                             label = { Text(stringResource(R.string.name)) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
@@ -3861,7 +3939,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                             ?: invalidProfileMessage
                                         useFullConfig = false
                                         formError = message
-                                        TcptunState.error(message)
+                                        reportUiError(message)
                                     } finally {
                                         validating = false
                                     }
@@ -3895,14 +3973,18 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 OutlinedTextField(
                                     value = config.serverHost,
-                                    onValueChange = { config = config.copy(serverHost = it) },
+                                    onValueChange = {
+                                        config = config.copy(serverHost = it.take(MaxProfileHostInputLength))
+                                    },
                                     label = { Text(stringResource(R.string.server_address)) },
                                     singleLine = true,
                                     modifier = Modifier.weight(1f),
                                 )
                                 OutlinedTextField(
                                     value = config.serverPort,
-                                    onValueChange = { config = config.copy(serverPort = it.filter(Char::isDigit)) },
+                                    onValueChange = {
+                                        config = config.copy(serverPort = it.filter(Char::isDigit).take(5))
+                                    },
                                     label = { Text(stringResource(R.string.port)) },
                                     singleLine = true,
                                     modifier = Modifier.weight(0.52f),
@@ -3926,7 +4008,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                             }
                             OutlinedTextField(
                                 value = config.token,
-                                onValueChange = { config = config.copy(token = it) },
+                                onValueChange = { config = config.copy(token = it.take(MaxProfileUriLength)) },
                                 label = { Text(stringResource(R.string.field_token)) },
                                 visualTransformation = PasswordVisualTransformation(),
                                 singleLine = true,
@@ -3935,14 +4017,16 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 OutlinedTextField(
                                     value = config.sni,
-                                    onValueChange = { config = config.copy(sni = it) },
+                                    onValueChange = {
+                                        config = config.copy(sni = it.take(MaxProfileHostInputLength))
+                                    },
                                     label = { Text(stringResource(R.string.field_sni)) },
                                     singleLine = true,
                                     modifier = Modifier.weight(1f),
                                 )
                                 OutlinedTextField(
                                     value = config.path,
-                                    onValueChange = { config = config.copy(path = it) },
+                                    onValueChange = { config = config.copy(path = it.take(MaxProfileUriLength)) },
                                     label = { Text(stringResource(R.string.field_path)) },
                                     singleLine = true,
                                     modifier = Modifier.weight(1f),
@@ -3996,7 +4080,9 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                             }
                             OutlinedTextField(
                                 value = config.flow,
-                                onValueChange = { config = config.copy(flow = it) },
+                                onValueChange = {
+                                    config = config.copy(flow = it.take(MaxProfileChoiceInputLength))
+                                },
                                 label = { Text(stringResource(R.string.field_flow)) },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
@@ -4004,7 +4090,9 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                             if (isTcpReality || isRealityQuic) {
                                 OutlinedTextField(
                                     value = config.realityPublicKey,
-                                    onValueChange = { config = config.copy(realityPublicKey = it) },
+                                    onValueChange = {
+                                        config = config.copy(realityPublicKey = it.take(MaxRealityKeyInputLength))
+                                    },
                                     label = { Text(stringResource(R.string.field_reality_public_key)) },
                                     singleLine = true,
                                     modifier = Modifier.fillMaxWidth(),
@@ -4012,14 +4100,22 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                     OutlinedTextField(
                                         value = config.realityFingerprint,
-                                        onValueChange = { config = config.copy(realityFingerprint = it) },
+                                        onValueChange = {
+                                            config = config.copy(
+                                                realityFingerprint = it.take(MaxProfileChoiceInputLength),
+                                            )
+                                        },
                                         label = { Text(stringResource(R.string.field_fingerprint)) },
                                         singleLine = true,
                                         modifier = Modifier.weight(1f),
                                     )
                                     OutlinedTextField(
                                         value = config.realityShortId,
-                                        onValueChange = { config = config.copy(realityShortId = it) },
+                                        onValueChange = {
+                                            config = config.copy(
+                                                realityShortId = it.take(MaxProfileChoiceInputLength),
+                                            )
+                                        },
                                         label = { Text(stringResource(R.string.field_short_id)) },
                                         singleLine = true,
                                         modifier = Modifier.weight(1f),
@@ -4029,7 +4125,9 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                             if (isTcpReality) {
                                 OutlinedTextField(
                                     value = config.realitySpiderX,
-                                    onValueChange = { config = config.copy(realitySpiderX = it) },
+                                    onValueChange = {
+                                        config = config.copy(realitySpiderX = it.take(MaxProfileUriLength))
+                                    },
                                     label = { Text(stringResource(R.string.field_spider_x)) },
                                     singleLine = true,
                                     modifier = Modifier.fillMaxWidth(),
@@ -4238,7 +4336,7 @@ private fun shareProfile(context: Context, uri: String) {
             Intent.createChooser(createProfileShareIntent(uri), context.getString(R.string.share_profile)),
         )
     }.onFailure { error ->
-        TcptunState.error(error.message ?: context.getString(R.string.share_profile_failed))
+        reportUiError(error.message ?: context.getString(R.string.share_profile_failed))
     }
 }
 
@@ -4339,13 +4437,23 @@ private fun needsNotificationPermission(context: Context): Boolean {
 }
 
 private fun startVpn(context: Context, plan: ProfileRunPlan) {
+    VpnPlanUpdateReadyBaseline.set(null)
     TcptunState.setStatus("Starting")
     TcptunState.setConnectionsReady(false)
     TcptunState.appendLog("start requested")
-    enqueueVpnPlanCommand(context, plan, updateOnly = false)
+    enqueueVpnPlanCommand(
+        context = context,
+        plan = plan,
+        updateOnly = false,
+        onDispatchFailure = { message ->
+            if (!TcptunState.errorIfStatus("Starting", message)) reportUiError(message)
+        },
+    )
 }
 
 private fun stopVpn(context: Context) {
+    val previous = TcptunState.state.value
+    VpnPlanUpdateReadyBaseline.set(null)
     VpnPlanCommandGeneration.incrementAndGet()
     VpnPlanCommandJob.getAndSet(null)?.cancel()
     TcptunState.setStatus("Stopping")
@@ -4354,20 +4462,41 @@ private fun stopVpn(context: Context) {
     runCatching {
         context.startService(TcptunVpnService.stopIntent(context))
     }.onFailure { err ->
-        TcptunState.error(err.message ?: context.getString(R.string.stop_failed))
+        val message = err.message ?: context.getString(R.string.stop_failed)
+        reportUiError(message)
+        TcptunState.restoreCommandStateIfStatus(
+            expectedStatus = "Stopping",
+            restoredStatus = previous.status,
+            restoredConnectionsReady = previous.connectionsReady,
+            restoredLastError = previous.lastError,
+        )
     }
 }
 
 private fun updateVpnOutbounds(context: Context, plan: ProfileRunPlan) {
     // Disable TCPing until StartOutbound/StopOutbound finishes for every changed link.
+    val previousReady = TcptunState.state.value.connectionsReady
+    VpnPlanUpdateReadyBaseline.compareAndSet(null, previousReady)
     TcptunState.markConnectionsBusy("connection update requested")
-    enqueueVpnPlanCommand(context, plan, updateOnly = true)
+    enqueueVpnPlanCommand(
+        context = context,
+        plan = plan,
+        updateOnly = true,
+        onDispatchSuccess = { VpnPlanUpdateReadyBaseline.set(null) },
+        onDispatchFailure = { message ->
+            reportUiError(message)
+            val baseline = VpnPlanUpdateReadyBaseline.getAndSet(null) ?: previousReady
+            TcptunState.restoreConnectionsReadyIfStatus("Running", baseline)
+        },
+    )
 }
 
 private fun enqueueVpnPlanCommand(
     context: Context,
     plan: ProfileRunPlan,
     updateOnly: Boolean,
+    onDispatchSuccess: () -> Unit = {},
+    onDispatchFailure: (String) -> Unit,
 ) {
     val appContext = context.applicationContext ?: context
     val generation = VpnPlanCommandGeneration.incrementAndGet()
@@ -4385,7 +4514,7 @@ private fun enqueueVpnPlanCommand(
         } catch (error: Throwable) {
             if (error.isFatalProcessError()) throw error
             if (generation == VpnPlanCommandGeneration.get()) {
-                TcptunState.error(error.message ?: appContext.getString(R.string.start_failed))
+                onDispatchFailure(error.message ?: appContext.getString(R.string.start_failed))
             }
             return@launch
         }
@@ -4396,9 +4525,11 @@ private fun enqueueVpnPlanCommand(
             } else {
                 appContext.startService(intent)
             }
+        }.onSuccess {
+            if (generation == VpnPlanCommandGeneration.get()) onDispatchSuccess()
         }.onFailure { error ->
             if (generation == VpnPlanCommandGeneration.get()) {
-                TcptunState.error(error.message ?: appContext.getString(R.string.start_failed))
+                onDispatchFailure(error.message ?: appContext.getString(R.string.start_failed))
             }
         }
     }

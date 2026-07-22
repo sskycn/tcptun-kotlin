@@ -13,6 +13,14 @@ data class ProfileRunPlan(
 
     fun normalized(): ProfileRunPlan {
         require(profiles.isNotEmpty()) { "at least one profile must be configured" }
+        require(profiles.size <= MaxStoredProfileCount) { "too many configured profiles" }
+        require(activeIds.size <= MaxStoredProfileCount) { "too many active profiles" }
+        require(profiles.all { it.id.isNotBlank() && it.id.length <= MaxProfileIdLength }) {
+            "configured profile ID is invalid"
+        }
+        require(activeIds.all { it.isNotBlank() && it.length <= MaxProfileIdLength }) {
+            "active profile ID is invalid"
+        }
         require(profiles.map(AppConfig::id).distinct().size == profiles.size) { "configured profiles must be unique" }
         require(activeIds.isNotEmpty()) { "at least one profile must be running" }
         require(activeIds.all { activeId -> profiles.any { it.id == activeId } }) { "running profile is not configured" }
@@ -34,12 +42,25 @@ data class ProfileRunPlan(
     companion object {
         fun fromJson(json: JSONObject): ProfileRunPlan {
             val values = json.getJSONArray("profiles")
+            require(values.length() in 1..MaxStoredProfileCount) { "invalid configured profile count" }
             val profiles = buildList {
-                for (index in 0 until values.length()) add(AppConfig.fromJson(values.getJSONObject(index)))
+                for (index in 0 until values.length()) {
+                    val profile = AppConfig.fromJson(values.getJSONObject(index))
+                    require(profile.id.isNotBlank() && profile.id.length <= MaxProfileIdLength) {
+                        "invalid profile ID"
+                    }
+                    require(profile.hasSafeStorageSize()) { "profile data is too large" }
+                    add(profile)
+                }
             }
             val activeIds = json.optJSONArray("activeIds")?.let { valuesArray ->
+                require(valuesArray.length() <= MaxStoredProfileCount) { "too many active profiles" }
                 buildSet {
-                    for (index in 0 until valuesArray.length()) add(valuesArray.getString(index))
+                    for (index in 0 until valuesArray.length()) {
+                        val id = valuesArray.getString(index)
+                        require(id.isNotBlank() && id.length <= MaxProfileIdLength) { "invalid active profile ID" }
+                        add(id)
+                    }
                 }
             } ?: profiles.mapTo(linkedSetOf(), AppConfig::id)
             return ProfileRunPlan(profiles, activeIds).normalized()

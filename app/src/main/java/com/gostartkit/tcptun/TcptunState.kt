@@ -278,6 +278,46 @@ object TcptunState {
         _state.value = current.copy(connectionsReady = ready)
     }
 
+    @Synchronized
+    internal fun errorIfStatus(expectedStatus: String, message: String): Boolean {
+        if (_state.value.status != expectedStatus) return false
+        error(message)
+        return true
+    }
+
+    @Synchronized
+    internal fun restoreCommandStateIfStatus(
+        expectedStatus: String,
+        restoredStatus: String,
+        restoredConnectionsReady: Boolean,
+        restoredLastError: String = "",
+    ): Boolean {
+        val current = _state.value
+        if (current.status != expectedStatus) return false
+        _state.value = current.copy(
+            status = restoredStatus,
+            connectionsReady = restoredConnectionsReady,
+            lastError = restoredLastError,
+            diagnostics = current.diagnostics.copy(vpnStatus = restoredStatus),
+        )
+        return true
+    }
+
+    @Synchronized
+    internal fun restoreConnectionsReadyIfStatus(
+        expectedStatus: String,
+        restoredConnectionsReady: Boolean,
+    ): Boolean {
+        val current = _state.value
+        if (current.status != expectedStatus) return false
+        // A previously dispatched update may have completed while the newer
+        // command was failing to dispatch. Never downgrade that confirmed ready state.
+        _state.value = current.copy(
+            connectionsReady = current.connectionsReady || restoredConnectionsReady,
+        )
+        return true
+    }
+
     /** Call when a connection start/stop/update is requested but not finished. */
     @Synchronized
     fun markConnectionsBusy(reason: String = "") {
@@ -306,6 +346,17 @@ object TcptunState {
     fun updateDiagnostics(update: (TcptunDiagnostics) -> TcptunDiagnostics) {
         val current = _state.value
         _state.value = current.copy(diagnostics = update(current.diagnostics))
+    }
+
+    @Synchronized
+    internal fun updateDiagnosticsForBridgeEpoch(
+        epoch: Long,
+        update: (TcptunDiagnostics) -> TcptunDiagnostics,
+    ): Boolean {
+        if (epoch <= 0L || epoch != bridgeEpoch) return false
+        val current = _state.value
+        _state.value = current.copy(diagnostics = update(current.diagnostics))
+        return true
     }
 
     @Synchronized
@@ -429,6 +480,15 @@ object TcptunState {
     }
 
     @Synchronized
+    internal fun resetProfileHealthForBridgeEpoch(epoch: Long, profiles: List<AppConfig>): Boolean {
+        if (epoch <= 0L || epoch != bridgeEpoch) return false
+        _state.value = _state.value.copy(
+            profileHealth = profiles.associate { profile -> profile.id to ProfileHealth() },
+        )
+        return true
+    }
+
+    @Synchronized
     fun setProfileHealth(profileId: String, health: ProfileHealth) {
         if (profileId.isBlank()) return
         val current = _state.value
@@ -436,9 +496,29 @@ object TcptunState {
     }
 
     @Synchronized
+    internal fun setProfileHealthForBridgeEpoch(
+        epoch: Long,
+        profileId: String,
+        health: ProfileHealth,
+    ): Boolean {
+        if (epoch <= 0L || epoch != bridgeEpoch || profileId.isBlank()) return false
+        val current = _state.value
+        _state.value = current.copy(profileHealth = current.profileHealth + (profileId to health))
+        return true
+    }
+
+    @Synchronized
     fun removeProfileHealth(profileId: String) {
         if (profileId !in _state.value.profileHealth) return
         _state.value = _state.value.copy(profileHealth = _state.value.profileHealth - profileId)
+    }
+
+    @Synchronized
+    internal fun removeProfileHealthForBridgeEpoch(epoch: Long, profileId: String): Boolean {
+        if (epoch <= 0L || epoch != bridgeEpoch) return false
+        if (profileId !in _state.value.profileHealth) return true
+        _state.value = _state.value.copy(profileHealth = _state.value.profileHealth - profileId)
+        return true
     }
 
     @Synchronized
