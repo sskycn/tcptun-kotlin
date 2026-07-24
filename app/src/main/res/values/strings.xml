@@ -211,6 +211,12 @@
     <string name="field_mux">Mux</string>
     <string name="field_mux_mode">Mux mode</string>
     <string name="field_mux_udp_mode">Mux UDP mode</string>
+    <string name="field_mux_resume">Resume TCP streams across carrier changes</string>
+    <string name="field_mux_resume_timeout">Resume timeout (ms)</string>
+    <string name="field_mux_resume_timeout_hint">Empty: 15000 · 100–300000</string>
+    <string name="field_mux_resume_buffer">Resume buffer (bytes)</string>
+    <string name="field_mux_resume_buffer_hint">Empty: 4194304 · 65536–67108864</string>
+    <string name="mux_resume_note">Requires matching support on the server. Uses native + raw + automatic REALITY carriers and group mux. Full JSON mode can override the runtime-wide buffer budget.</string>
     <string name="full_config_mode">Full tcptun-go JSON</string>
     <string name="full_config_json">tcptun-go configuration JSON</string>
     <string name="full_config_note">All tcptun-go fields are preserved. VPN traffic enters through the native TUN inbound tagged tun; the local proxy listener remains available separately.</string>

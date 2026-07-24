@@ -75,13 +75,18 @@ class ProfileQrCodeUiTest {
     fun unrepresentableProfileShowsQrFailureDialog() {
         val profile = AppConfig(
             id = "qr-unrepresentable-profile",
-            name = "QR Mixed Upstream",
+            name = "QR Resumable Mux",
             serverHost = "edge.example.com",
             serverPort = "443",
             protocol = "native",
             transport = "raw",
             token = "secret",
-            upstreamProtocol = "mixed",
+            sni = "example.com",
+            tunnelSecurity = "reality",
+            realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
+            mux = true,
+            muxMode = "group",
+            muxResume = true,
         )
         ProfileStore.save(composeRule.activity, ProfilesState(profiles = listOf(profile)))
         composeRule.activityRule.scenario.recreate()

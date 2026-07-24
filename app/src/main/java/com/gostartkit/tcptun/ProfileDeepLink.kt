@@ -14,6 +14,9 @@ internal const val MaxProfileUriLength = 64 * 1024
 internal const val MaxProfileImportLength = 512 * 1024
 internal const val MaxStoredProfilesLength = 8 * 1024 * 1024
 internal const val MaxStoredProfileCount = 256
+// One generated balance outbound contains every structured profile.
+// tcptun-go caps balance members at 128.
+internal const val MaxRuntimeProfileCount = 128
 
 internal val SupportedProfileUriSchemes: Set<String> =
     (AppConfig.Protocols + "tcptun").toSet()

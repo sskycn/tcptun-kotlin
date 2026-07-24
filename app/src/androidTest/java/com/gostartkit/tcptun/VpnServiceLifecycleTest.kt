@@ -22,6 +22,7 @@ class VpnServiceLifecycleTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val originalSettings = TcptunVpnService.readRuntimeSettings(context)
+        val originalProfiles = ProfileStore.load(context)
         val socksPort = availablePort()
         val directTarget = InetAddress.getAllByName("www.qq.com")
             .first { it.address.size == 4 }
@@ -56,6 +57,10 @@ class VpnServiceLifecycleTest {
                 flowAnalysisApp = "",
             ),
         )
+        ProfileStore.save(
+            context,
+            ProfilesState(profiles = listOf(profile), activeIds = setOf(profile.id)),
+        ).getOrThrow()
         try {
             assertNull(VpnService.prepare(context))
             assertEquals("", TcptunVpnService.readRuntimeSettings(context).flowAnalysisApp)
@@ -113,6 +118,7 @@ class VpnServiceLifecycleTest {
             context.startService(TcptunVpnService.stopIntent(context))
             waitUntil("VPN cleanup", timeoutMillis = 10_000) { TcptunState.status != "Stopping" }
             TcptunVpnService.writeRuntimeSettings(context, originalSettings)
+            ProfileStore.save(context, originalProfiles)
             runShell("appops set ${context.packageName} ACTIVATE_VPN default")
         }
     }
@@ -126,7 +132,10 @@ class VpnServiceLifecycleTest {
         val deadline = System.currentTimeMillis() + timeoutMillis
         while (!condition()) {
             if (System.currentTimeMillis() >= deadline) {
-                throw AssertionError("Timed out waiting for $label; status=${TcptunState.status}, error=${TcptunState.lastError}")
+                throw AssertionError(
+                    "Timed out waiting for $label; status=${TcptunState.status}, " +
+                        "error=${TcptunState.lastError}, logs=${TcptunState.logs.takeLast(40)}",
+                )
             }
             Thread.sleep(50)
         }

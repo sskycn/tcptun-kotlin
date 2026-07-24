@@ -33,8 +33,8 @@ class ProfileRunPlanTest {
     }
 
     @Test
-    fun normalizationRejectsProfileListsAboveTheStorageLimit() {
-        val profiles = List(MaxStoredProfileCount + 1) { index ->
+    fun normalizationRejectsProfileListsAboveTheRuntimeBalanceLimit() {
+        val profiles = List(MaxRuntimeProfileCount + 1) { index ->
             validProfile("profile-$index", "192.0.2.10")
         }
 
@@ -56,7 +56,7 @@ class ProfileRunPlanTest {
         assertThrows(IllegalArgumentException::class.java) {
             ProfileRunPlan(
                 profiles = listOf(profile),
-                activeIds = List(MaxStoredProfileCount + 1) { "id-$it" }.toSet(),
+                activeIds = List(MaxRuntimeProfileCount + 1) { "id-$it" }.toSet(),
             ).normalized()
         }
     }

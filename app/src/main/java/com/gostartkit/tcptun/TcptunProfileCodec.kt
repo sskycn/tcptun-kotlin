@@ -5,6 +5,9 @@ import org.json.JSONObject
 /** Uses tcptun-go as the single source of truth for versioned share-profile payloads. */
 internal object TcptunProfileCodec {
     fun encode(profile: AppConfig): String {
+        require(!profile.muxResume && profile.muxResumeTimeoutMillis == 0 && profile.muxResumeBufferSize == 0) {
+            "T3 cannot represent resumable mux settings"
+        }
         val encoded = invoke("encodeProfile", profile.toBridgeProfileJson().toString())
             .takeIf(String::isNotBlank)
             ?: throw IllegalStateException("androidbridge.EncodeProfile returned an empty payload")

@@ -220,6 +220,12 @@ private fun AppConfig.boundedForEditor(): AppConfig = copy(
     rawConfigJson = rawConfigJson.take(MaxProfileImportLength),
 )
 
+private fun AppConfig.withoutResumableMux(): AppConfig = copy(
+    muxResume = false,
+    muxResumeTimeoutMillis = 0,
+    muxResumeBufferSize = 0,
+)
+
 private fun reportUiError(message: String) {
     TcptunState.appendLog("UI error: ${message.trim().ifBlank { "Unknown error" }}")
 }
@@ -3997,6 +4003,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                 enabled = !isRealityQuic,
                             ) {
                                 config = config.copy(protocol = it)
+                                if (it != "native") config = config.withoutResumableMux()
                             }
                             ChoiceRow(
                                 stringResource(R.string.field_transport),
@@ -4005,6 +4012,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                 enabled = !isRealityQuic && !isTcpReality,
                             ) {
                                 config = config.copy(transport = it)
+                                if (it != "raw") config = config.withoutResumableMux()
                             }
                             OutlinedTextField(
                                 value = config.token,
@@ -4039,11 +4047,11 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                             ) { security ->
                                 config = when (security) {
                                     "tls" -> config.copy(tunnelSecurity = "", tls = true)
-                                    "reality", "reality-tcp" -> config.copy(
+                                        .withoutResumableMux()
+                                    "reality" -> config.copy(
                                         // reality: TCP REALITY + native auto-QUIC when mux/raw.
-                                        // reality-tcp: TCP REALITY only (no auto-QUIC).
                                         transport = "raw",
-                                        tunnelSecurity = security,
+                                        tunnelSecurity = "reality",
                                         tls = false,
                                         tlsInsecure = false,
                                         muxMode = config.muxMode.takeUnless { it.equals("quic", true) }.orEmpty(),
@@ -4053,6 +4061,19 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                         muxInitialConnectionReceiveWindow = 0,
                                         muxMaxConnectionReceiveWindow = 0,
                                     )
+                                    "reality-tcp" -> config.copy(
+                                        // reality-tcp: TCP REALITY only (no auto-QUIC).
+                                        transport = "raw",
+                                        tunnelSecurity = "reality-tcp",
+                                        tls = false,
+                                        tlsInsecure = false,
+                                        muxMode = config.muxMode.takeUnless { it.equals("quic", true) }.orEmpty(),
+                                        muxUdpMode = "",
+                                        muxInitialStreamReceiveWindow = 0,
+                                        muxMaxStreamReceiveWindow = 0,
+                                        muxInitialConnectionReceiveWindow = 0,
+                                        muxMaxConnectionReceiveWindow = 0,
+                                    ).withoutResumableMux()
                                     "reality-quic" -> config.copy(
                                         protocol = "native",
                                         transport = "raw",
@@ -4064,7 +4085,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                         mux = true,
                                         muxMode = "quic",
                                         muxUdpMode = config.muxUdpMode.ifBlank { "auto" },
-                                    )
+                                    ).withoutResumableMux()
                                     else -> config.copy(
                                         tunnelSecurity = "",
                                         tls = false,
@@ -4075,7 +4096,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                         muxMaxStreamReceiveWindow = 0,
                                         muxInitialConnectionReceiveWindow = 0,
                                         muxMaxConnectionReceiveWindow = 0,
-                                    )
+                                    ).withoutResumableMux()
                                 }
                             }
                             OutlinedTextField(
@@ -4142,7 +4163,10 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                 stringResource(R.string.field_mux),
                                 config.mux,
                                 enabled = !isRealityQuic,
-                            ) { config = config.copy(mux = it) }
+                            ) {
+                                config = config.copy(mux = it)
+                                if (!it) config = config.withoutResumableMux()
+                            }
                             ChoiceRow(
                                 stringResource(R.string.field_mux_mode),
                                 config.muxMode.ifBlank { "group" },
@@ -4158,7 +4182,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                         mux = true,
                                         muxMode = "quic",
                                         muxUdpMode = config.muxUdpMode.ifBlank { "auto" },
-                                    )
+                                    ).withoutResumableMux()
                                 } else {
                                     config.copy(
                                         muxMode = "group",
@@ -4176,6 +4200,84 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                     config.muxUdpMode.ifBlank { "reliable" },
                                     listOf("reliable", "auto", "datagram"),
                                 ) { mode -> config = config.copy(muxUdpMode = mode) }
+                            }
+                            val canResumeMux =
+                                config.mux &&
+                                    config.protocol == "native" &&
+                                    config.transport == "raw" &&
+                                    selectedSecurity == "reality" &&
+                                    !config.muxMode.equals("quic", ignoreCase = true)
+                            ToggleRow(
+                                stringResource(R.string.field_mux_resume),
+                                config.muxResume,
+                                enabled = canResumeMux || config.muxResume,
+                            ) { enabled ->
+                                config = if (enabled) {
+                                    config.copy(
+                                        protocol = "native",
+                                        transport = "raw",
+                                        tunnelSecurity = "reality",
+                                        tls = false,
+                                        tlsInsecure = false,
+                                        mux = true,
+                                        muxMode = "group",
+                                        muxUdpMode = "",
+                                        muxResume = true,
+                                    )
+                                } else {
+                                    config.withoutResumableMux()
+                                }
+                            }
+                            if (config.muxResume) {
+                                Text(
+                                    stringResource(R.string.mux_resume_note),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    OutlinedTextField(
+                                        value = config.muxResumeTimeoutMillis
+                                            .takeIf { it > 0 }
+                                            ?.toString()
+                                            .orEmpty(),
+                                        onValueChange = { value ->
+                                            config = config.copy(
+                                                muxResumeTimeoutMillis = value
+                                                    .filter(Char::isDigit)
+                                                    .take(6)
+                                                    .toIntOrNull()
+                                                    ?: 0,
+                                            )
+                                        },
+                                        label = { Text(stringResource(R.string.field_mux_resume_timeout)) },
+                                        supportingText = {
+                                            Text(stringResource(R.string.field_mux_resume_timeout_hint))
+                                        },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    OutlinedTextField(
+                                        value = config.muxResumeBufferSize
+                                            .takeIf { it > 0 }
+                                            ?.toString()
+                                            .orEmpty(),
+                                        onValueChange = { value ->
+                                            config = config.copy(
+                                                muxResumeBufferSize = value
+                                                    .filter(Char::isDigit)
+                                                    .take(8)
+                                                    .toIntOrNull()
+                                                    ?: 0,
+                                            )
+                                        },
+                                        label = { Text(stringResource(R.string.field_mux_resume_buffer)) },
+                                        supportingText = {
+                                            Text(stringResource(R.string.field_mux_resume_buffer_hint))
+                                        },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
                             }
                             Text(
                                 stringResource(R.string.native_tun_capabilities_note),

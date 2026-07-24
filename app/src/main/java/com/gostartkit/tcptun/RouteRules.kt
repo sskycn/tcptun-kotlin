@@ -7,6 +7,9 @@ import java.net.InetAddress
 import java.util.UUID
 
 internal const val MaxManagedRouteRuleValueLength = 4096
+// tcptun-go accepts 256 route rules. The generated runtime reserves one rule
+// for connectivity checks whenever managed routing is enabled.
+internal const val MaxActiveManagedRouteRuleCount = 255
 private const val MaxManagedRouteRuleIdLength = 256
 private const val MaxStoredRouteRulesLength = 2 * 1024 * 1024
 private const val MaxStoredRouteRuleCount = 1024

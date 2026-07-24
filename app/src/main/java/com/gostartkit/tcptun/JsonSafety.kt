@@ -1,6 +1,7 @@
 package com.tcptun.client
 
-internal const val MaxJsonNestingDepth = 64
+/** Matches tcptun-go's strict file-configuration preflight limit. */
+internal const val MaxJsonNestingDepth = 32
 
 /**
  * Rejects adversarial JSON nesting before org.json enters its recursive parser.

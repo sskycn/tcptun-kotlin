@@ -85,6 +85,9 @@ data class AppConfig(
     val mux: Boolean = true,
     val muxMode: String = "",
     val muxUdpMode: String = "",
+    val muxResume: Boolean = false,
+    val muxResumeTimeoutMillis: Int = 0,
+    val muxResumeBufferSize: Int = 0,
     val muxMaxSessions: Int = 0,
     val muxMaxStreamsPerSession: Int = 0,
     val muxWarmSpare: Int = 0,
@@ -154,8 +157,35 @@ data class AppConfig(
             muxInitialConnectionReceiveWindow,
             muxMaxConnectionReceiveWindow,
         )
-        if (!mux && (normalizedMuxMode.isNotBlank() || normalizedMuxUdpMode.isNotBlank() || muxMaxSessions != 0 || muxMaxStreamsPerSession != 0 || muxWarmSpare != 0 || muxReceiveWindows.any { it != 0 })) {
+        val resumableSettingsConfigured =
+            muxResume || muxResumeTimeoutMillis != 0 || muxResumeBufferSize != 0
+        if (!mux && (normalizedMuxMode.isNotBlank() || normalizedMuxUdpMode.isNotBlank() || resumableSettingsConfigured || muxMaxSessions != 0 || muxMaxStreamsPerSession != 0 || muxWarmSpare != 0 || muxReceiveWindows.any { it != 0 })) {
             return "mux must be enabled when mux pool limits are configured"
+        }
+        if (!muxResume && (muxResumeTimeoutMillis != 0 || muxResumeBufferSize != 0)) {
+            return "mux resume must be enabled when resume limits are configured"
+        }
+        if (muxResume) {
+            if (protocol != "native") return "mux resume requires native protocol"
+            if (transport != "raw") return "mux resume requires raw transport"
+            if (normalizedSecurity != "reality") {
+                return "mux resume requires reality automatic TCP/QUIC security"
+            }
+            if (normalizedMuxMode.isNotBlank() && normalizedMuxMode != "group") {
+                return "mux resume requires group mux mode"
+            }
+        }
+        if (muxResumeTimeoutMillis !in 0..300_000) {
+            return "mux resume timeout must be between 100 and 300000 milliseconds when set"
+        }
+        if (muxResumeTimeoutMillis in 1..99) {
+            return "mux resume timeout must be between 100 and 300000 milliseconds when set"
+        }
+        if (muxResumeBufferSize !in 0..67_108_864) {
+            return "mux resume buffer must be between 65536 and 67108864 bytes when set"
+        }
+        if (muxResumeBufferSize in 1..65_535) {
+            return "mux resume buffer must be between 65536 and 67108864 bytes when set"
         }
         if (normalizedMuxMode != "quic" && normalizedMuxUdpMode.isNotBlank()) {
             return "mux UDP mode requires QUIC mux"
@@ -274,6 +304,9 @@ data class AppConfig(
                 JSONObject().apply {
                     muxMode.trim().takeIf { it.isNotBlank() }?.let { put("mode", it.lowercase()) }
                     muxUdpMode.trim().takeIf { it.isNotBlank() }?.let { put("udp_mode", it.lowercase()) }
+                    if (muxResume) put("resume", true)
+                    if (muxResumeTimeoutMillis > 0) put("resume_timeout", "${muxResumeTimeoutMillis}ms")
+                    if (muxResumeBufferSize > 0) put("resume_buffer_size", muxResumeBufferSize)
                     if (muxMaxSessions > 0) put("max_sessions", muxMaxSessions)
                     if (muxMaxStreamsPerSession > 0) put("max_streams_per_session", muxMaxStreamsPerSession)
                     if (muxWarmSpare > 0) put("warm_spares", muxWarmSpare)
@@ -731,6 +764,9 @@ data class AppConfig(
                 mux = obj.optBoolean("mux", true),
                 muxMode = muxMode,
                 muxUdpMode = muxUdpMode,
+                muxResume = obj.optBoolean("muxResume", false),
+                muxResumeTimeoutMillis = obj.optInt("muxResumeTimeoutMillis", 0),
+                muxResumeBufferSize = obj.optInt("muxResumeBufferSize", 0),
                 muxMaxSessions = obj.optInt("muxMaxSessions", 0),
                 muxMaxStreamsPerSession = obj.optInt("muxMaxStreamsPerSession", 0),
                 muxWarmSpare = obj.optInt("muxWarmSpare", 0),
@@ -817,6 +853,9 @@ data class AppConfig(
             .put("mux", mux)
             .put("muxMode", muxMode)
             .put("muxUdpMode", muxUdpMode)
+            .put("muxResume", muxResume)
+            .put("muxResumeTimeoutMillis", muxResumeTimeoutMillis)
+            .put("muxResumeBufferSize", muxResumeBufferSize)
             .put("muxMaxSessions", muxMaxSessions)
             .put("muxMaxStreamsPerSession", muxMaxStreamsPerSession)
             .put("muxWarmSpare", muxWarmSpare)

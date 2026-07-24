@@ -4,6 +4,7 @@ import android.net.Uri
 import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
+import java.math.BigDecimal
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.UUID
@@ -62,13 +63,16 @@ object ProfileUriCodec {
      * field. Returns null when T3 cannot represent the profile.
      */
     fun encodeForQr(config: AppConfig): String? {
-        if (config.rawConfigJson.isNotBlank()) return null
+        if (config.rawConfigJson.isNotBlank() || config.hasResumableMuxSettings()) return null
         return runCatching {
             // Normalize first so re-showing QR for legacy T2-imported profiles
             // with polluted raw paths (path="/") does not throw from the Go codec.
             TcptunProfileCodec.encode(normalizeForCompactQr(config))
         }.getOrNull()
     }
+
+    private fun AppConfig.hasResumableMuxSettings(): Boolean =
+        muxResume || muxResumeTimeoutMillis != 0 || muxResumeBufferSize != 0
 
     /** Compact T2/T3 only allow the default transport path on raw. */
     private fun normalizeForCompactQr(config: AppConfig): AppConfig {
@@ -148,6 +152,9 @@ object ProfileUriCodec {
             mux = uri.getBooleanParameterCompat("mux", false),
             muxMode = uri.getQueryParameter("mux_mode").orEmpty().trim().lowercase(),
             muxUdpMode = uri.getQueryParameter("mux_udp_mode").orEmpty().trim().lowercase(),
+            muxResume = uri.getBooleanParameterCompat("mux_resume", false),
+            muxResumeTimeoutMillis = uri.getDurationMillisParameter("mux_resume_timeout"),
+            muxResumeBufferSize = uri.getIntParameter("mux_resume_buffer_size"),
             muxMaxSessions = uri.getIntParameter("mux_max_sessions"),
             muxMaxStreamsPerSession = uri.getIntParameter("mux_max_streams_per_session"),
             muxWarmSpare = uri.getIntParameter("mux_warm_spares"),
@@ -225,6 +232,15 @@ object ProfileUriCodec {
             mux = mux,
             muxMode = obj.optString("tcptun_mux_mode").ifBlank { obj.optString("mux_mode") }.lowercase(),
             muxUdpMode = obj.optString("tcptun_mux_udp_mode").ifBlank { obj.optString("mux_udp_mode") }.lowercase(),
+            muxResume = obj.optBoolean("tcptun_mux_resume", obj.optBoolean("mux_resume", false)),
+            muxResumeTimeoutMillis = obj.optDurationMillis(
+                "tcptun_mux_resume_timeout",
+                "mux_resume_timeout",
+            ),
+            muxResumeBufferSize = obj.optInt(
+                "tcptun_mux_resume_buffer_size",
+                obj.optInt("mux_resume_buffer_size", 0),
+            ),
             muxMaxSessions = obj.optInt("tcptun_mux_max_sessions", obj.optInt("mux_max_sessions", 0)),
             muxMaxStreamsPerSession = obj.optInt(
                 "tcptun_mux_max_streams_per_session",
@@ -310,6 +326,9 @@ object ProfileUriCodec {
             mux = obj.optBoolean("tunnel_mux", true),
             muxMode = obj.optString("tunnel_mux_mode").lowercase(),
             muxUdpMode = obj.optString("tunnel_mux_udp_mode").lowercase(),
+            muxResume = obj.optBoolean("tunnel_mux_resume", false),
+            muxResumeTimeoutMillis = obj.optDurationMillis("tunnel_mux_resume_timeout"),
+            muxResumeBufferSize = obj.optInt("tunnel_mux_resume_buffer_size", 0),
             muxMaxSessions = obj.optInt("tunnel_mux_max_sessions", 0),
             muxMaxStreamsPerSession = obj.optInt("tunnel_mux_max_streams_per_session", 0),
             muxWarmSpare = obj.optInt("tunnel_mux_warm_spares", 0),
@@ -348,6 +367,13 @@ object ProfileUriCodec {
             .put("tcptun_network", AndroidTunNetworks.joinToString(","))
         putJsonIfNotBlank(obj, "tcptun_mux_mode", config.muxMode)
         putJsonIfNotBlank(obj, "tcptun_mux_udp_mode", config.muxUdpMode)
+        if (config.muxResume) obj.put("tcptun_mux_resume", true)
+        if (config.muxResumeTimeoutMillis > 0) {
+            obj.put("tcptun_mux_resume_timeout", "${config.muxResumeTimeoutMillis}ms")
+        }
+        if (config.muxResumeBufferSize > 0) {
+            obj.put("tcptun_mux_resume_buffer_size", config.muxResumeBufferSize)
+        }
         if (config.muxMaxSessions > 0) obj.put("tcptun_mux_max_sessions", config.muxMaxSessions)
         if (config.muxMaxStreamsPerSession > 0) {
             obj.put("tcptun_mux_max_streams_per_session", config.muxMaxStreamsPerSession)
@@ -389,6 +415,13 @@ object ProfileUriCodec {
         params["mux"] = config.mux.toString()
         putIfNotBlank(params, "mux_mode", config.muxMode)
         putIfNotBlank(params, "mux_udp_mode", config.muxUdpMode)
+        if (config.muxResume) params["mux_resume"] = "true"
+        if (config.muxResumeTimeoutMillis > 0) {
+            params["mux_resume_timeout"] = "${config.muxResumeTimeoutMillis}ms"
+        }
+        if (config.muxResumeBufferSize > 0) {
+            params["mux_resume_buffer_size"] = config.muxResumeBufferSize.toString()
+        }
         if (config.muxMaxSessions > 0) params["mux_max_sessions"] = config.muxMaxSessions.toString()
         if (config.muxMaxStreamsPerSession > 0) {
             params["mux_max_streams_per_session"] = config.muxMaxStreamsPerSession.toString()
@@ -484,6 +517,59 @@ object ProfileUriCodec {
         return value.toIntOrNull() ?: error("invalid integer parameter: $name")
     }
 
+    private fun Uri.getDurationMillisParameter(name: String): Int {
+        val value = getQueryParameter(name)?.trim().orEmpty()
+        return if (value.isBlank()) 0 else parseGoDurationMillis(value, name)
+    }
+
+    private fun JSONObject.optDurationMillis(primaryName: String, fallbackName: String = ""): Int {
+        val value = optString(primaryName).ifBlank {
+            fallbackName.takeIf(String::isNotBlank)?.let(::optString).orEmpty()
+        }
+        return if (value.isBlank()) 0 else parseGoDurationMillis(value, primaryName)
+    }
+
+    private fun parseGoDurationMillis(value: String, fieldName: String): Int {
+        val text = value.trim()
+        if (text == "0" || text == "+0" || text == "-0") return 0
+        val negative = text.startsWith("-")
+        val unsigned = text.removePrefix("+").removePrefix("-")
+        if (unsigned.isBlank()) error("invalid duration parameter: $fieldName")
+
+        var cursor = 0
+        var totalNanos = BigDecimal.ZERO
+        GoDurationPart.findAll(unsigned).forEach { match ->
+            if (match.range.first != cursor) error("invalid duration parameter: $fieldName")
+            val amount = match.groupValues[1].toBigDecimal()
+            val nanosPerUnit = when (match.groupValues[2]) {
+                "h" -> 3_600_000_000_000L
+                "m" -> 60_000_000_000L
+                "s" -> 1_000_000_000L
+                "ms" -> 1_000_000L
+                "us", "µs", "μs" -> 1_000L
+                "ns" -> 1L
+                else -> error("invalid duration parameter: $fieldName")
+            }
+            totalNanos = totalNanos.add(amount.multiply(BigDecimal.valueOf(nanosPerUnit)))
+            cursor = match.range.last + 1
+        }
+        if (cursor != unsigned.length) error("invalid duration parameter: $fieldName")
+        if (negative) totalNanos = totalNanos.negate()
+        return try {
+            val millis = totalNanos.divide(BigDecimal.valueOf(1_000_000L))
+            if (
+                millis.stripTrailingZeros().scale() > 0 ||
+                millis < BigDecimal.valueOf(Int.MIN_VALUE.toLong()) ||
+                millis > BigDecimal.valueOf(Int.MAX_VALUE.toLong())
+            ) {
+                throw ArithmeticException()
+            }
+            millis.toInt()
+        } catch (_: ArithmeticException) {
+            error("$fieldName must resolve to whole milliseconds")
+        }
+    }
+
     private fun putIfNotBlank(params: MutableMap<String, String>, key: String, value: String) {
         if (value.isNotBlank()) params[key] = value
     }
@@ -499,6 +585,8 @@ object ProfileUriCodec {
 
     private const val TcptunUriVersion = "1"
     private const val DefaultRawTransportPath = "/proxy"
+    private val GoDurationPart = Regex("""(\d+(?:\.\d*)?|\.\d+)(ns|us|µs|μs|ms|s|m|h)""")
+
     private fun encodeComponent(value: String): String {
         return URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
     }

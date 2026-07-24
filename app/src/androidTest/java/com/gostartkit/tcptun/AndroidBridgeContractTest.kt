@@ -129,6 +129,77 @@ class AndroidBridgeContractTest {
     }
 
     @Test
+    fun structuredResumableProfileRoundTripsAndValidatesInCurrentBridge() {
+        val profile = AppConfig(
+            name = "resumable",
+            serverHost = "edge.example.com",
+            serverPort = "443",
+            protocol = "native",
+            transport = "raw",
+            token = "secret",
+            sni = "example.com",
+            tunnelSecurity = "reality",
+            realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
+            mux = true,
+            muxMode = "group",
+            muxResume = true,
+            muxResumeTimeoutMillis = 15_000,
+            muxResumeBufferSize = 4_194_304,
+        )
+
+        val restored = AppConfig.fromJson(profile.toJson())
+        val config = JSONObject(restored.toBridgeJson("127.0.0.1:1080"))
+        val mux = config.getJSONArray("outbounds").getJSONObject(0).getJSONObject("mux")
+
+        assertTrue(mux.getBoolean("resume"))
+        assertEquals("15000ms", mux.getString("resume_timeout"))
+        assertEquals(4_194_304, mux.getInt("resume_buffer_size"))
+        assertNull(ProfileUriCodec.encodeForQr(restored))
+        Androidbridge.validateConfig(config.toString())
+    }
+
+    @Test
+    fun sharedUidIdentityIsBoundedToTheGoAttributeValueLimit() {
+        val packages = List(300) { index -> "com.example.app$index" }
+
+        val identity = JSONObject(androidAppIdentityJson(12345, packages, "").orEmpty())
+
+        assertEquals(256, identity.getJSONObject("attributes").getJSONArray("packages").length())
+    }
+
+    @Test
+    fun managedRoutesReserveOneGoRuleForConnectivityChecks() {
+        val profile = AppConfig(
+            id = "route-limit",
+            name = "route-limit",
+            serverHost = "192.0.2.1",
+            serverPort = "443",
+            token = "secret",
+        )
+        val acceptedRules = List(MaxActiveManagedRouteRuleCount) { index ->
+            ManagedRouteRule(id = "rule-$index", value = "example$index.com")
+        }
+        val plan = ProfileRunPlan(listOf(profile))
+
+        Androidbridge.validateConfig(
+            plan.toBridgeJson(
+                localListenAddr = "127.0.0.1:1080",
+                managedRouteRules = acceptedRules,
+            ),
+        )
+
+        val rejected = runCatching {
+            plan.toBridgeJson(
+                localListenAddr = "127.0.0.1:1080",
+                managedRouteRules = acceptedRules +
+                    ManagedRouteRule(id = "rule-overflow", value = "overflow.example.com"),
+            )
+        }
+        assertTrue(rejected.isFailure)
+        assertTrue(rejected.exceptionOrNull()?.message.orEmpty().contains("255 managed route rules"))
+    }
+
+    @Test
     fun currentBridgeRejectsInvalidRuntimeConfig() {
         val result = runCatching {
             Androidbridge.validateConfig(

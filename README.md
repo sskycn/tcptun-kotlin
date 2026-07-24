@@ -16,6 +16,9 @@ The listener binds to `127.0.0.1` by default. Enable listening on all interfaces
 `0.0.0.0`, allowing other devices on the same reachable network to use the phone IP and port `1080`.
 
 The Go protocol implementation and gomobile wrapper live in the neighboring `tcptun-go` checkout. This Android project only consumes the generated `app/libs/androidbridge.aar`; `./scripts/build-androidbridge.sh` delegates to `../tcptun-go/scripts/build-androidbridge.sh`.
+The release workflow checks out the Go core at the revision recorded in
+`.github/workflows/release.yml` and rebuilds the AAR before Gradle runs, so a
+clean release runner does not depend on an untracked local binary.
 
 ## Expected Go mobile bridge
 
@@ -104,6 +107,13 @@ are skipped.
 Generated profiles use group mux with no warm spare, so the Go runtime can retire
 idle carriers. When flow analysis is disabled and no app route is configured, the
 bridge also skips Android UID ownership lookups entirely.
+Native raw profiles using automatic TCP/QUIC REALITY can enable resumable mux
+streams. The structured editor persists and emits `mux.resume`,
+`mux.resume_timeout`, and `mux.resume_buffer_size`; both client and server must
+use matching resumable settings. Standard URI shares preserve these fields,
+while compact `T3:` QR payloads cannot represent them and are therefore not
+offered for such profiles. Complete JSON profiles can additionally override the
+global `resources.resumable_buffer_budget`.
 The service installs `SocketProtector` and `AppIdentityProvider`, calls `Configure`,
 passes a duplicate of the `VpnService` TUN to `SetTun`, and then starts the
 configured session with every inactive profile tag disabled from its
@@ -212,7 +222,9 @@ go install golang.org/x/mobile/cmd/gomobile@latest
 gomobile init
 ```
 
-The generated AAR is copied to `app/libs/androidbridge.aar`.
+The generated AAR is copied to `app/libs/androidbridge.aar`. The file is ignored
+by Git and is rebuilt by the release workflow from tcptun-go revision
+`898b3cb11850d8515c01e7cb7a18f0f8d9e1d51e`.
 
 ## Build the Android app
 

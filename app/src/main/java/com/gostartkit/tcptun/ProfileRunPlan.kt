@@ -13,8 +13,12 @@ data class ProfileRunPlan(
 
     fun normalized(): ProfileRunPlan {
         require(profiles.isNotEmpty()) { "at least one profile must be configured" }
-        require(profiles.size <= MaxStoredProfileCount) { "too many configured profiles" }
-        require(activeIds.size <= MaxStoredProfileCount) { "too many active profiles" }
+        require(profiles.size <= MaxRuntimeProfileCount) {
+            "at most $MaxRuntimeProfileCount profiles can be configured in one runtime"
+        }
+        require(activeIds.size <= MaxRuntimeProfileCount) {
+            "at most $MaxRuntimeProfileCount profiles can be active in one runtime"
+        }
         require(profiles.all { it.id.isNotBlank() && it.id.length <= MaxProfileIdLength }) {
             "configured profile ID is invalid"
         }
@@ -168,6 +172,9 @@ internal fun ProfileRunPlan.toBridgeJson(
 
     val activeRules = managedRouteRules.map(ManagedRouteRule::normalized)
         .filter { it.enabled && it.isValid() }
+    require(activeRules.size <= MaxActiveManagedRouteRuleCount) {
+        "at most $MaxActiveManagedRouteRuleCount managed route rules can be enabled"
+    }
     val rules = JSONArray()
     if (activeRules.isNotEmpty()) {
         rules.put(

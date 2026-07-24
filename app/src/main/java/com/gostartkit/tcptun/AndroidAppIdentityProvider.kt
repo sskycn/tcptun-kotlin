@@ -18,7 +18,8 @@ private const val MAX_ROUTE_APP_COUNT = 4_096
 private const val MAX_APP_LABEL_INPUT_LENGTH = 1_024
 private const val MAX_APP_LABEL_LENGTH = 256
 private const val MAX_PACKAGE_NAME_LENGTH = 1_024
-private const val MAX_UID_PACKAGE_CANDIDATES = 1_024
+// tcptun-go accepts at most 256 values for one application identity attribute.
+private const val MAX_UID_PACKAGE_CANDIDATES = 256
 
 internal data class InstalledRouteApp(
     val packageName: String,

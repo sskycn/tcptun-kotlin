@@ -140,6 +140,33 @@ class ProfileDeepLinkTest {
     }
 
     @Test
+    fun nativeResumableMuxUriRoundTripsCurrentGoFields() {
+        val uri = "native://secret@edge.example.com:443" +
+            "?v=1&type=raw&security=reality&sni=example.com&fp=chrome" +
+            "&pbk=BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY" +
+            "&mux=true&mux_mode=group&mux_resume=true" +
+            "&mux_resume_timeout=17s&mux_resume_buffer_size=2097152#resumable"
+
+        val profile = ProfileUriCodec.decode(uri).getOrThrow()
+
+        assertTrue(profile.muxResume)
+        assertEquals(17_000, profile.muxResumeTimeoutMillis)
+        assertEquals(2_097_152, profile.muxResumeBufferSize)
+        assertNull(profile.validate())
+        assertNull(ProfileUriCodec.encodeForQr(profile))
+
+        val encoded = requireNotNull(ProfileUriCodec.encode(profile))
+        assertTrue(encoded.contains("mux_resume=true"))
+        assertTrue(encoded.contains("mux_resume_timeout=17000ms"))
+        assertTrue(encoded.contains("mux_resume_buffer_size=2097152"))
+
+        val restored = ProfileUriCodec.decode(encoded).getOrThrow()
+        assertTrue(restored.muxResume)
+        assertEquals(profile.muxResumeTimeoutMillis, restored.muxResumeTimeoutMillis)
+        assertEquals(profile.muxResumeBufferSize, restored.muxResumeBufferSize)
+    }
+
+    @Test
     fun nativeRealityTcpUriRoundTrips() {
         val uri = "native://tcp-token@edge.example.com:443" +
             "?v=1&type=raw&security=reality-tcp&sni=example.com&fp=chrome" +
@@ -490,7 +517,7 @@ class ProfileDeepLinkTest {
     }
 
     @Test
-    fun qrEncodingDoesNotFallBackToALossyProtocolUri() {
+    fun compactQrPreservesMixedUpstreamWithCurrentGoCodec() {
         val profile = AppConfig(
             name = "mixed-upstream",
             serverHost = "edge.example.com",
@@ -501,9 +528,11 @@ class ProfileDeepLinkTest {
             upstreamProtocol = "mixed",
         )
 
-        // T3 cannot preserve a mixed upstream protocol. Returning null is safer
-        // than emitting an authority URI that silently decodes as SOCKS5.
-        assertNull(ProfileUriCodec.encodeForQr(profile))
+        val encoded = requireNotNull(ProfileUriCodec.encodeForQr(profile))
+        val decoded = ProfileUriCodec.decode(encoded).getOrThrow()
+
+        assertTrue(encoded.startsWith("T3:"))
+        assertEquals("mixed", decoded.upstreamProtocol)
     }
 
     @Test

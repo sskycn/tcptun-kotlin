@@ -210,6 +210,12 @@
     <string name="field_mux">Mux</string>
     <string name="field_mux_mode">Mux 模式</string>
     <string name="field_mux_udp_mode">Mux UDP 模式</string>
+    <string name="field_mux_resume">承载切换时恢复 TCP 流</string>
+    <string name="field_mux_resume_timeout">恢复超时（毫秒）</string>
+    <string name="field_mux_resume_timeout_hint">留空：15000 · 范围 100–300000</string>
+    <string name="field_mux_resume_buffer">恢复缓冲区（字节）</string>
+    <string name="field_mux_resume_buffer_hint">留空：4194304 · 范围 65536–67108864</string>
+    <string name="mux_resume_note">服务端必须启用相同能力；仅支持 native + raw + REALITY 自动承载与 group mux。全量 JSON 模式可覆盖运行时全局缓冲预算。</string>
     <string name="full_config_mode">完整 tcptun-go JSON</string>
     <string name="full_config_json">tcptun-go 配置 JSON</string>
     <string name="full_config_note">保留 tcptun-go 支持的全部字段；VPN 流量通过 tag 为 tun 的原生 TUN 入站进入，本地代理监听仍独立保留。</string>

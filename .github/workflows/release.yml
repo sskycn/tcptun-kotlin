@@ -22,14 +22,37 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Check out pinned tcptun-go core
+        uses: actions/checkout@v4
+        with:
+          repository: sskycn/tcptun-go
+          ref: 898b3cb11850d8515c01e7cb7a18f0f8d9e1d51e
+          path: tcptun-go
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.5"
+          cache-dependency-path: tcptun-go/go.sum
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Build pinned Android bridge
+        shell: bash
+        env:
+          TCPTUN_GO_DIR: ${{ github.workspace }}/tcptun-go
+        run: |
+          set -euo pipefail
+          go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260611195102-4dd8f1dbf5d2
+          gomobile init
+          ./scripts/build-androidbridge.sh
 
       - name: Read version from tag
         id: version
