@@ -2398,6 +2398,14 @@ private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
                             DiagnosticsLine(stringResource(R.string.diag_go_listen), diagnostics.bridgeListen.ifBlank { noneLabel })
                             DiagnosticsLine(stringResource(R.string.diag_go_remote), diagnostics.bridgeRemote.ifBlank { noneLabel })
                             DiagnosticsLine(stringResource(R.string.diag_go_active), diagnostics.bridgeActiveConnections.toString())
+                            DiagnosticsLine(
+                                stringResource(R.string.diag_mux_sessions),
+                                diagnostics.bridgeMuxSessions.toString(),
+                            )
+                            DiagnosticsLine(
+                                stringResource(R.string.diag_mux_streams),
+                                diagnostics.bridgeMuxStreams.toString(),
+                            )
                             DiagnosticsLine(stringResource(R.string.diag_go_error), diagnostics.bridgeLastError.ifBlank { noneLabel })
                             DiagnosticsLine(stringResource(R.string.diag_go_event_time), bridgeTimestampLabel(diagnostics.bridgeTimestampMs, noneLabel))
                             DiagnosticsLine(
@@ -4165,7 +4173,13 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                 enabled = !isRealityQuic,
                             ) {
                                 config = config.copy(mux = it)
-                                if (!it) config = config.withoutResumableMux()
+                                if (!it) {
+                                    config = config.withoutResumableMux().copy(
+                                        muxMaxSessions = 0,
+                                        muxMaxStreamsPerSession = 0,
+                                        muxWarmSpare = 0,
+                                    )
+                                }
                             }
                             ChoiceRow(
                                 stringResource(R.string.field_mux_mode),
@@ -4200,6 +4214,85 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                     config.muxUdpMode.ifBlank { "reliable" },
                                     listOf("reliable", "auto", "datagram"),
                                 ) { mode -> config = config.copy(muxUdpMode = mode) }
+                            }
+                            if (config.mux) {
+                                val effectiveMaxSessions = config.muxMaxSessions.takeIf { it > 0 } ?: 4
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    OutlinedTextField(
+                                        value = config.muxMaxSessions
+                                            .takeIf { it > 0 }
+                                            ?.toString()
+                                            .orEmpty(),
+                                        onValueChange = { value ->
+                                            config = config.copy(
+                                                muxMaxSessions = value
+                                                    .filter(Char::isDigit)
+                                                    .take(2)
+                                                    .toIntOrNull()
+                                                    ?: 0,
+                                            )
+                                        },
+                                        label = { Text(stringResource(R.string.field_mux_max_sessions)) },
+                                        supportingText = {
+                                            Text(stringResource(R.string.field_mux_max_sessions_hint))
+                                        },
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        isError = config.muxMaxSessions !in 0..32,
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    OutlinedTextField(
+                                        value = config.muxWarmSpare
+                                            .takeIf { it > 0 }
+                                            ?.toString()
+                                            .orEmpty(),
+                                        onValueChange = { value ->
+                                            config = config.copy(
+                                                muxWarmSpare = value
+                                                    .filter(Char::isDigit)
+                                                    .take(2)
+                                                    .toIntOrNull()
+                                                    ?: 0,
+                                            )
+                                        },
+                                        label = { Text(stringResource(R.string.field_mux_warm_spares)) },
+                                        supportingText = {
+                                            Text(
+                                                stringResource(
+                                                    R.string.field_mux_warm_spares_hint,
+                                                    effectiveMaxSessions - 1,
+                                                ),
+                                            )
+                                        },
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        isError = config.muxWarmSpare !in 0 until effectiveMaxSessions,
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                OutlinedTextField(
+                                    value = config.muxMaxStreamsPerSession
+                                        .takeIf { it > 0 }
+                                        ?.toString()
+                                        .orEmpty(),
+                                    onValueChange = { value ->
+                                        config = config.copy(
+                                            muxMaxStreamsPerSession = value
+                                                .filter(Char::isDigit)
+                                                .take(4)
+                                                .toIntOrNull()
+                                                ?: 0,
+                                        )
+                                    },
+                                    label = { Text(stringResource(R.string.field_mux_max_streams_per_session)) },
+                                    supportingText = {
+                                        Text(stringResource(R.string.field_mux_max_streams_per_session_hint))
+                                    },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    isError = config.muxMaxStreamsPerSession !in 0..4096,
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
                             }
                             val canResumeMux =
                                 config.mux &&
