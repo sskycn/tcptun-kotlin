@@ -486,7 +486,7 @@ data class AppConfig(
             else -> emptyList()
         }
         if (addresses.any { value ->
-                val parsed = runCatching { splitHostPort(value) }.getOrNull()
+                val parsed = runRecoverableCatching { splitHostPort(value) }.getOrNull()
                 parsed != null && parsed.second == listenPort && listenerHostsOverlap(parsed.first, listenHost)
             }
         ) {
@@ -684,13 +684,13 @@ data class AppConfig(
     }
 
     private fun validateRawConfig(raw: String): String? {
-        return runCatching {
+        return runRecoverableCatching {
             requireSafeJsonNesting(raw)
             val root = JSONObject(raw)
-            if (root.has("mode")) return@runCatching "legacy mode-based configuration is not supported"
+            if (root.has("mode")) return@runRecoverableCatching "legacy mode-based configuration is not supported"
             val outbounds = root.optJSONArray("outbounds")
-                ?: return@runCatching "outbounds is required"
-            if (outbounds.length() == 0) return@runCatching "outbounds must not be empty"
+                ?: return@runRecoverableCatching "outbounds is required"
+            if (outbounds.length() == 0) return@runRecoverableCatching "outbounds must not be empty"
             val hasTaggedOutbound = (0 until outbounds.length()).any { index ->
                 outbounds.optJSONObject(index)?.optString("tag")?.isNotBlank() == true
             }
@@ -806,7 +806,7 @@ data class AppConfig(
 
     fun maskedAddress(): String {
         if (rawConfigJson.isNotBlank()) {
-            val root = runCatching {
+            val root = runRecoverableCatching {
                 requireSafeJsonNesting(rawConfigJson)
                 JSONObject(rawConfigJson)
             }.getOrNull()
@@ -929,20 +929,25 @@ object ProfileStore {
 
     @Synchronized
     internal fun snapshot(context: Context): ProfileStoreSnapshot {
-        val state = loadRecoveringInternal(context.applicationContext)
+        val state = loadRecoveringInternal(context.applicationContext ?: context)
         return ProfileStoreSnapshot(state, mutationRevision.get())
     }
 
     @Synchronized
-    fun load(context: Context): ProfilesState = loadRecoveringInternal(context.applicationContext)
+    fun load(context: Context): ProfilesState = loadRecoveringInternal(context.applicationContext ?: context)
 
     private fun loadRecoveringInternal(context: Context): ProfilesState = try {
         loadInternal(context)
     } catch (error: Throwable) {
         if (error.isFatalProcessError()) throw error
-        ProfilesState(emptyList()).also { empty ->
-            runRecoverableCatching { writeState(context, empty) }
+        // A malformed preference must not crash Activity/Service startup. Do not
+        // overwrite here: the same boundary also catches transient storage errors,
+        // and replacing valid profiles with an empty state would turn recovery into
+        // data loss. The next successful explicit save repairs the stored value.
+        runRecoverableCatching {
+            TcptunState.appendLog("profile storage unavailable: ${failureDescription(error)}")
         }
+        ProfilesState(emptyList())
     }
 
     private fun loadInternal(context: Context): ProfilesState {
@@ -962,7 +967,7 @@ object ProfileStore {
                         repaired = true
                         continue
                     }
-                    val decoded = runCatching { AppConfig.fromJson(json) }.getOrNull()
+                    val decoded = runRecoverableCatching { AppConfig.fromJson(json) }.getOrNull()
                     if (decoded == null || !decoded.hasSafeStorageSize() ||
                         (decoded.serverHost.isBlank() && decoded.rawConfigJson.isBlank())
                     ) {
@@ -977,11 +982,11 @@ object ProfileStore {
                     add(decoded.copy(id = normalizedId))
                 }
             }
-            val stateVersion = runCatching { prefs.getInt(KEY_STATE_VERSION, 0) }.getOrDefault(0)
-            val storedActive = runCatching { prefs.getString(KEY_ACTIVE, null) }.getOrNull()
+            val stateVersion = runRecoverableCatching { prefs.getInt(KEY_STATE_VERSION, 0) }.getOrDefault(0)
+            val storedActive = runRecoverableCatching { prefs.getString(KEY_ACTIVE, null) }.getOrNull()
                 ?.takeIf { stateVersion >= STATE_VERSION_INDEPENDENT_OUTBOUNDS }
                 ?.let { encoded ->
-                    runCatching {
+                    runRecoverableCatching {
                         if (encoded.length > MaxStoredProfilesLength) error("active profile data is too large")
                         requireSafeJsonNesting(encoded)
                         val active = JSONArray(encoded)
@@ -1002,7 +1007,7 @@ object ProfileStore {
                 repaired ||
                 profiles.size != arr.length() ||
                 stateVersion < STATE_VERSION_INDEPENDENT_OUTBOUNDS ||
-                !runCatching { prefs.contains(KEY_ACTIVE) }.getOrDefault(false)
+                !runRecoverableCatching { prefs.contains(KEY_ACTIVE) }.getOrDefault(false)
             ) {
                 save(context, state)
             }
@@ -1015,7 +1020,7 @@ object ProfileStore {
 
     @Synchronized
     fun save(context: Context, state: ProfilesState): Result<Unit> = runRecoverableCatching {
-        writeState(context.applicationContext, state)
+        writeState(context.applicationContext ?: context, state)
     }
 
     private fun encodeState(state: ProfilesState): EncodedState {
@@ -1078,7 +1083,8 @@ object ProfileStore {
         if (expectedMutationRevision != null && mutationRevision.get() != expectedMutationRevision) {
             return@runRecoverableCatching false
         }
-        val current = loadRecoveringInternal(context.applicationContext)
+        val appContext = context.applicationContext ?: context
+        val current = loadRecoveringInternal(appContext)
         if (expectedMutationRevision != null && mutationRevision.get() != expectedMutationRevision) {
             return@runRecoverableCatching false
         }
@@ -1087,7 +1093,7 @@ object ProfileStore {
         }
         val encoded = encodeState(current.copy(activeIds = replacementActiveIds))
         guardedWrite(
-            context = context.applicationContext,
+            context = appContext,
             encoded = encoded,
             expectedMutationRevision = expectedMutationRevision,
             commitLock = commitLock,
@@ -1103,12 +1109,13 @@ object ProfileStore {
         canCommit: () -> Boolean,
     ): Result<Boolean> = runRecoverableCatching {
         if (mutationRevision.get() != expectedMutationRevision) return@runRecoverableCatching false
-        val current = loadRecoveringInternal(context.applicationContext)
+        val appContext = context.applicationContext ?: context
+        val current = loadRecoveringInternal(appContext)
         if (mutationRevision.get() != expectedMutationRevision) return@runRecoverableCatching false
         if (current.activeIds.isEmpty()) return@runRecoverableCatching true
         val encoded = encodeState(current.copy(activeIds = emptySet()))
         guardedWrite(
-            context = context.applicationContext,
+            context = appContext,
             encoded = encoded,
             expectedMutationRevision = expectedMutationRevision,
             commitLock = commitLock,
@@ -1127,7 +1134,8 @@ object ProfileStore {
         if (expectedMutationRevision != null && mutationRevision.get() != expectedMutationRevision) {
             return@runRecoverableCatching false
         }
-        val current = loadRecoveringInternal(context.applicationContext)
+        val appContext = context.applicationContext ?: context
+        val current = loadRecoveringInternal(appContext)
         if (expectedMutationRevision != null && mutationRevision.get() != expectedMutationRevision) {
             return@runRecoverableCatching false
         }
@@ -1141,7 +1149,7 @@ object ProfileStore {
         if (current.activeIds == plan.activeIds) return@runRecoverableCatching true
         val encoded = encodeState(current.copy(activeIds = plan.activeIds))
         guardedWrite(
-            context = context.applicationContext,
+            context = appContext,
             encoded = encoded,
             expectedMutationRevision = expectedMutationRevision,
             commitLock = commitLock,
@@ -1177,15 +1185,16 @@ object ProfileStore {
         next: ProfilesState,
     ): Result<ProfilesState?> = runRecoverableCatching {
         if (mutationRevision.get() != expected.mutationRevision) return@runRecoverableCatching null
-        val current = loadRecoveringInternal(context.applicationContext)
+        val appContext = context.applicationContext ?: context
+        val current = loadRecoveringInternal(appContext)
         if (
             mutationRevision.get() != expected.mutationRevision ||
             current != expected.state
         ) {
             return@runRecoverableCatching null
         }
-        writeState(context.applicationContext, next)
-        loadRecoveringInternal(context.applicationContext)
+        writeState(appContext, next)
+        loadRecoveringInternal(appContext)
     }
 
     private fun migrateSingleProfile(context: Context): ProfilesState {

@@ -13,7 +13,8 @@ internal fun generateQrCodeBitmap(
     size: Int,
 ): Bitmap {
     require(content.isNotBlank()) { "QR code content must not be blank" }
-    require(size > 0) { "QR code size must be positive" }
+    require(content.length <= MaxProfileUriLength) { "QR code content is too large" }
+    require(size in 1..MAX_QR_BITMAP_SIZE) { "QR code size is out of range" }
 
     val matrix = QRCodeWriter().encode(
         content,
@@ -39,3 +40,4 @@ internal fun generateQrCodeBitmap(
 }
 
 private const val QUIET_ZONE_MODULES = 4
+private const val MAX_QR_BITMAP_SIZE = 2_048

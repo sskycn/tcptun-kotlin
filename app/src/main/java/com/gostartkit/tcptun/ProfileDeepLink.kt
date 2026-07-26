@@ -19,12 +19,12 @@ internal const val MaxStoredProfileCount = 256
 internal const val MaxRuntimeProfileCount = 128
 
 internal val SupportedProfileUriSchemes: Set<String> =
-    (AppConfig.Protocols + "tcptun").toSet()
+    AppConfig.Protocols.toSet()
 
 internal const val ProfileDeepLinkScheme = "https"
-internal const val ProfileDeepLinkHost = "tcptun.com"
-internal const val ProfileDeepLinkNamespace = "x"
+internal const val ProfileDeepLinkHost = "x.tcptun.com"
 internal const val ProfileDeepLinkVersion = "v1"
+internal const val ProfileDeepLinkPath = "/$ProfileDeepLinkVersion"
 
 internal object ProfileDeepLinkCodec {
     fun encode(profileUri: String): String {
@@ -38,12 +38,12 @@ internal object ProfileDeepLinkCodec {
             value.toByteArray(StandardCharsets.UTF_8),
             Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
         )
-        return "$ProfileDeepLinkScheme://$ProfileDeepLinkHost/$ProfileDeepLinkNamespace/$ProfileDeepLinkVersion#p=$payload".also {
+        return "$ProfileDeepLinkScheme://$ProfileDeepLinkHost$ProfileDeepLinkPath#p=$payload".also {
             require(it.length <= MaxProfileUriLength) { "profile link is too long" }
         }
     }
 
-    fun decode(raw: String): Result<String> = runCatching {
+    fun decode(raw: String): Result<String> = runRecoverableCatching {
         if (raw.length > MaxProfileUriLength) error("invalid profile link length")
         val value = raw.trim()
         if (value.isBlank() || value.length > MaxProfileUriLength) error("invalid profile link length")
@@ -52,7 +52,7 @@ internal object ProfileDeepLinkCodec {
         if (!uri.host.equals(ProfileDeepLinkHost, ignoreCase = true)) error("unsupported profile link host")
         if (uri.encodedUserInfo != null) error("profile link must not contain user info")
         if (uri.port != -1) error("profile link must not specify a port")
-        if (uri.encodedPath != "/$ProfileDeepLinkNamespace/$ProfileDeepLinkVersion") {
+        if (uri.encodedPath != ProfileDeepLinkPath) {
             error("unsupported profile link path or version")
         }
         if (uri.encodedQuery != null) error("profile link must not contain a query")
@@ -90,14 +90,14 @@ internal data class PendingProfileUri(
 )
 
 internal fun profileUriFromIntent(intent: Intent?): String? {
-    return runCatching {
-        if (intent?.action != Intent.ACTION_VIEW) return@runCatching null
-        val uri = intent.data ?: return@runCatching null
-        val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return@runCatching null
+    return runRecoverableCatching {
+        if (intent?.action != Intent.ACTION_VIEW) return@runRecoverableCatching null
+        val uri = intent.data ?: return@runRecoverableCatching null
+        val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return@runRecoverableCatching null
         val rawValue = uri.toString()
-        if (rawValue.length > MaxProfileUriLength) return@runCatching null
+        if (rawValue.length > MaxProfileUriLength) return@runRecoverableCatching null
         val value = rawValue.trim()
-        if (value.isBlank() || value.length > MaxProfileUriLength) return@runCatching null
+        if (value.isBlank() || value.length > MaxProfileUriLength) return@runRecoverableCatching null
         when {
             scheme in SupportedProfileUriSchemes -> value
             scheme == ProfileDeepLinkScheme && ProfileDeepLinkCodec.isSupportedLink(value) -> value
@@ -108,7 +108,7 @@ internal fun profileUriFromIntent(intent: Intent?): String? {
 
 internal fun profileConnectionIdentity(config: AppConfig): String? {
     if (config.rawConfigJson.isNotBlank()) {
-        return runCatching {
+        return runRecoverableCatching {
             requireSafeJsonNesting(config.rawConfigJson)
             "json:" + canonicalJsonValue(JSONObject(config.rawConfigJson))
         }.getOrNull()

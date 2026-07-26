@@ -44,6 +44,7 @@ class TcpingUiTest {
             ),
         )
         TcptunState.setStatus("Running")
+        TcptunState.setConnectionsReady(true)
         composeRule.activityRule.scenario.recreate()
 
         val readyText = composeRule.activity.getString(R.string.connected_tap_test)

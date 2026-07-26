@@ -110,8 +110,13 @@ class VpnServiceLifecycleTest {
                     TcptunState.status == "Stopped"
                 }
                 assertEquals("Stopped", TcptunState.diagnostics.bridgeStatus)
-                waitUntil("VPN destroy cleanup completes", timeoutMillis = 10_000) {
-                    TcptunState.logs.any { it == "tcptun destroy cleanup completed" }
+                // After the first cycle, start again as soon as Stopped is
+                // published. This covers same-instance reuse and the window
+                // where Android replaces a service during native teardown.
+                if (cycle != 0) {
+                    waitUntil("VPN destroy cleanup completes", timeoutMillis = 10_000) {
+                        TcptunState.logs.any { it == "tcptun destroy cleanup completed" }
+                    }
                 }
             }
         } finally {

@@ -2,6 +2,7 @@ package com.tcptun.client
 
 import java.lang.reflect.Proxy
 import java.lang.reflect.Method
+import java.util.concurrent.CancellationException
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
 import kotlin.concurrent.write
@@ -16,6 +17,7 @@ internal fun failureDescription(error: Throwable): String =
 internal inline fun <T> runRecoverableCatching(block: () -> T): Result<T> = try {
     Result.success(block())
 } catch (error: Throwable) {
+    if (error is CancellationException) throw error
     if (error.isFatalProcessError()) throw error
     Result.failure(error)
 }
@@ -99,6 +101,8 @@ interface TcptunBridge {
     fun probeOutboundHealth(tag: String, host: String, port: Int, timeoutMillis: Long): Long
     fun outboundsStatusJson(): String
     fun stop()
+    fun sessionId(): Long
+    fun waitStopped(sessionId: Long, timeoutMillis: Long)
     fun close()
     fun status(): String
     fun statusJson(): String
@@ -237,21 +241,40 @@ class ReflectionTcptunBridge : TcptunBridge {
         invokeEngine("stop")
     }
 
+    override fun sessionId(): Long {
+        return (invokeEngine("sessionID") as? Number)?.toLong()
+            ?: throw IllegalStateException("androidbridge.Engine.sessionID returned no session ID")
+    }
+
+    override fun waitStopped(sessionId: Long, timeoutMillis: Long) {
+        invokeEngine(
+            "waitStopped",
+            arrayOf(java.lang.Long.TYPE, java.lang.Long.TYPE),
+            sessionId,
+            timeoutMillis,
+        )
+    }
+
     override fun close() {
         engineLock.write {
             if (closed) return
-            closed = true
-            try {
-                if (engineDelegate.isInitialized()) {
+            if (engineDelegate.isInitialized()) {
+                try {
                     invokeMethod(engineDelegate.value, engineDelegate.value.javaClass.getMethod("close"))
+                } catch (error: Throwable) {
+                    // tcptun-go deliberately retains host callbacks when Close
+                    // cannot confirm that the runtime stopped. Keep both this
+                    // wrapper and its Java proxies alive so a later teardown
+                    // attempt remains safe and possible.
+                    throw error
                 }
-            } finally {
-                logCallback = null
-                statusCallback = null
-                socketProtector = null
-                appIdentityProvider = null
-                flowCallback = null
             }
+            closed = true
+            logCallback = null
+            statusCallback = null
+            socketProtector = null
+            appIdentityProvider = null
+            flowCallback = null
         }
     }
 

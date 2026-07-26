@@ -8,7 +8,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
 import java.util.concurrent.Executor
+import java.util.concurrent.CancellationException
+import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.TimeUnit
 
 private interface GuardedTestCallback {
     fun booleanResult(): Boolean
@@ -57,6 +60,49 @@ class CrashGuardTest {
         }
 
         assertSame(fatal, thrown)
+    }
+
+    @Test
+    fun recoverableResultNeverConsumesCancellation() {
+        val cancellation = CancellationException("superseded")
+
+        val thrown = assertThrows(CancellationException::class.java) {
+            runRecoverableCatching<Unit> { throw cancellation }
+        }
+
+        assertSame(cancellation, thrown)
+    }
+
+    @Test
+    fun cancelledExecutorTaskIsNotReportedAsFailure() {
+        var reported: Throwable? = null
+
+        val accepted = executeCrashGuarded(
+            executor = Executor(Runnable::run),
+            taskName = "cancelled task",
+            onFailure = { reported = it },
+        ) { throw CancellationException("stale lifecycle generation") }
+
+        assertTrue(accepted)
+        assertEquals(null, reported)
+    }
+
+    @Test
+    fun rejectedScheduledTaskReturnsNoOwnershipHandle() {
+        val executor = Executors.newSingleThreadScheduledExecutor()
+        executor.shutdownNow()
+        var reported: Throwable? = null
+
+        val future = scheduleCrashGuardedFuture(
+            executor = executor,
+            delay = 0,
+            unit = TimeUnit.MILLISECONDS,
+            taskName = "rejected schedule",
+            onFailure = { reported = it },
+        ) {}
+
+        assertEquals(null, future)
+        assertTrue(reported?.cause is RejectedExecutionException)
     }
 
     @Test

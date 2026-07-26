@@ -30,23 +30,23 @@ internal data class InstalledRouteApp(
 }
 
 internal fun loadInstalledRouteApps(context: Context): List<InstalledRouteApp> {
-    val packageManager = runCatching { context.packageManager }.getOrNull() ?: return emptyList()
-    val ownPackageName = runCatching { context.packageName }.getOrDefault("")
+    val packageManager = runRecoverableCatching { context.packageManager }.getOrNull() ?: return emptyList()
+    val ownPackageName = runRecoverableCatching { context.packageName }.getOrDefault("")
     val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
     @Suppress("DEPRECATION")
-    val activities = runCatching { packageManager.queryIntentActivities(launcher, 0) }
+    val activities = runRecoverableCatching { packageManager.queryIntentActivities(launcher, 0) }
         .getOrElse { emptyList() }
     return activities
         .asSequence()
         .mapNotNull { info ->
-            runCatching {
+            runRecoverableCatching {
                 val packageName = info.activityInfo?.packageName?.trim().orEmpty()
                 if (
                     packageName.isBlank() ||
                     packageName.length > MAX_PACKAGE_NAME_LENGTH ||
                     packageName == ownPackageName
                 ) {
-                    return@runCatching null
+                    return@runRecoverableCatching null
                 }
                 val rawLabel = info.loadLabel(packageManager)?.toString().orEmpty()
                 val label = rawLabel
@@ -107,7 +107,7 @@ private fun parseNumericAddress(value: String): InetAddress? {
             val number = octet.toIntOrNull()?.takeIf { it in 0..255 } ?: return null
             bytes[index] = number.toByte()
         }
-        return runCatching { InetAddress.getByAddress(bytes) }.getOrNull()
+        return runRecoverableCatching { InetAddress.getByAddress(bytes) }.getOrNull()
     }
 
     val zoneSeparator = value.indexOf('%')
@@ -120,11 +120,11 @@ private fun parseNumericAddress(value: String): InetAddress? {
     if (literal.isEmpty() || literal.any { !it.isDigit() && it.lowercaseChar() !in 'a'..'f' && it != ':' && it != '.' }) {
         return null
     }
-    return runCatching { InetAddress.getByName(value) }.getOrNull()
+    return runRecoverableCatching { InetAddress.getByName(value) }.getOrNull()
 }
 
 internal fun androidAppIdentityJson(uid: Int, packages: List<String>, flowAnalysisApp: String): String? {
-    val normalizedPackages = runCatching {
+    val normalizedPackages = runRecoverableCatching {
         packages.asSequence()
             .take(MAX_UID_PACKAGE_CANDIDATES)
             .filter { it.length <= MAX_PACKAGE_NAME_LENGTH }
@@ -140,7 +140,7 @@ internal fun androidAppIdentityJson(uid: Int, packages: List<String>, flowAnalys
         .takeIf { it.length <= MAX_PACKAGE_NAME_LENGTH }
         ?.trim()
         ?.takeIf(normalizedPackages::contains)
-    return runCatching {
+    return runRecoverableCatching {
         JSONObject()
             .apply {
                 if (analysisApp != null) {
@@ -175,7 +175,9 @@ internal class AndroidAppIdentityProvider(
     context: Context,
     private val connectivity: ConnectivityManager,
 ) {
-    private val packageManager = runCatching { (context.applicationContext ?: context).packageManager }.getOrNull()
+    private val packageManager = runRecoverableCatching {
+        (context.applicationContext ?: context).packageManager
+    }.getOrNull()
     private val identities = ConcurrentHashMap<IdentityCacheKey, String>()
     @Volatile private var flowAnalysisApp: String = ""
 
@@ -206,7 +208,7 @@ internal class AndroidAppIdentityProvider(
                 remote = InetSocketAddress(destination.address, destination.port),
             )
         }.getOrNull() ?: return null
-        val uid = runCatching {
+        val uid = runRecoverableCatching {
             connectivity.getConnectionOwnerUid(original.protocol, original.local, original.remote)
         }.getOrDefault(Process.INVALID_UID)
         if (uid == Process.INVALID_UID) return null
@@ -222,7 +224,7 @@ internal class AndroidAppIdentityProvider(
 
     private fun identityForUid(uid: Int, analysisApp: String): String? {
         val manager = packageManager ?: return null
-        val packages = runCatching {
+        val packages = runRecoverableCatching {
             buildList<String> {
                 manager.getPackagesForUid(uid)?.forEach { packageName -> packageName?.let(::add) }
             }

@@ -21,7 +21,7 @@ class ProfileDeepLinkTest {
     @Test
     fun manifestHandlesEveryTcptunGoUriScheme() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        assertEquals(setOf("native", "tcptun", "vless", "vmess", "trojan"), SupportedProfileUriSchemes)
+        assertEquals(setOf("native", "vless", "vmess", "trojan"), SupportedProfileUriSchemes)
 
         SupportedProfileUriSchemes.forEach { scheme ->
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse("$scheme://credential@example.com:443"))
@@ -54,9 +54,10 @@ class ProfileDeepLinkTest {
         assertEquals(httpsLink, profileUriFromIntent(Intent(Intent.ACTION_VIEW, Uri.parse(httpsLink))))
         assertNull(profileUriFromIntent(Intent(Intent.ACTION_SEND, Uri.parse("native://token@example.com:443"))))
         assertNull(profileUriFromIntent(Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com/profile"))))
-        assertNull(profileUriFromIntent(Intent(Intent.ACTION_VIEW, Uri.parse("https://tcptun.com/x/v2#p=YWJj"))))
-        assertNull(profileUriFromIntent(Intent(Intent.ACTION_VIEW, Uri.parse("https://tcptun.com/y/v1#p=YWJj"))))
-        assertNull(profileUriFromIntent(Intent(Intent.ACTION_VIEW, Uri.parse("http://tcptun.com/x/v1#p=YWJj"))))
+        assertNull(profileUriFromIntent(Intent(Intent.ACTION_VIEW, Uri.parse("tcptun://credential@example.com:443"))))
+        assertNull(profileUriFromIntent(Intent(Intent.ACTION_VIEW, Uri.parse("https://x.tcptun.com/v2#p=YWJj"))))
+        assertNull(profileUriFromIntent(Intent(Intent.ACTION_VIEW, Uri.parse("https://x.tcptun.com/x/v1#p=YWJj"))))
+        assertNull(profileUriFromIntent(Intent(Intent.ACTION_VIEW, Uri.parse("http://x.tcptun.com/v1#p=YWJj"))))
         val oversized = "native://token@example.com:443#" + "a".repeat(MaxProfileUriLength)
         assertNull(profileUriFromIntent(Intent(Intent.ACTION_VIEW, Uri.parse(oversized))))
     }
@@ -67,7 +68,7 @@ class ProfileDeepLinkTest {
             "?security=tls&type=raw#edge"
         val link = ProfileDeepLinkCodec.encode(profileUri)
 
-        assertTrue(link.startsWith("https://tcptun.com/x/v1#p="))
+        assertTrue(link.startsWith("https://x.tcptun.com/v1#p="))
         assertFalse(link.substringAfter("#p=").contains('='))
         assertEquals(profileUri, ProfileDeepLinkCodec.decode(link).getOrThrow())
         val profile = ProfileUriCodec.decode(link).getOrThrow()
@@ -79,9 +80,9 @@ class ProfileDeepLinkTest {
     @Test
     fun versionedHttpsLinkRejectsNonCanonicalOrUnsupportedLinks() {
         val link = ProfileDeepLinkCodec.encode("native://token@example.com:443")
-        assertTrue(ProfileDeepLinkCodec.decode(link.replace("/x/v1", "/x/v2")).isFailure)
-        assertTrue(ProfileDeepLinkCodec.decode(link.replace("/x/v1", "/y/v1")).isFailure)
-        assertTrue(ProfileDeepLinkCodec.decode(link.replace("tcptun.com", "example.com")).isFailure)
+        assertTrue(ProfileDeepLinkCodec.decode(link.replace("/v1", "/v2")).isFailure)
+        assertTrue(ProfileDeepLinkCodec.decode(link.replace("/v1", "/x/v1")).isFailure)
+        assertTrue(ProfileDeepLinkCodec.decode(link.replace("x.tcptun.com", "example.com")).isFailure)
         assertTrue(ProfileDeepLinkCodec.decode(link.replace("#p=", "?p=")).isFailure)
         assertTrue(ProfileDeepLinkCodec.decode("$link&extra=value").isFailure)
     }
@@ -109,34 +110,13 @@ class ProfileDeepLinkTest {
     }
 
     @Test
-    fun legacyTcptunUriPreservesAllGoMuxParameters() {
+    fun legacyTcptunUriIsRejected() {
         val uri = "tcptun://secret@example.com:443" +
             "?v=1&protocol=native&type=raw&network=tcp%2Cudp&path=%2Ftunnel" +
             "&security=tls&sni=edge.example.com&insecure=true&mux=true&mux_mode=group" +
             "&mux_max_sessions=6&mux_max_streams_per_session=256&mux_warm_spares=2#edge"
 
-        val profile = ProfileUriCodec.decode(uri).getOrThrow()
-        assertEquals("native", profile.protocol)
-        assertEquals("raw", profile.transport)
-        assertEquals("edge.example.com", profile.sni)
-        assertTrue(profile.tls)
-        assertTrue(profile.tlsInsecure)
-        assertTrue(profile.mux)
-        assertEquals("group", profile.muxMode)
-        assertEquals(6, profile.muxMaxSessions)
-        assertEquals(256, profile.muxMaxStreamsPerSession)
-        assertEquals(2, profile.muxWarmSpare)
-        assertNull(profile.validate())
-
-        val bridge = JSONObject(profile.toBridgeJson("127.0.0.1:1080"))
-        val mux = bridge.getJSONArray("outbounds").getJSONObject(0).getJSONObject("mux")
-        assertEquals("group", mux.getString("mode"))
-        assertEquals(6, mux.getInt("max_sessions"))
-        assertEquals(256, mux.getInt("max_streams_per_session"))
-        assertEquals(2, mux.getInt("warm_spares"))
-        val network = bridge.getJSONArray("outbounds").getJSONObject(0).getJSONArray("network")
-        assertEquals("tcp", network.getString(0))
-        assertEquals("udp", network.getString(1))
+        assertTrue(ProfileUriCodec.decode(uri).isFailure)
     }
 
     @Test

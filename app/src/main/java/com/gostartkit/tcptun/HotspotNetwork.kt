@@ -9,16 +9,18 @@ internal data class InterfaceIpv4Address(
 )
 
 internal fun readInterfaceIpv4Addresses(): List<InterfaceIpv4Address> {
-    val interfaces = runCatching { NetworkInterface.getNetworkInterfaces()?.toList().orEmpty() }
+    val interfaces = runRecoverableCatching { NetworkInterface.getNetworkInterfaces()?.toList().orEmpty() }
         .getOrDefault(emptyList())
-    return runCatching {
+    return runRecoverableCatching {
         interfaces
             .asSequence()
             .flatMap { networkInterface ->
-                runCatching {
-                    if (!networkInterface.isUp || networkInterface.isLoopback) return@runCatching emptyList()
+                runRecoverableCatching {
+                    if (!networkInterface.isUp || networkInterface.isLoopback) {
+                        return@runRecoverableCatching emptyList()
+                    }
                     val interfaceName = networkInterface.name?.trim().orEmpty()
-                    if (interfaceName.isBlank()) return@runCatching emptyList()
+                    if (interfaceName.isBlank()) return@runRecoverableCatching emptyList()
                     networkInterface.inetAddresses
                         ?.toList()
                         .orEmpty()

@@ -1,6 +1,5 @@
 package com.tcptun.client
 
-import android.Manifest
 import android.app.Activity
 import android.content.ClipData
 import android.content.Context
@@ -151,6 +150,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tcptun.client.ui.theme.TcpTunTheme
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Dispatchers
@@ -178,8 +178,17 @@ private const val SavedProfileIntentSequence = "profileIntentSequence"
 private const val SavedPendingProfileUri = "pendingProfileUri"
 /** Brief wait after requesting a monitor refresh so pulled UI can show updated values. */
 private const val PullRefreshSettleMillis = 350L
+private const val PostNotificationsPermission = "android.permission.POST_NOTIFICATIONS"
 
-private val VpnPlanCommandScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+private val VpnPlanCommandExceptionHandler = CoroutineExceptionHandler { _, error ->
+    if (error.isFatalProcessError()) throw error
+    runRecoverableCatching {
+        TcptunState.appendLog("VPN command coroutine failed: ${failureDescription(error)}")
+    }
+}
+private val VpnPlanCommandScope = CoroutineScope(
+    SupervisorJob() + Dispatchers.Main.immediate + VpnPlanCommandExceptionHandler,
+)
 private val VpnPlanCommandGeneration = AtomicInteger()
 private val VpnPlanCommandJob = AtomicReference<Job?>(null)
 private val VpnPlanUpdateReadyBaseline = AtomicReference<Boolean?>(null)
@@ -271,13 +280,13 @@ private fun readLocalIpInfo(
     tetheredInterfaceNames: Set<String>?,
 ): LocalIpInfo {
     val links = networks.mapNotNull { network ->
-        val capabilities = runCatching { connectivity.getNetworkCapabilities(network) }.getOrNull()
+        val capabilities = runRecoverableCatching { connectivity.getNetworkCapabilities(network) }.getOrNull()
             ?: return@mapNotNull null
-        val linkProperties = runCatching { connectivity.getLinkProperties(network) }.getOrNull()
+        val linkProperties = runRecoverableCatching { connectivity.getLinkProperties(network) }.getOrNull()
             ?: return@mapNotNull null
         NetworkLinkInfo(network, capabilities, linkProperties)
     }
-    val activeNetwork = runCatching { connectivity.activeNetwork }.getOrNull()
+    val activeNetwork = runRecoverableCatching { connectivity.activeNetwork }.getOrNull()
     val underlyingCandidates = links.filter {
         it.capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
             it.capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
@@ -318,7 +327,7 @@ private fun readLocalIpInfoSafely(
     connectivity: ConnectivityManager,
     networks: Collection<Network>,
     tetheredInterfaceNames: Set<String>?,
-): LocalIpInfo = runCatching {
+): LocalIpInfo = runRecoverableCatching {
     readLocalIpInfo(connectivity, networks, tetheredInterfaceNames)
 }.getOrDefault(LocalIpInfo())
 
@@ -435,14 +444,18 @@ private fun registerTetheringInterfaceCallback(
     context: Context,
     onChanged: (Set<String>) -> Unit,
 ): () -> Unit {
-    val manager = runCatching { context.getSystemService(TetheringManager::class.java) }.getOrNull()
+    val manager = runRecoverableCatching { context.getSystemService(TetheringManager::class.java) }.getOrNull()
         ?: return {}
     val callback = object : TetheringManager.TetheringEventCallback {
         override fun onTetheredInterfacesChanged(interfaces: Set<android.net.TetheringInterface>) {
-            val wifiInterfaces = interfaces
-                .filter { it.type == TetheringManager.TETHERING_WIFI }
-                .mapTo(linkedSetOf()) { it.`interface` }
-            onChanged(wifiInterfaces)
+            runRecoverableCatching {
+                val wifiInterfaces = interfaces
+                    .filter { it.type == TetheringManager.TETHERING_WIFI }
+                    .mapTo(linkedSetOf()) { it.`interface` }
+                onChanged(wifiInterfaces)
+            }.onFailure { error ->
+                TcptunState.appendLog("tethering callback failed: ${failureDescription(error)}")
+            }
         }
     }
     manager.registerTetheringEventCallback(context.mainExecutor, callback)
@@ -457,13 +470,13 @@ private data class LocalIpInfoController(
 @Composable
 private fun rememberLocalIpInfo(context: Context): LocalIpInfoController {
     val connectivity = remember(context) {
-        runCatching {
+        runRecoverableCatching {
             context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         }.getOrNull()
     }
     if (connectivity == null) return LocalIpInfoController(LocalIpInfo(), refresh = {})
     val refreshHandle = remember { AtomicReference<(() -> Unit)?>(null) }
-    val initialNetworks = listOfNotNull(runCatching { connectivity.activeNetwork }.getOrNull())
+    val initialNetworks = listOfNotNull(runRecoverableCatching { connectivity.activeNetwork }.getOrNull())
     val initialTetheredInterfaces: Set<String>? = if (Build.VERSION.SDK_INT >= 36) emptySet() else null
     val info by produceState(
         initialValue = LocalIpInfo(),
@@ -499,38 +512,51 @@ private fun rememberLocalIpInfo(context: Context): LocalIpInfoController {
         }
         fun refreshDefaultNetwork(network: Network) {
             scheduleRefresh {
-                if (runCatching { connectivity.activeNetwork }.getOrNull() == network) add(network)
+                if (runRecoverableCatching { connectivity.activeNetwork }.getOrNull() == network) add(network)
+            }
+        }
+        fun runNetworkCallback(label: String, action: () -> Unit) {
+            runRecoverableCatching(action).onFailure { error ->
+                TcptunState.appendLog("UI network $label callback failed: ${failureDescription(error)}")
             }
         }
         val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) = refresh(network, available = true)
-            override fun onLost(network: Network) = refresh(network, available = false)
-            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            override fun onAvailable(network: Network) = runNetworkCallback("available") {
                 refresh(network, available = true)
             }
+            override fun onLost(network: Network) = runNetworkCallback("lost") {
+                refresh(network, available = false)
+            }
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                runNetworkCallback("capabilities changed") { refresh(network, available = true) }
+            }
             override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
-                refresh(network, available = true)
+                runNetworkCallback("link properties changed") { refresh(network, available = true) }
             }
         }
         val defaultNetworkCallback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) = refreshDefaultNetwork(network)
-            override fun onLost(network: Network) = scheduleRefresh()
-            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            override fun onAvailable(network: Network) = runNetworkCallback("default available") {
                 refreshDefaultNetwork(network)
             }
+            override fun onLost(network: Network) = runNetworkCallback("default lost") {
+                scheduleRefresh()
+            }
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                runNetworkCallback("default capabilities changed") { refreshDefaultNetwork(network) }
+            }
             override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
-                refreshDefaultNetwork(network)
+                runNetworkCallback("default link properties changed") { refreshDefaultNetwork(network) }
             }
         }
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
-        val registered = runCatching { connectivity.registerNetworkCallback(request, callback) }.isSuccess
-        val defaultRegistered = runCatching {
+        val registered = runRecoverableCatching { connectivity.registerNetworkCallback(request, callback) }.isSuccess
+        val defaultRegistered = runRecoverableCatching {
             connectivity.registerDefaultNetworkCallback(defaultNetworkCallback)
         }.isSuccess
         val unregisterTetheringCallback = if (Build.VERSION.SDK_INT >= 36) {
-            runCatching {
+            runRecoverableCatching {
                 registerTetheringInterfaceCallback(context) { wifiInterfaces ->
                     scheduleRefresh(nextTetheredInterfaceNames = wifiInterfaces)
                 }
@@ -541,9 +567,9 @@ private fun rememberLocalIpInfo(context: Context): LocalIpInfoController {
         // Hotspot address updates on older APIs rely on pull-to-refresh instead of a timer.
         awaitDispose {
             refreshHandle.set(null)
-            if (registered) runCatching { connectivity.unregisterNetworkCallback(callback) }
-            if (defaultRegistered) runCatching { connectivity.unregisterNetworkCallback(defaultNetworkCallback) }
-            unregisterTetheringCallback?.let { unregister -> runCatching(unregister) }
+            if (registered) runRecoverableCatching { connectivity.unregisterNetworkCallback(callback) }
+            if (defaultRegistered) runRecoverableCatching { connectivity.unregisterNetworkCallback(defaultNetworkCallback) }
+            unregisterTetheringCallback?.let { unregister -> runRecoverableCatching(unregister) }
         }
     }
     return LocalIpInfoController(
@@ -735,13 +761,13 @@ internal fun TcptunScreen(
         if (!granted) {
             TcptunState.appendLog("notification permission denied; foreground notification may be hidden")
         }
-        runCatching { VpnService.prepare(context) }.fold(
+        runRecoverableCatching { VpnService.prepare(context) }.fold(
             onSuccess = { prepare ->
                 if (prepare == null) {
                     requestVpnStart(plan)
                 } else {
                     pendingConfig = plan
-                    runCatching { vpnLauncher.launch(prepare) }.onFailure { error ->
+                    runRecoverableCatching { vpnLauncher.launch(prepare) }.onFailure { error ->
                         pendingConfig = null
                         reportUiError(error.message ?: resources.getString(R.string.start_failed))
                     }
@@ -922,20 +948,20 @@ internal fun TcptunScreen(
         TcptunState.clearLogs()
         if (needsNotificationPermission(context)) {
             pendingNotificationConfig = plan
-            runCatching { notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }
+            runRecoverableCatching { notificationLauncher.launch(PostNotificationsPermission) }
                 .onFailure { error ->
                     pendingNotificationConfig = null
                     reportUiError(error.message ?: resources.getString(R.string.start_failed))
                 }
             return
         }
-        runCatching { VpnService.prepare(context) }.fold(
+        runRecoverableCatching { VpnService.prepare(context) }.fold(
             onSuccess = { prepare ->
                 if (prepare == null) {
                     requestVpnStart(plan)
                 } else {
                     pendingConfig = plan
-                    runCatching { vpnLauncher.launch(prepare) }.onFailure { error ->
+                    runRecoverableCatching { vpnLauncher.launch(prepare) }.onFailure { error ->
                         pendingConfig = null
                         reportUiError(error.message ?: resources.getString(R.string.start_failed))
                     }
@@ -1231,7 +1257,7 @@ internal fun TcptunScreen(
                             targetLabel = tcpingTarget.label,
                             total = state.activeProfiles.size,
                         )
-                        runCatching {
+                        runRecoverableCatching {
                             context.startService(
                                 TcptunVpnService.tcpingOutboundsIntent(
                                     context = context,
@@ -2505,7 +2531,7 @@ private fun IpInformationPage(onBack: () -> Unit) {
             onRefresh = {
                 ipInfoController.refresh()
                 if (vpnState.status == "Running") {
-                    runCatching { context.startService(TcptunVpnService.refreshClientIpsIntent(context)) }
+                    runRecoverableCatching { context.startService(TcptunVpnService.refreshClientIpsIntent(context)) }
                     delay(PullRefreshSettleMillis)
                 }
             },
@@ -4576,8 +4602,13 @@ private fun clipboardText(context: Context): Result<String> = runRecoverableCatc
             if (remaining <= 0) error("clipboard profile data is too large")
             val count = reader.read(buffer, 0, minOf(buffer.size, remaining))
             if (count < 0) break
-            if (count == 0) continue
-            output.append(buffer, 0, count)
+            if (count == 0) {
+                val character = reader.read()
+                if (character < 0) break
+                output.append(character.toChar())
+            } else {
+                output.append(buffer, 0, count)
+            }
         }
         require(output.length <= MaxProfileImportLength) { "clipboard profile data is too large" }
         output.toString()
@@ -4610,7 +4641,7 @@ private fun rememberUiRuntimeSettings(context: Context): RuntimeSettings? {
 }
 
 private fun readUiRuntimeSettings(context: Context): RuntimeSettings {
-    return runCatching { TcptunVpnService.readRuntimeSettings(context) }
+    return runRecoverableCatching { TcptunVpnService.readRuntimeSettings(context) }
         .getOrElse { error ->
             TcptunState.appendLog(
                 "runtime settings read failed: ${error.message ?: error.javaClass.simpleName}",
@@ -4620,13 +4651,13 @@ private fun readUiRuntimeSettings(context: Context): RuntimeSettings {
 }
 
 private fun writeUiRuntimeSettings(context: Context, settings: RuntimeSettings): Result<Unit> {
-    return runCatching { TcptunVpnService.writeRuntimeSettings(context, settings) }
+    return runRecoverableCatching { TcptunVpnService.writeRuntimeSettings(context, settings) }
 }
 
 private fun needsNotificationPermission(context: Context): Boolean {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
-    return runCatching {
-        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+    return runRecoverableCatching {
+        ContextCompat.checkSelfPermission(context, PostNotificationsPermission) !=
             PackageManager.PERMISSION_GRANTED
     }.getOrDefault(true)
 }
@@ -4654,7 +4685,7 @@ private fun stopVpn(context: Context) {
     TcptunState.setStatus("Stopping")
     TcptunState.setConnectionsReady(false)
     TcptunState.appendLog("stop requested")
-    runCatching {
+    runRecoverableCatching {
         context.startService(TcptunVpnService.stopIntent(context))
     }.onFailure { err ->
         val message = err.message ?: context.getString(R.string.stop_failed)
@@ -4734,7 +4765,7 @@ private fun enqueueVpnPlanCommand(
 private fun applyRuntimeSettings(context: Context, forceRestart: Boolean = false) {
     val status = TcptunState.status
     if (status != "Starting" && status != "Running") return
-    runCatching {
+    runRecoverableCatching {
         context.startService(
             TcptunVpnService.applyRuntimeSettingsIntent(context, forceRestart = forceRestart),
         )
@@ -4746,7 +4777,7 @@ private fun applyRuntimeSettings(context: Context, forceRestart: Boolean = false
 private fun applyFlowAnalysisSettings(context: Context) {
     val status = TcptunState.status
     if (status != "Starting" && status != "Running") return
-    runCatching {
+    runRecoverableCatching {
         context.startService(TcptunVpnService.updateFlowAnalysisIntent(context))
     }.onFailure { err ->
         TcptunState.appendLog("flow analysis update request failed: ${err.message}")

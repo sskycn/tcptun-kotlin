@@ -168,9 +168,37 @@ or with a non-increasing sequence and folds accepted events into one immutable
 VPN startup is transactional: the service starts the Engine, waits for
 `state=core_ready` after establishing the Android TUN and passing it to the Go
 Engine. Only then is `Running` published. The Engine owns only its duplicated fd;
-the service retains the original `ParcelFileDescriptor`. Stop first waits for
-`Engine.Stop()` and then closes the original descriptor. Every VPN restart creates
-a new TUN and calls `SetTun` again. `onDestroy()` finally calls `Engine.Close()`.
+the service retains the original `ParcelFileDescriptor`. Stop first calls the
+bounded `Engine.Stop()` and, if that call times out, uses `WaitStopped(sessionID)`
+to confirm that the exact Go session released its runtime and duplicated TUN.
+Only then are bridge callbacks unregistered; an unsettled session retains both
+its callbacks and its stop obligation for the destroy retry. The original
+descriptor is closed after the stop attempt so Android can tear down the VPN.
+Every VPN restart creates a new TUN and calls `SetTun` again. `onDestroy()`
+finally calls `Engine.Close()`; failed closes retain their Java callback proxies
+because tcptun-go may still invoke them while completing shutdown.
+
+Bridge resource ownership is tracked separately from the Go status strings with
+an explicit state machine:
+
+```text
+Idle -> Preparing -> TunTransferPending -> StartPending -> SessionOwned
+                                                      -> Stopping
+Stopping -> CallbacksOwned -> Idle
+                         \-> Closed (successful Engine.Close)
+```
+
+The state claims callback/TUN cleanup before crossing JNI, so a partially
+successful `SetTun` or `Start` cannot leak ownership. `STOP_TIMEOUT` remains in
+`Stopping` and is retryable; a terminal stopped/error session advances only after
+the Go-owned TUN duplicate is confirmed released. The service's original
+`ParcelFileDescriptor` is held by a separate exclusive-owner slot: replacement
+cannot overwrite it, and close first atomically detaches it from the service.
+A process-wide runtime lease also serializes old and newly-created
+`VpnService` instances. Because native teardown continues off the Android main
+thread after `onDestroy()`, a replacement service waits a bounded interval for
+the old instance to release both its Go resources and original TUN before it may
+establish another VPN or start another Engine.
 
 `SetAppIdentityProvider` uses the source and destination tuple reported directly
 by the native TUN inbound on Android 10 and newer. The provider resolves that
@@ -308,7 +336,7 @@ Each row has a share action. Swipe a row to the left to delete it; the snackbar 
 HTTPS App Link imports use this envelope:
 
 ```text
-https://tcptun.com/x/v1#p=<BASE64URL(profile-uri)>
+https://x.tcptun.com/v1#p=<BASE64URL(profile-uri)>
 ```
 
 `v1` is the envelope version. `p` is the UTF-8 profile URI encoded as unpadded
@@ -317,17 +345,16 @@ and server access logs. The current version accepts these inner profile URI
 schemes:
 
 - `native://`
-- `tcptun://` (legacy alias for `native://`)
 - `vless://`
 - `vmess://` with Base64 JSON
 - `trojan://`
 
 The app still accepts the inner schemes directly for compatibility. Opening a
-validated `https://tcptun.com/x/v1` Android App Link launches TcpTun and shows a
+validated `https://x.tcptun.com/v1` Android App Link launches TcpTun and shows a
 Material 3 confirmation before saving it. Existing equivalent profiles are
 reused instead of duplicated; imported links never start the VPN
 automatically. The domain must publish a matching release-signing association at
-`https://tcptun.com/.well-known/assetlinks.json` for verified App Link routing.
+`https://x.tcptun.com/.well-known/assetlinks.json` for verified App Link routing.
 
 Every system-link, clipboard, and QR import must pass URI decoding, Android
 profile validation, and the Go core's non-listening runtime construction before

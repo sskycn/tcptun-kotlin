@@ -11,7 +11,7 @@ import java.util.UUID
 
 object ProfileUriCodec {
     fun decode(raw: String): Result<AppConfig> {
-        return runCatching {
+        return runRecoverableCatching {
             if (raw.length > MaxProfileImportLength) error("profile payload is too large")
             val trimmed = raw.trim()
             if (trimmed.isBlank()) error("profile payload is empty")
@@ -29,7 +29,6 @@ object ProfileUriCodec {
                 trimmed.startsWith("vless://", ignoreCase = true) -> decodeAuthorityProfile("vless", trimmed)
                 trimmed.startsWith("trojan://", ignoreCase = true) -> decodeAuthorityProfile("trojan", trimmed)
                 trimmed.startsWith("native://", ignoreCase = true) -> decodeAuthorityProfile("native", trimmed)
-                trimmed.startsWith("tcptun://", ignoreCase = true) -> decodeAuthorityProfile("native", trimmed)
                 trimmed.contains("{") && trimmed.contains("}") -> decodeJsonProfile(trimmed)
                 else -> TcptunProfileCodec.decode(trimmed)
             }
@@ -37,10 +36,10 @@ object ProfileUriCodec {
     }
 
     fun encode(config: AppConfig): String? {
-        return runCatching {
-            if (config.rawConfigJson.isNotBlank()) return@runCatching null
+        return runRecoverableCatching {
+            if (config.rawConfigJson.isNotBlank()) return@runRecoverableCatching null
             val validationConfig = if (config.name.isBlank()) config.copy(name = "profile") else config
-            if (validationConfig.validate() != null) return@runCatching null
+            if (validationConfig.validate() != null) return@runRecoverableCatching null
             val encoded = when (config.protocol) {
                 "native" -> encodeAuthorityProfile("native", config)
                 "vless" -> encodeAuthorityProfile("vless", config)
@@ -64,7 +63,7 @@ object ProfileUriCodec {
      */
     fun encodeForQr(config: AppConfig): String? {
         if (config.rawConfigJson.isNotBlank() || config.hasResumableMuxSettings()) return null
-        return runCatching {
+        return runRecoverableCatching {
             // Normalize first so re-showing QR for legacy T2-imported profiles
             // with polluted raw paths (path="/") does not throw from the Go codec.
             TcptunProfileCodec.encode(normalizeForCompactQr(config))

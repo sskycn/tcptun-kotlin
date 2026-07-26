@@ -55,7 +55,7 @@ data class ManagedRouteRule(
         return when (type) {
             ManagedRouteRuleType.Domain,
             ManagedRouteRuleType.DomainSuffix -> normalized.none(Char::isWhitespace) && '.' in normalized
-            ManagedRouteRuleType.DomainRegex -> runCatching { Regex(normalized) }.isSuccess
+            ManagedRouteRuleType.DomainRegex -> runRecoverableCatching { Regex(normalized) }.isSuccess
             ManagedRouteRuleType.IP -> isNumericIp(normalized)
             ManagedRouteRuleType.IPCidr -> isValidCidr(normalized)
             ManagedRouteRuleType.IPRange -> isValidIpRange(normalized)
@@ -86,7 +86,8 @@ object RouteRuleStore {
 
     fun load(context: Context): List<ManagedRouteRule> {
         return runRecoverableCatching {
-            val raw = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val appContext = context.applicationContext ?: context
+            val raw = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getString(KEY_RULES, null)
                 ?: return@runRecoverableCatching emptyList()
             if (raw.length > MaxStoredRouteRulesLength) return@runRecoverableCatching emptyList()
@@ -103,10 +104,10 @@ object RouteRuleStore {
                         ?: generateUniqueRouteRuleId(seenIds)
                     val rule = ManagedRouteRule(
                         id = id,
-                        type = runCatching { ManagedRouteRuleType.valueOf(json.optString("type")) }
+                        type = runRecoverableCatching { ManagedRouteRuleType.valueOf(json.optString("type")) }
                             .getOrDefault(ManagedRouteRuleType.DomainSuffix),
                         value = json.optString("value"),
-                        outbound = runCatching { ManagedRouteOutbound.valueOf(json.optString("outbound")) }
+                        outbound = runRecoverableCatching { ManagedRouteOutbound.valueOf(json.optString("outbound")) }
                             .getOrDefault(ManagedRouteOutbound.Proxy),
                         outboundProfileId = json.optString("outboundProfileId"),
                         enabled = json.optBoolean("enabled", true),
@@ -119,6 +120,7 @@ object RouteRuleStore {
 
     fun save(context: Context, rules: List<ManagedRouteRule>): Result<Unit> {
         return runRecoverableCatching {
+            val appContext = context.applicationContext ?: context
             require(rules.size <= MaxStoredRouteRuleCount) { "too many route rules" }
             val seenIds = mutableSetOf<String>()
             val normalized = rules.map { rule ->
@@ -143,7 +145,7 @@ object RouteRuleStore {
             }
             val encoded = array.toString()
             require(encoded.length <= MaxStoredRouteRulesLength) { "stored route rule data is too large" }
-            val committed = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val committed = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putString(KEY_RULES, encoded)
                 .commit()
@@ -171,7 +173,7 @@ private fun isNumericIp(value: String): Boolean {
     }
     // A colon makes this an IPv6 literal, so getByName cannot interpret it as a hostname.
     if (!value.matches(Regex("[0-9a-fA-F:.]+"))) return false
-    return runCatching { InetAddress.getByName(value) }.isSuccess
+    return runRecoverableCatching { InetAddress.getByName(value) }.isSuccess
 }
 
 private fun isValidCidr(value: String): Boolean {

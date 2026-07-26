@@ -89,7 +89,7 @@ internal fun QrScannerPage(
     val context = LocalContext.current
     var permissionState by remember {
         mutableStateOf(
-            if (runCatching {
+            if (runRecoverableCatching {
                     ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
                 }.getOrDefault(PackageManager.PERMISSION_DENIED) == PackageManager.PERMISSION_GRANTED
             ) {
@@ -114,7 +114,7 @@ internal fun QrScannerPage(
 
     LaunchedEffect(permissionState) {
         if (permissionState == CameraPermissionState.Requesting) {
-            runCatching { permissionLauncher.launch(Manifest.permission.CAMERA) }
+            runRecoverableCatching { permissionLauncher.launch(Manifest.permission.CAMERA) }
                 .onFailure { permissionState = CameraPermissionState.Denied }
         }
     }
@@ -240,13 +240,13 @@ internal fun QrScannerPage(
                                 }
                             }
                             val activeCamera = camera
-                            val hasFlash = runCatching { activeCamera?.cameraInfo?.hasFlashUnit() == true }
+                            val hasFlash = runRecoverableCatching { activeCamera?.cameraInfo?.hasFlashUnit() == true }
                                 .getOrDefault(false)
                             if (activeCamera != null && hasFlash) {
                                 FilledTonalButton(
                                     onClick = {
                                         val next = !torchEnabled
-                                        runCatching { activeCamera.cameraControl.enableTorch(next) }.fold(
+                                        runRecoverableCatching { activeCamera.cameraControl.enableTorch(next) }.fold(
                                             onSuccess = { torchEnabled = next },
                                             onFailure = { scannerRuntimeError = true },
                                         )
@@ -348,7 +348,7 @@ private fun QrCameraPreview(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val previewViewResult = remember(context) {
-        runCatching {
+        runRecoverableCatching {
             PreviewView(context).apply {
                 implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                 scaleType = PreviewView.ScaleType.FILL_CENTER
@@ -359,7 +359,7 @@ private fun QrCameraPreview(
     if (previewView == null) {
         val error = previewViewResult.exceptionOrNull()
             ?: IllegalStateException("camera preview could not be created")
-        LaunchedEffect(error) { runCatching { onCameraError(error) } }
+        LaunchedEffect(error) { runRecoverableCatching { onCameraError(error) } }
         return
     }
     val currentOnCameraReady by rememberUpdatedState(onCameraReady)
@@ -380,9 +380,9 @@ private fun QrCameraPreview(
                     runRecoverableCatching { currentOnCameraReady(null) }
                 }
             }
-        val mainExecutor = runCatching { ContextCompat.getMainExecutor(context) }.getOrElse { error ->
-            runCatching { onCameraError(error) }
-            return@DisposableEffect onDispose { runCatching { analysisExecutor.shutdownNow() } }
+        val mainExecutor = runRecoverableCatching { ContextCompat.getMainExecutor(context) }.getOrElse { error ->
+            runRecoverableCatching { onCameraError(error) }
+            return@DisposableEffect onDispose { runRecoverableCatching { analysisExecutor.shutdownNow() } }
         }
         var disposed = false
         var cameraProvider: ProcessCameraProvider? = null
@@ -390,15 +390,15 @@ private fun QrCameraPreview(
         var analysisUseCase: ImageAnalysis? = null
         var barcodeScanner: BarcodeScanner? = null
         var analyzer: MlKitQrAnalyzer? = null
-        val providerFuture = runCatching { ProcessCameraProvider.getInstance(context) }.getOrElse { error ->
-            runCatching { currentOnCameraError(error) }
+        val providerFuture = runRecoverableCatching { ProcessCameraProvider.getInstance(context) }.getOrElse { error ->
+            runRecoverableCatching { currentOnCameraError(error) }
             return@DisposableEffect onDispose {
-                runCatching { analysisExecutor.shutdownNow() }
-                runCatching { currentOnCameraReady(null) }
+                runRecoverableCatching { analysisExecutor.shutdownNow() }
+                runRecoverableCatching { currentOnCameraReady(null) }
             }
         }
 
-        runCatching {
+        runRecoverableCatching {
             providerFuture.addListener(
                 {
                 if (disposed) return@addListener
@@ -430,7 +430,7 @@ private fun QrCameraPreview(
                             minimum = zoomState.minZoomRatio,
                             maximum = zoomState.maxZoomRatio,
                         ) ?: return@Builder false
-                        runCatching { boundCamera.cameraControl.setZoomRatio(ratio) }.isSuccess
+                        runRecoverableCatching { boundCamera.cameraControl.setZoomRatio(ratio) }.isSuccess
                     }
                         .setMaxSupportedZoomRatio(maxZoomRatio)
                         .build()
@@ -444,49 +444,60 @@ private fun QrCameraPreview(
                     val imageAnalyzer = MlKitQrAnalyzer(
                         scanner = scanner,
                         onCodeDetected = { code, resume ->
-                            mainExecutor.execute {
+                            val accepted = executeCrashGuarded(
+                                executor = mainExecutor,
+                                taskName = "QR scan result delivery",
+                            ) {
                                 if (!disposed) {
                                     try {
                                         currentOnCodeDetected(code) { accepted ->
                                             if (!accepted) resume()
                                         }
                                     } catch (error: Throwable) {
-                                        runCatching { currentOnScannerError(error) }
+                                        if (error.isFatalProcessError()) throw error
+                                        runRecoverableCatching { currentOnScannerError(error) }
                                         resume()
                                     }
+                                } else {
+                                    resume()
                                 }
                             }
+                            if (!accepted) resume()
                         },
                         onError = { error ->
-                            mainExecutor.execute {
-                                if (!disposed) runCatching { currentOnScannerError(error) }
+                            executeCrashGuarded(
+                                executor = mainExecutor,
+                                taskName = "QR scanner error delivery",
+                            ) {
+                                if (!disposed) currentOnScannerError(error)
                             }
                         },
                     )
                     analysis.setAnalyzer(analysisExecutor, imageAnalyzer)
                     analyzer = imageAnalyzer
-                    if (!disposed) runCatching { currentOnCameraReady(boundCamera) }
+                    if (!disposed) runRecoverableCatching { currentOnCameraReady(boundCamera) }
                 } catch (error: Throwable) {
-                    if (!disposed) runCatching { currentOnCameraError(error) }
+                    if (error.isFatalProcessError()) throw error
+                    if (!disposed) runRecoverableCatching { currentOnCameraError(error) }
                 }
                 },
                 mainExecutor,
             )
         }.onFailure { error ->
-            if (!disposed) runCatching { currentOnCameraError(error) }
+            if (!disposed) runRecoverableCatching { currentOnCameraError(error) }
         }
 
         onDispose {
             disposed = true
-            runCatching { analyzer?.close() }
-            runCatching { analysisUseCase?.clearAnalyzer() }
-            runCatching { barcodeScanner?.close() }
+            runRecoverableCatching { analyzer?.close() }
+            runRecoverableCatching { analysisUseCase?.clearAnalyzer() }
+            runRecoverableCatching { barcodeScanner?.close() }
             cameraProvider?.let { provider ->
-                previewUseCase?.let { runCatching { provider.unbind(it) } }
-                analysisUseCase?.let { runCatching { provider.unbind(it) } }
+                previewUseCase?.let { runRecoverableCatching { provider.unbind(it) } }
+                analysisUseCase?.let { runRecoverableCatching { provider.unbind(it) } }
             }
-            runCatching { analysisExecutor.shutdownNow() }
-            runCatching { currentOnCameraReady(null) }
+            runRecoverableCatching { analysisExecutor.shutdownNow() }
+            runRecoverableCatching { currentOnCameraReady(null) }
         }
     }
 }
@@ -551,13 +562,14 @@ private class MlKitQrAnalyzer(
     }
 
     private fun reportError(error: Throwable) {
+        if (error.isFatalProcessError()) throw error
         if (!closed.get() && errorReported.compareAndSet(false, true)) {
-            runCatching { onError(error) }
+            runRecoverableCatching { onError(error) }
         }
     }
 
     private fun closeImageSafely(image: ImageProxy) {
-        runCatching { image.close() }
+        runRecoverableCatching { image.close() }
     }
 
     fun close() {
