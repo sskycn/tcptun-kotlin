@@ -61,7 +61,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.AltRoute
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Add
@@ -76,7 +75,6 @@ import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.QrCodeScanner
-import androidx.compose.material.icons.rounded.Router
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Stop
@@ -177,7 +175,7 @@ private const val SnackbarAutoDismissMillis = 6_000L
 private const val SavedProfileIntentSequence = "profileIntentSequence"
 private const val SavedPendingProfileUri = "pendingProfileUri"
 /** Brief wait after requesting a monitor refresh so pulled UI can show updated values. */
-private const val PullRefreshSettleMillis = 350L
+internal const val PullRefreshSettleMillis = 350L
 private const val PostNotificationsPermission = "android.permission.POST_NOTIFICATIONS"
 
 private val VpnPlanCommandExceptionHandler = CoroutineExceptionHandler { _, error ->
@@ -200,7 +198,6 @@ private const val MaxProfileHostInputLength = 2_048
 private const val MaxProfileChoiceInputLength = 256
 private const val MaxRealityKeyInputLength = 4_096
 
-private val CardShape = RoundedCornerShape(16.dp)
 private val CardShapeCompact = RoundedCornerShape(12.dp)
 private val MenuShape = RoundedCornerShape(12.dp)
 private val DialogShape = RoundedCornerShape(28.dp)
@@ -239,7 +236,7 @@ private fun reportUiError(message: String) {
     TcptunState.appendLog("UI error: ${message.trim().ifBlank { "Unknown error" }}")
 }
 
-private data class LocalIpInfo(
+internal data class LocalIpInfo(
     val underlyingInterface: String = "",
     val underlyingIpv4: String = "",
     val underlyingGatewayIpv4: String = "",
@@ -462,13 +459,13 @@ private fun registerTetheringInterfaceCallback(
     return { manager.unregisterTetheringEventCallback(callback) }
 }
 
-private data class LocalIpInfoController(
+internal data class LocalIpInfoController(
     val info: LocalIpInfo,
     val refresh: () -> Unit,
 )
 
 @Composable
-private fun rememberLocalIpInfo(context: Context): LocalIpInfoController {
+internal fun rememberLocalIpInfo(context: Context): LocalIpInfoController {
     val connectivity = remember(context) {
         runRecoverableCatching {
             context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -580,7 +577,7 @@ private fun rememberLocalIpInfo(context: Context): LocalIpInfoController {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PullRefreshContainer(
+internal fun PullRefreshContainer(
     onRefresh: suspend () -> Unit,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
@@ -609,7 +606,7 @@ private fun PullRefreshContainer(
     }
 }
 
-private suspend fun refreshRunningDiagnostics() {
+internal suspend fun refreshRunningDiagnostics() {
     if (TcptunState.status != "Running") return
     TcptunVpnService.requestUiVisibleHealthCheck()
     delay(PullRefreshSettleMillis)
@@ -2381,253 +2378,6 @@ private fun tcpingStatusText(progress: TcpingProgress): String {
 }
 
 @Composable
-private fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
-    val vpnState by TcptunState.state.collectAsStateWithLifecycle()
-    val diagnostics = vpnState.diagnostics
-    val noneLabel = stringResource(R.string.none)
-
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            DiagnosticsTopBar(
-                onBack = onBack,
-                onShowLogs = onShowLogs,
-            )
-        },
-    ) { padding ->
-        PullRefreshContainer(
-            onRefresh = { refreshRunningDiagnostics() },
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-        ) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = ListContentPadding,
-                verticalArrangement = Arrangement.spacedBy(ListItemSpacing),
-            ) {
-                item {
-                    SettingsCard {
-                        Column(
-                            modifier = Modifier.padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            SectionTitle(
-                                icon = Icons.Rounded.Speed,
-                                title = stringResource(R.string.runtime_diagnostics),
-                            )
-                            DiagnosticsLine(stringResource(R.string.diag_vpn), diagnostics.vpnStatus)
-                            DiagnosticsLine(stringResource(R.string.diag_underlying_network), diagnostics.underlyingNetwork)
-                            DiagnosticsLine(stringResource(R.string.diag_bridge), diagnostics.bridgeStatus)
-                            DiagnosticsLine(stringResource(R.string.diag_go_state), diagnostics.bridgeEventState)
-                            DiagnosticsLine(stringResource(R.string.diag_go_phase), diagnostics.bridgeEventPhase)
-                            DiagnosticsLine(stringResource(R.string.diag_go_listen), diagnostics.bridgeListen.ifBlank { noneLabel })
-                            DiagnosticsLine(stringResource(R.string.diag_go_remote), diagnostics.bridgeRemote.ifBlank { noneLabel })
-                            DiagnosticsLine(stringResource(R.string.diag_go_active), diagnostics.bridgeActiveConnections.toString())
-                            DiagnosticsLine(
-                                stringResource(R.string.diag_mux_sessions),
-                                diagnostics.bridgeMuxSessions.toString(),
-                            )
-                            DiagnosticsLine(
-                                stringResource(R.string.diag_mux_streams),
-                                diagnostics.bridgeMuxStreams.toString(),
-                            )
-                            DiagnosticsLine(stringResource(R.string.diag_go_error), diagnostics.bridgeLastError.ifBlank { noneLabel })
-                            DiagnosticsLine(stringResource(R.string.diag_go_event_time), bridgeTimestampLabel(diagnostics.bridgeTimestampMs, noneLabel))
-                            DiagnosticsLine(
-                                stringResource(R.string.diag_local_proxy),
-                                "${diagnostics.localProxyAddress} · ${if (diagnostics.localProxyReachable) stringResource(R.string.reachable) else stringResource(R.string.not_reachable)}",
-                            )
-                            DiagnosticsLine(stringResource(R.string.diag_socket_protect), if (diagnostics.socketProtectEnabled) stringResource(R.string.enabled) else stringResource(R.string.disabled))
-                            DiagnosticsLine(
-                                stringResource(R.string.diag_health_interval),
-                                if (diagnostics.healthCheckEventDriven) {
-                                    stringResource(R.string.health_check_event_driven)
-                                } else {
-                                    stringResource(
-                                        R.string.seconds_value,
-                                        diagnostics.healthCheckIntervalSeconds,
-                                    )
-                                },
-                            )
-                            DiagnosticsLine(stringResource(R.string.recent_restart_reason), diagnostics.lastRestartReason)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SettingsCard(
-    modifier: Modifier = Modifier,
-    content: @Composable () -> Unit,
-) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = CardShape,
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        content = content,
-    )
-}
-
-@Composable
-private fun SectionTitle(
-    icon: ImageVector,
-    title: String,
-) {
-    val colors = MaterialTheme.colorScheme
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = colors.onSurfaceVariant,
-            modifier = Modifier.size(22.dp),
-        )
-        Text(
-            title,
-            style = MaterialTheme.typography.titleMedium,
-            color = colors.onSurface,
-        )
-    }
-}
-
-@Composable
-private fun IpInformationPage(onBack: () -> Unit) {
-    val context = LocalContext.current
-    val ipInfoController = rememberLocalIpInfo(context)
-    val ipInfo = ipInfoController.info
-    val vpnState by TcptunState.state.collectAsStateWithLifecycle()
-    val settings = rememberUiRuntimeSettings(context) ?: RuntimeSettings()
-    val configuredListenAddress = TcptunVpnService.localSocksListenAddr(settings)
-    val actualListenAddress = vpnState.diagnostics.bridgeListen
-        .takeIf { vpnState.status == "Running" }
-        .orEmpty()
-    val effectiveListenAddress = actualListenAddress.ifBlank { configuredListenAddress }
-    val listenerNetwork = mixedListenerNetworkDisplay(
-        listenAddress = effectiveListenAddress,
-        underlyingIpv4 = ipInfo.underlyingIpv4,
-        underlyingGatewayIpv4 = ipInfo.underlyingGatewayIpv4,
-        hotspotIpv4 = ipInfo.hotspotIpv4,
-    )
-    val proxyAccess = proxyAccessDisplay(
-        listenAddress = effectiveListenAddress,
-        hotspotIpv4 = ipInfo.hotspotIpv4,
-        underlyingIpv4 = ipInfo.underlyingIpv4,
-        proxyRunning = vpnState.status == "Running",
-    )
-    val noneLabel = stringResource(R.string.none)
-
-    BackHandler(onBack = onBack)
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = { IpInformationTopBar(onBack = onBack) },
-    ) { padding ->
-        PullRefreshContainer(
-            onRefresh = {
-                ipInfoController.refresh()
-                if (vpnState.status == "Running") {
-                    runRecoverableCatching { context.startService(TcptunVpnService.refreshClientIpsIntent(context)) }
-                    delay(PullRefreshSettleMillis)
-                }
-            },
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-        ) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = ListContentPadding,
-                verticalArrangement = Arrangement.spacedBy(ListItemSpacing),
-            ) {
-                item {
-                    IpInformationCard(
-                        title = stringResource(R.string.ip_mixed_listener),
-                        icon = Icons.Rounded.Lan,
-                        lines = listOf(
-                            stringResource(R.string.ip_configured_listen) to configuredListenAddress,
-                            stringResource(R.string.ip_actual_listen) to actualListenAddress.ifBlank { noneLabel },
-                            stringResource(R.string.ip_listener_ipv4) to listenerNetwork.ipv4.ifBlank { noneLabel },
-                            stringResource(R.string.ip_gateway_ipv4) to listenerNetwork.gatewayIpv4.ifBlank { noneLabel },
-                            stringResource(R.string.ip_hotspot_interface) to ipInfo.hotspotInterface.ifBlank { noneLabel },
-                            stringResource(R.string.ip_hotspot_ipv4) to ipInfo.hotspotIpv4.ifBlank { noneLabel },
-                            stringResource(R.string.ip_client_proxy_address) to proxyAccess.address.ifBlank { noneLabel },
-                        ),
-                    )
-                }
-                item {
-                    val clientIps = vpnState.diagnostics.bridgeClientIps
-                    IpInformationCard(
-                        title = stringResource(R.string.ip_connected_clients),
-                        icon = Icons.Rounded.Hub,
-                        lines = if (clientIps.isEmpty()) {
-                            listOf(stringResource(R.string.ip_client_status) to stringResource(R.string.ip_no_connected_clients))
-                        } else {
-                            clientIps.mapIndexed { index, ip ->
-                                stringResource(R.string.ip_client_number, index + 1) to ip
-                            }
-                        },
-                    )
-                }
-                item {
-                    IpInformationCard(
-                        title = stringResource(R.string.ip_underlying_network),
-                        icon = Icons.Rounded.Router,
-                        lines = listOf(
-                            stringResource(R.string.ip_underlying_interface) to ipInfo.underlyingInterface.ifBlank { noneLabel },
-                            stringResource(R.string.ip_underlying_ipv4) to ipInfo.underlyingIpv4.ifBlank { noneLabel },
-                            stringResource(R.string.ip_gateway_ipv4) to ipInfo.underlyingGatewayIpv4.ifBlank { noneLabel },
-                            stringResource(R.string.ip_underlying_ipv6) to ipInfo.underlyingIpv6.ifBlank { noneLabel },
-                        ),
-                    )
-                }
-                item {
-                    IpInformationCard(
-                        title = stringResource(R.string.ip_vpn_network),
-                        icon = Icons.Rounded.Hub,
-                        lines = listOf(
-                            stringResource(R.string.ip_vpn_ipv4) to ipInfo.vpnIpv4.ifBlank { noneLabel },
-                            stringResource(R.string.ip_vpn_ipv6) to ipInfo.vpnIpv6.ifBlank { noneLabel },
-                        ),
-                    )
-                }
-                item {
-                    Text(
-                        stringResource(R.string.ip_information_note),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun IpInformationCard(
-    title: String,
-    icon: ImageVector,
-    lines: List<Pair<String, String>>,
-) {
-    SettingsCard {
-        SelectionContainer {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                SectionTitle(icon = icon, title = title)
-                lines.forEach { (label, value) -> DiagnosticsLine(label, value) }
-            }
-        }
-    }
-}
-
-@Composable
 private fun SettingsPage(onBack: () -> Unit) {
     val context = LocalContext.current
     val startFailedMessage = stringResource(R.string.start_failed)
@@ -3769,95 +3519,12 @@ private fun routeRuleExample(type: ManagedRouteRuleType): String = stringResourc
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DiagnosticsTopBar(onBack: () -> Unit, onShowLogs: () -> Unit) {
-    AppTopBar(
-        title = stringResource(R.string.diagnostics),
-        onBack = onBack,
-        actions = {
-            TextButton(onClick = onShowLogs) {
-                Text(stringResource(R.string.logs))
-            }
-        },
-    )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun IpInformationTopBar(onBack: () -> Unit) {
-    AppTopBar(
-        title = stringResource(R.string.ip_information),
-        onBack = onBack,
-    )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
 private fun SettingsTopBar(onBack: () -> Unit) {
     AppTopBar(
         title = stringResource(R.string.settings),
         onBack = onBack,
     )
 }
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun AppTopBar(
-    title: String,
-    onBack: (() -> Unit)? = null,
-    actions: @Composable () -> Unit = {},
-) {
-    val colors = MaterialTheme.colorScheme
-    TopAppBar(
-        title = {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleLarge,
-            )
-        },
-        navigationIcon = {
-            if (onBack != null) {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = stringResource(R.string.back),
-                    )
-                }
-            }
-        },
-        actions = { actions() },
-        colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = colors.background,
-            titleContentColor = colors.onBackground,
-            navigationIconContentColor = colors.onSurface,
-            actionIconContentColor = colors.onSurfaceVariant,
-        ),
-    )
-}
-
-@Composable
-private fun DiagnosticsLine(label: String, value: String) {
-    val colors = MaterialTheme.colorScheme
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.Top,
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = colors.onSurfaceVariant,
-            modifier = Modifier.weight(0.46f),
-        )
-        Text(
-            value,
-            style = MaterialTheme.typography.bodyMedium,
-            color = colors.onSurface,
-            modifier = Modifier.weight(0.54f),
-            textAlign = TextAlign.End,
-        )
-    }
-}
-
 
 @Composable
 private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (AppConfig) -> Unit) {
@@ -4632,15 +4299,7 @@ private fun clearClipboardText(context: Context, expectedText: String) {
     }
 }
 
-@Composable
-private fun rememberUiRuntimeSettings(context: Context): RuntimeSettings? {
-    val settings by produceState<RuntimeSettings?>(initialValue = null, context) {
-        value = withContext(Dispatchers.IO) { readUiRuntimeSettings(context) }
-    }
-    return settings
-}
-
-private fun readUiRuntimeSettings(context: Context): RuntimeSettings {
+internal fun readUiRuntimeSettings(context: Context): RuntimeSettings {
     return runRecoverableCatching { TcptunVpnService.readRuntimeSettings(context) }
         .getOrElse { error ->
             TcptunState.appendLog(
@@ -4817,7 +4476,7 @@ private fun vpnStatusLabel(status: String): String {
     }
 }
 
-private fun bridgeTimestampLabel(timestampMs: Long, noneLabel: String): String {
+internal fun bridgeTimestampLabel(timestampMs: Long, noneLabel: String): String {
     if (timestampMs <= 0) return noneLabel
     return java.text.DateFormat.getDateTimeInstance(
         java.text.DateFormat.SHORT,
