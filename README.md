@@ -302,8 +302,9 @@ git tag v1.2.3
 git push origin v1.2.3
 ```
 
-The resulting GitHub Release contains `tcptun-v1.2.3.apk` and its SHA-256
-checksum. Pre-release tags such as `v1.2.3-rc.1` are marked as pre-releases.
+The resulting GitHub Release contains a universal APK plus smaller
+`arm64-v8a`, `armeabi-v7a`, and `x86_64` APKs, each with a SHA-256 checksum.
+Pre-release tags such as `v1.2.3-rc.1` are marked as pre-releases.
 
 ## Server example
 

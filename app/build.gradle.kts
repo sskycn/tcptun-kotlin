@@ -34,6 +34,13 @@ val appVersionCode = providers.gradleProperty("releaseVersionCode").orNull?.let 
         .also { require(it > 0) { "releaseVersionCode must be positive" } }
 } ?: 1
 
+val supportedAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+val targetAbi = providers.gradleProperty("targetAbi").orNull?.also { value ->
+    require(value in supportedAbis) {
+        "targetAbi must be one of ${supportedAbis.joinToString()}"
+    }
+}
+
 android {
     namespace = "com.tcptun.client"
     compileSdk {
@@ -51,7 +58,7 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            abiFilters += targetAbi?.let(::listOf) ?: supportedAbis
         }
     }
 
@@ -75,9 +82,12 @@ android {
             if (hasReleaseSigningConfig) {
                 signingConfig = signingConfigs.getByName("release")
             }
-            optimization {
-                enable = false
-            }
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "src/main/keepRules/rules.keep",
+            )
         }
     }
     compileOptions {
