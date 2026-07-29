@@ -310,11 +310,8 @@ class TcptunVpnService : VpnService() {
     private val appIdentityProvider: AndroidAppIdentityProvider get() = appIdentityProviderDelegate.value
     private var underlyingNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private var underlyingNetworkCallbackRegistered = false
-    private val underlyingNetworkLock = Any()
     private val underlyingNetworkRegistrationLock = Any()
-    private val availableUnderlyingNetworks = mutableMapOf<Network, NetworkCapabilities>()
-    @Volatile private var currentDefaultNetwork: Network? = null
-    @Volatile private var underlyingNetworkSelectionInitialized = false
+    private val underlyingNetworkSelection = RankedSelectionTracker<Network>()
     @Volatile private var stopping = false
     @Volatile private var bridgeRestarting = false
     @Volatile private var lastBridgeRestartAtMs = 0L
@@ -329,9 +326,7 @@ class TcptunVpnService : VpnService() {
     @Volatile private var powerSavingMode = true
     @Volatile private var upstreamProbeIndex = 0
     @Volatile private var lastMemberHealthProbeAtElapsedMs = 0L
-    @Volatile private var runtimeSettingsApplyGeneration = 0
-    private val runtimeSettingsApplyLock = Any()
-    private var runtimeSettingsForceRestartPending = false
+    private val runtimeSettingsApplyGate = RuntimeSettingsApplyGate()
 
     override fun onCreate() {
         super.onCreate()
@@ -1423,10 +1418,7 @@ class TcptunVpnService : VpnService() {
 
                 override fun onLost(network: Network) {
                     runNetworkCallback("lost") {
-                        val selection = synchronized(underlyingNetworkLock) {
-                            availableUnderlyingNetworks.remove(network)
-                            selectUnderlyingNetworkLocked()
-                        }
+                        val selection = underlyingNetworkSelection.remove(network)
                         applyUnderlyingNetwork(selection, "underlying network lost")
                     }
                 }
@@ -1479,11 +1471,7 @@ class TcptunVpnService : VpnService() {
                 TcptunState.appendLog("underlying network callback unregister failed: ${failureDescription(error)}")
             }
         }
-        synchronized(underlyingNetworkLock) {
-            availableUnderlyingNetworks.clear()
-            currentDefaultNetwork = null
-            underlyingNetworkSelectionInitialized = false
-        }
+        underlyingNetworkSelection.clear()
         if (updateGlobalDiagnostics) updateUnderlyingDiagnostics(null)
     }
 
@@ -1493,37 +1481,25 @@ class TcptunVpnService : VpnService() {
         ) {
             return
         }
-        val selection = synchronized(underlyingNetworkLock) {
-            availableUnderlyingNetworks[network] = capabilities
-            selectUnderlyingNetworkLocked()
-        }
-        applyUnderlyingNetwork(selection, "underlying network changed")
-    }
-
-    private fun selectUnderlyingNetworkLocked(): Network? {
-        return availableUnderlyingNetworks.maxByOrNull { (_, capabilities) ->
+        val selection = underlyingNetworkSelection.update(
+            network,
             underlyingNetworkScore(
                 validated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
                 ethernet = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET),
                 wifi = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
                 cellular = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR),
-            )
-        }?.key
+            ),
+        )
+        applyUnderlyingNetwork(selection, "underlying network changed")
     }
 
     private fun applyUnderlyingNetwork(network: Network?, reason: String) {
         synchronized(lifecycleCommandLock) {
             if (destroyed.get() || stopping || !isActiveServiceOwner()) return
         }
-        val initialSelection = synchronized(underlyingNetworkLock) {
-            // Drop a stale callback whose selection was superseded before it
-            // reached this method on another ConnectivityManager thread.
-            if (network != selectUnderlyingNetworkLocked() || currentDefaultNetwork == network) return
-            val initial = !underlyingNetworkSelectionInitialized
-            underlyingNetworkSelectionInitialized = true
-            currentDefaultNetwork = network
-            initial
-        }
+        // Drop a stale callback whose selection was superseded before it
+        // reached this method on another ConnectivityManager thread.
+        val selectionClaim = underlyingNetworkSelection.claim(network) ?: return
         synchronized(lifecycleCommandLock) {
             if (destroyed.get() || stopping || !isActiveServiceOwner()) return
             updateUnderlyingDiagnostics(network)
@@ -1535,7 +1511,7 @@ class TcptunVpnService : VpnService() {
                 TcptunState.appendLog("set underlying network failed: ${failureDescription(error)}")
             }
             if (tun != null && !stopping) {
-                if (!initialSelection && TcptunState.status == "Running") {
+                if (!selectionClaim.initial && TcptunState.status == "Running") {
                     // Restart path reseeds member probes after "vpn started".
                     requestBridgeRestart(reason)
                 } else {
@@ -2341,11 +2317,7 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun requestRuntimeSettingsRestart(reason: String, forceRestart: Boolean) {
-        val generation = synchronized(runtimeSettingsApplyLock) {
-            runtimeSettingsApplyGeneration += 1
-            runtimeSettingsForceRestartPending = runtimeSettingsForceRestartPending || forceRestart
-            runtimeSettingsApplyGeneration
-        }
+        val generation = runtimeSettingsApplyGate.request(forceRestart)
         TcptunState.appendLog("runtime settings apply requested: $reason")
         startCrashGuardedThread(
             threadName = "TcptunRuntimeSettingsApply",
@@ -2355,15 +2327,7 @@ class TcptunVpnService : VpnService() {
         ) runtimeApply@{
                 Thread.sleep(RUNTIME_SETTINGS_RESTART_DEBOUNCE_MS)
                 if (destroyed.get()) return@runtimeApply
-                val forceThisApply = synchronized(runtimeSettingsApplyLock) {
-                    if (generation != runtimeSettingsApplyGeneration) {
-                        null
-                    } else {
-                        runtimeSettingsForceRestartPending.also {
-                            runtimeSettingsForceRestartPending = false
-                        }
-                    }
-                } ?: return@runtimeApply
+                val forceThisApply = runtimeSettingsApplyGate.claim(generation) ?: return@runtimeApply
                 scheduleRuntimeSettingsApply(reason, generation, forceThisApply)
         }
     }
@@ -2382,7 +2346,7 @@ class TcptunVpnService : VpnService() {
             if (
                 destroyed.get() ||
                 explicitStopRequested.get() ||
-                generation != synchronized(runtimeSettingsApplyLock) { runtimeSettingsApplyGeneration }
+                !runtimeSettingsApplyGate.isLatest(generation)
             ) {
                 return@synchronized null
             }
@@ -2511,7 +2475,7 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun isRuntimeSettingsApplyLatest(generation: Int): Boolean =
-        synchronized(runtimeSettingsApplyLock) { generation == runtimeSettingsApplyGeneration }
+        runtimeSettingsApplyGate.isLatest(generation)
 
     private fun requestFlowAnalysisUpdate() {
         executeLifecycleTask("flow analysis update") flowUpdate@{
