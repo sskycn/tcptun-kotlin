@@ -260,6 +260,12 @@ by Git and is rebuilt by the release workflow from tcptun-go revision
 ./gradlew :app:assembleDebug
 ```
 
+Run the same local quality gates enforced for pull requests and releases:
+
+```bash
+./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+```
+
 Install the debug APK:
 
 ```bash
