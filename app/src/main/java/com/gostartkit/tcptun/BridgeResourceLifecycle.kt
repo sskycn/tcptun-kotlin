@@ -285,7 +285,18 @@ internal class BridgeResourceStateMachine {
 internal data class BridgeStopResult(
     val settled: Boolean,
     val error: Throwable? = null,
-)
+) {
+    /**
+     * A shutdown error is recoverable once the exact native session has
+     * settled: the TUN duplicate is no longer owned and a replacement session
+     * may safely start. Only an unsettled session must abort bridge reuse.
+     */
+    fun requireSettled() {
+        if (!settled) {
+            throw error ?: IllegalStateException("tcptun session did not stop cleanly")
+        }
+    }
+}
 
 private val BridgeStatusReasonPattern = Regex(""""reason"\s*:\s*"([A-Za-z0-9_]+)"""")
 

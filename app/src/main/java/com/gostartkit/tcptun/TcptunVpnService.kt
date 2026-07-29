@@ -2081,14 +2081,16 @@ class TcptunVpnService : VpnService() {
                     settleTimeoutMillis = BRIDGE_STOP_SETTLE_TIMEOUT_MS,
                 )
                 stopFailure = result.error
-                if (!result.settled) {
+                try {
+                    result.requireSettled()
+                } catch (error: Throwable) {
                     // Keep callbacks and the stop obligation alive. onDestroy
                     // will retry through Stop/Close; clearing Java proxies here
                     // would violate tcptun-go's active-runtime ownership contract.
                     TcptunState.appendLog(
                         "tcptun engine is still stopping: ${failureDescription(result.error ?: IllegalStateException("unknown stop failure"))}",
                     )
-                    throw result.error ?: IllegalStateException("tcptun engine did not stop cleanly")
+                    throw error
                 }
                 bridgeResources.nativeStopped()
                 if (stopFailure != null) {
@@ -2112,9 +2114,6 @@ class TcptunVpnService : VpnService() {
                         callbackFailure,
                     )
                 }
-            }
-            stopFailure?.let { error ->
-                throw IllegalStateException("tcptun engine did not stop cleanly", error)
             }
         }
     }

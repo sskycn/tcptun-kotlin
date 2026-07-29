@@ -188,6 +188,26 @@ class BridgeLifecycleTest {
 
         assertTrue(result.settled)
         assertSame(waitError, result.error?.cause)
+        result.requireSettled()
+    }
+
+    @Test
+    fun unsettledSessionStillAbortsBridgeReuse() {
+        val stopError = IllegalStateException("stop timeout")
+        val waitError = IllegalStateException("wait timeout")
+        val bridge = FakeLifecycleBridge(
+            stopError = stopError,
+            waitError = waitError,
+            currentStatus = "Error",
+            currentStatusReason = "STOP_TIMEOUT",
+        )
+
+        val result = stopAndAwaitBridgeSession(bridge, sessionId = 19L, settleTimeoutMillis = 500L)
+
+        assertFalse(result.settled)
+        assertSame(result.error, assertThrows(IllegalStateException::class.java) {
+            result.requireSettled()
+        })
     }
 }
 
