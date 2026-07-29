@@ -1,6 +1,7 @@
 package com.tcptun.client
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -18,8 +19,7 @@ class FlowAnalysisUiTest {
     @Test
     fun opensFlowAnalysisFromTopBar() {
         val activity = composeRule.activity
-        composeRule.onNodeWithContentDescription(activity.getString(R.string.more_options)).performClick()
-        composeRule.onNodeWithText(activity.getString(R.string.flow_analysis)).performClick()
+        openFlowAnalysis()
 
         composeRule.onNodeWithText(activity.getString(R.string.flow_analysis)).assertIsDisplayed()
         composeRule.onNodeWithText(activity.getString(R.string.flow_analysis_current)).assertIsDisplayed()
@@ -29,11 +29,20 @@ class FlowAnalysisUiTest {
     @Test
     fun flowAnalysisPageExposesSingleAppSelector() {
         val activity = composeRule.activity
-        composeRule.onNodeWithContentDescription(activity.getString(R.string.more_options)).performClick()
-        composeRule.onNodeWithText(activity.getString(R.string.flow_analysis)).performClick()
+        openFlowAnalysis()
 
         composeRule.onNodeWithText(activity.getString(R.string.flow_analysis)).assertIsDisplayed()
         composeRule.onNodeWithText(activity.getString(R.string.flow_analysis_app)).assertIsDisplayed()
         composeRule.onNodeWithText(activity.getString(R.string.flow_analysis_note)).assertIsDisplayed()
+    }
+
+    private fun openFlowAnalysis() {
+        val activity = composeRule.activity
+        composeRule.onNodeWithContentDescription(activity.getString(R.string.more_options)).performClick()
+        composeRule.onNodeWithText(activity.getString(R.string.flow_analysis)).performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText(activity.getString(R.string.flow_analysis_current))
+                .fetchSemanticsNodes().size == 1
+        }
     }
 }

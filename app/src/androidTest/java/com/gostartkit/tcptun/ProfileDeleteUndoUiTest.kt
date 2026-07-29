@@ -74,14 +74,19 @@ class ProfileDeleteUndoUiTest {
             composeRule.onAllNodesWithContentDescription(composeRule.activity.getString(R.string.reorder_profile))
                 .fetchSemanticsNodes().size >= 2
         }
-        composeRule.onAllNodesWithContentDescription(composeRule.activity.getString(R.string.reorder_profile))[0]
-            .performTouchInput {
-                down(center)
-                moveBy(Offset(0f, 32f), delayMillis = 100)
-                moveBy(Offset(0f, 64f), delayMillis = 100)
-                moveBy(Offset(0f, 96f), delayMillis = 100)
-                up()
-            }
+        val handles = composeRule.onAllNodesWithContentDescription(
+            composeRule.activity.getString(R.string.reorder_profile),
+        )
+        val firstCenter = handles[0].fetchSemanticsNode().boundsInRoot.center
+        val secondCenter = handles[1].fetchSemanticsNode().boundsInRoot.center
+        handles[0].performTouchInput {
+            val rowDistance = secondCenter.y - firstCenter.y
+            down(center)
+            moveBy(Offset(0f, rowDistance * 0.4f), delayMillis = 100)
+            moveBy(Offset(0f, rowDistance * 0.4f), delayMillis = 100)
+            moveBy(Offset(0f, rowDistance * 0.4f), delayMillis = 100)
+            up()
+        }
 
         composeRule.waitUntil(timeoutMillis = 5_000) {
             ProfileStore.load(composeRule.activity).profiles.map { it.id } == listOf(second.id, first.id)
