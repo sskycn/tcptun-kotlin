@@ -2581,6 +2581,32 @@ private fun SettingsPage(onBack: () -> Unit) {
                 SettingsCard {
                     Column(
                         modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        SectionTitle(
+                            icon = Icons.Rounded.Speed,
+                            title = stringResource(R.string.logs),
+                        )
+                        ChoiceRow(
+                            stringResource(R.string.log_level),
+                            settings.logLevel,
+                            LogLevels,
+                            enabled = !savingSettings,
+                        ) { value ->
+                            updateSettingsDraft(settings.copy(logLevel = value))
+                        }
+                        Text(
+                            stringResource(R.string.log_level_note),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            item {
+                SettingsCard {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         SectionTitle(
@@ -2588,6 +2614,7 @@ private fun SettingsPage(onBack: () -> Unit) {
                             title = stringResource(R.string.current_effective),
                         )
                         DiagnosticsLine("MTU", diagnostics.mtu.toString())
+                        DiagnosticsLine(stringResource(R.string.log_level), settings.logLevel)
                         DiagnosticsLine(stringResource(R.string.local_proxy_protocol), settings.localProxyProtocol)
                         DiagnosticsLine(stringResource(R.string.socks_listen), TcptunVpnService.localSocksListenAddr(settings))
                         DiagnosticsLine(stringResource(R.string.socks_auth), if (settings.socksUsername.isNotEmpty() || settings.socksPassword.isNotEmpty()) stringResource(R.string.enabled) else stringResource(R.string.disabled))

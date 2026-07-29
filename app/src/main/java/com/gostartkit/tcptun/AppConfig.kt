@@ -7,9 +7,11 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
 internal const val DefaultLocalProxyProtocol = "socks5"
+internal const val DefaultLogLevel = "info"
 internal const val AndroidTunInboundTag = "tun"
 internal const val AndroidLocalProxyInboundTag = "local"
 internal val LocalProxyProtocols = listOf(DefaultLocalProxyProtocol, "mixed")
+internal val LogLevels = listOf("debug", DefaultLogLevel, "warn", "error", "off")
 internal val AndroidTunNetworks = listOf("tcp", "udp")
 internal const val MaxProfileIdLength = 256
 
@@ -62,6 +64,16 @@ internal fun defaultNativeTunDnsConfig(): JSONObject = JSONObject()
 internal fun normalizeLocalProxyProtocol(value: String): String {
     return value.trim().lowercase().takeIf { it in LocalProxyProtocols }
         ?: DefaultLocalProxyProtocol
+}
+
+internal fun normalizeLogLevel(value: String): String {
+    val normalized = value.trim().lowercase()
+    if (normalized == "none") return "off"
+    return normalized.takeIf { it in LogLevels } ?: DefaultLogLevel
+}
+
+internal fun effectiveLogLevel(verbose: Boolean, configuredLevel: String?): String {
+    return if (verbose) "debug" else normalizeLogLevel(configuredLevel.orEmpty())
 }
 
 data class AppConfig(
@@ -259,6 +271,7 @@ data class AppConfig(
         localListenAddr: String,
         localProxyProtocol: String = upstreamProtocol,
         verbose: Boolean = false,
+        logLevel: String? = null,
         socks5Username: String = "",
         socks5Password: String = "",
         managedRouteRules: List<ManagedRouteRule> = emptyList(),
@@ -271,6 +284,7 @@ data class AppConfig(
                 socks5Username = socks5Username,
                 socks5Password = socks5Password,
                 verbose = verbose,
+                logLevel = logLevel,
                 routeLocalProxyTraffic = routeLocalProxyTraffic,
             )
         }
@@ -382,8 +396,9 @@ data class AppConfig(
                 ),
             )
         }
+        val resolvedLogLevel = effectiveLogLevel(verbose, logLevel)
         return JSONObject()
-            .put("log", JSONObject().put("level", if (verbose) "debug" else "info"))
+            .put("log", JSONObject().put("level", resolvedLogLevel))
             .put("inbounds", JSONArray().put(inbound))
             .put("outbounds", outbounds)
             .put("route", JSONObject().put("default_outbound", "proxy").put("rules", rules))
@@ -397,6 +412,7 @@ data class AppConfig(
         socks5Username: String,
         socks5Password: String,
         verbose: Boolean,
+        logLevel: String?,
         routeLocalProxyTraffic: Boolean,
     ): String {
         requireSafeJsonNesting(rawConfigJson)
@@ -470,9 +486,9 @@ data class AppConfig(
             replacedTags = replacedInboundTags,
             routeLocalProxyTraffic = routeLocalProxyTraffic,
         )
-        if (verbose) {
+        if (verbose || logLevel != null) {
             val log = root.optJSONObject("log") ?: JSONObject().also { root.put("log", it) }
-            log.put("level", "debug")
+            log.put("level", effectiveLogLevel(verbose, logLevel))
         }
         return root.toString()
     }

@@ -77,6 +77,27 @@ internal fun validateTcptunConfig(configJson: String) {
     }
 }
 
+internal data class TcptunCoreIdentity(
+    val version: String,
+    val buildId: String,
+)
+
+/** Reads the identity compiled into the loaded AAR without owning an Engine. */
+internal fun tcptunCoreIdentity(): TcptunCoreIdentity {
+    val bridgeClass = runRecoverableCatching { Class.forName("androidbridge.Androidbridge") }
+        .getOrNull()
+        ?: return TcptunCoreIdentity(version = "", buildId = "")
+
+    fun read(methodName: String): String = runRecoverableCatching {
+        bridgeClass.getMethod(methodName).invoke(null)?.toString()?.trim().orEmpty()
+    }.getOrDefault("")
+
+    return TcptunCoreIdentity(
+        version = read("coreVersion"),
+        buildId = read("coreBuildID"),
+    )
+}
+
 /** Optional status-event names accepted by Engine.RegisterEvent / UnregisterEvent. */
 internal object TcptunBridgeEvents {
     const val RemoteEndpointsChanged = "REMOTE_ENDPOINTS_CHANGED"
@@ -106,6 +127,8 @@ interface TcptunBridge {
     fun close()
     fun status(): String
     fun statusJson(): String
+    fun setLogLevel(level: String)
+    fun logLevel(): String
     fun setLogCallback(onLog: (String) -> Unit)
     fun clearLogCallback()
     fun setStatusCallback(onStatus: (String) -> Unit)
@@ -281,6 +304,12 @@ class ReflectionTcptunBridge : TcptunBridge {
     override fun status(): String = (invokeEngine("status") as? String).orEmpty()
 
     override fun statusJson(): String = (invokeEngine("statusJSON") as? String).orEmpty()
+
+    override fun setLogLevel(level: String) {
+        invokeEngine("setLogLevel", arrayOf(String::class.java), level.trim())
+    }
+
+    override fun logLevel(): String = (invokeEngine("logLevel") as? String).orEmpty()
 
     override fun setLogCallback(onLog: (String) -> Unit) {
         val callbackClass = callbackClass("androidbridge.LogCallback") ?: return

@@ -30,4 +30,7 @@ if [ -z "${ANDROID_HOME:-}" ] && [ -z "${ANDROID_SDK_ROOT:-}" ] && [ -f "$ROOT_D
 fi
 
 mkdir -p "$ROOT_DIR/app/libs"
-ANDROIDBRIDGE_AAR_OUT="$OUT" ANDROID_API="${ANDROID_API:-24}" "$TCPTUN_GO_DIR/scripts/build-androidbridge.sh"
+ANDROIDBRIDGE_AAR_OUT="$OUT" \
+  ANDROID_API="${ANDROID_API:-24}" \
+  ANDROID_TARGET="${ANDROID_TARGET:-android/arm,android/arm64,android/amd64}" \
+  "$TCPTUN_GO_DIR/scripts/build-androidbridge.sh"

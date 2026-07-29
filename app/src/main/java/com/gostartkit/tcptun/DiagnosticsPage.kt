@@ -14,6 +14,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -26,6 +27,7 @@ private val DiagnosticsListItemSpacing = 8.dp
 internal fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
     val vpnState by TcptunState.state.collectAsStateWithLifecycle()
     val diagnostics = vpnState.diagnostics
+    val coreIdentity = remember { tcptunCoreIdentity() }
     val noneLabel = stringResource(R.string.none)
 
     Scaffold(
@@ -61,6 +63,14 @@ internal fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
                             DiagnosticsLine(stringResource(R.string.diag_vpn), diagnostics.vpnStatus)
                             DiagnosticsLine(stringResource(R.string.diag_underlying_network), diagnostics.underlyingNetwork)
                             DiagnosticsLine(stringResource(R.string.diag_bridge), diagnostics.bridgeStatus)
+                            DiagnosticsLine(
+                                stringResource(R.string.diag_core_version),
+                                coreIdentity.version.ifBlank { noneLabel },
+                            )
+                            DiagnosticsLine(
+                                stringResource(R.string.diag_core_build),
+                                coreIdentity.buildId.ifBlank { noneLabel },
+                            )
                             DiagnosticsLine(stringResource(R.string.diag_go_state), diagnostics.bridgeEventState)
                             DiagnosticsLine(stringResource(R.string.diag_go_phase), diagnostics.bridgeEventPhase)
                             DiagnosticsLine(stringResource(R.string.diag_go_listen), diagnostics.bridgeListen.ifBlank { noneLabel })

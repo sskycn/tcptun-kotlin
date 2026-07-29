@@ -110,6 +110,8 @@
     <string name="diag_vpn">VPN</string>
     <string name="diag_underlying_network">底层网络</string>
     <string name="diag_bridge">Bridge</string>
+    <string name="diag_core_version">Go 核心版本</string>
+    <string name="diag_core_build">Go 核心构建</string>
     <string name="diag_go_state">Go 状态</string>
     <string name="diag_go_phase">Go 阶段</string>
     <string name="diag_go_listen">Go 监听</string>
@@ -166,13 +168,15 @@
     <string name="seconds_value">%1$d 秒</string>
     <string name="recent_restart_reason">最近重启原因</string>
     <string name="transparent_proxy_settings">透明代理参数</string>
-    <string name="runtime_settings_note">编辑时会先保存设置；返回时仅当 MTU/本地代理监听与认证/本地代理走路由等隧道相关参数变化时，才会重启正在运行的 VPN。</string>
+    <string name="runtime_settings_note">编辑时会先保存设置；日志级别会立即生效，修改 MTU、本地代理监听与认证或本地代理路由时会重启正在运行的 VPN。</string>
     <string name="native_tun_capabilities_note">原生 TUN 支持 TCP 和 UDP；DNS 默认在 Go 隧道内接管并启用 fake-IP。</string>
     <string name="vpn_traffic_mode">VPN 流量模式</string>
     <string name="tcp_udp">TCP + UDP</string>
     <string name="current_effective">当前生效</string>
     <string name="back">返回</string>
     <string name="logs">日志</string>
+    <string name="log_level">日志级别（log.level）</string>
+    <string name="log_level_note">无需重启 VPN 即可立即生效。Debug 会产生大量运行日志并可能增加耗电；Off 会关闭核心日志。</string>
     <string name="clear">清空</string>
     <string name="save">保存</string>
     <string name="cancel">取消</string>

@@ -47,6 +47,8 @@ type Engine struct { /* gomobile-owned runtime */ }
 
 func NewEngine() *Engine
 func ValidateConfig(configJson string) error
+func CoreVersion() string
+func CoreBuildID() string
 func (e *Engine) SetLogCallback(cb LogCallback)
 func (e *Engine) SetStatusCallback(cb StatusCallback)
 func (e *Engine) RegisterEvent(event string) error
@@ -68,6 +70,10 @@ func (e *Engine) WaitStopped(sessionID int64, timeoutMillis int64) error
 func (e *Engine) Status() string
 func (e *Engine) StatusJSON() string
 ```
+
+The diagnostics page shows `CoreVersion` and `CoreBuildID`, so installed builds
+can be matched to the exact tcptun-go revision. CI and release builds currently
+pin `a9a6e1999fe286f3f288ee1fcb0047b7a2df281d`.
 
 Optional telemetry must be opted into with `RegisterEvent`. The app registers:
 
@@ -243,6 +249,10 @@ If `tcptun-go` is not a sibling checkout, point the wrapper at it:
 TCPTUN_GO_DIR=/path/to/tcptun-go ./scripts/build-androidbridge.sh
 ```
 
+The wrapper builds only `armeabi-v7a`, `arm64-v8a`, and `x86_64` by default,
+matching the Gradle ABI filters and avoiding an unused x86 native library in the
+intermediate AAR. Set `ANDROID_TARGET` to override the gomobile target list.
+
 If `gomobile` is missing:
 
 ```bash
@@ -251,8 +261,8 @@ gomobile init
 ```
 
 The generated AAR is copied to `app/libs/androidbridge.aar`. The file is ignored
-by Git and is rebuilt by the release workflow from tcptun-go revision
-`898b3cb11850d8515c01e7cb7a18f0f8d9e1d51e`.
+by Git and is rebuilt by the release workflow from the pinned tcptun-go revision
+listed above.
 
 ## Build the Android app
 

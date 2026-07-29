@@ -34,6 +34,12 @@ class AndroidBridgeContractTest {
     }
 
     @Test
+    fun currentBridgeReportsVersionedCoreIdentity() {
+        assertEquals("v0.2.3", Androidbridge.coreVersion())
+        assertTrue(Regex("[0-9a-f]{12}(-dirty)?").matches(Androidbridge.coreBuildID()))
+    }
+
+    @Test
     fun currentBridgeExposesOptionalApplicationIdentityProvider() {
         val engine = Androidbridge.newEngine()
         try {

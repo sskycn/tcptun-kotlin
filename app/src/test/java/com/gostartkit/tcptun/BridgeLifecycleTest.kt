@@ -246,6 +246,8 @@ private class FakeLifecycleBridge(
     override fun outboundsStatusJson(): String = "[]"
     override fun close() = Unit
     override fun statusJson(): String = """{"reason":"$currentStatusReason"}"""
+    override fun setLogLevel(level: String) = Unit
+    override fun logLevel(): String = DefaultLogLevel
     override fun setLogCallback(onLog: (String) -> Unit) = Unit
     override fun clearLogCallback() = Unit
     override fun setStatusCallback(onStatus: (String) -> Unit) = Unit

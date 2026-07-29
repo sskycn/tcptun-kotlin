@@ -181,6 +181,7 @@ private fun <T> SharedPreferences.readOrDefault(
 data class RuntimeSettings(
     val mtu: Int = TcptunVpnService.DEFAULT_VPN_MTU,
     val powerSavingMode: Boolean = true,
+    val logLevel: String = DefaultLogLevel,
     val socksPort: Int = TcptunVpnService.DEFAULT_SOCKS_PORT,
     val localProxyProtocol: String = DefaultLocalProxyProtocol,
     val socksListenAll: Boolean = false,
@@ -323,6 +324,7 @@ class TcptunVpnService : VpnService() {
     @Volatile private var activeSocksListenAll = false
     @Volatile private var activeRouteLocalProxyTraffic = false
     @Volatile private var activeFlowAnalysisApp = ""
+    @Volatile private var activeLogLevel = DefaultLogLevel
     @Volatile private var powerSavingMode = true
     @Volatile private var upstreamProbeIndex = 0
     @Volatile private var lastMemberHealthProbeAtElapsedMs = 0L
@@ -428,7 +430,7 @@ class TcptunVpnService : VpnService() {
                     requestOutboundUpdate(intent)
                 }
                 ACTION_TCPING_OUTBOUNDS -> requestOutboundTcping(intent)
-                ACTION_APPLY_RUNTIME_SETTINGS -> requestRuntimeSettingsRestart(
+                ACTION_APPLY_RUNTIME_SETTINGS -> requestRuntimeSettingsApply(
                     reason = if (intent.getBooleanExtra(EXTRA_FORCE_RUNTIME_RESTART, false)) {
                         "route rules changed"
                     } else {
@@ -1723,6 +1725,7 @@ class TcptunVpnService : VpnService() {
             activeSocksListenAll = false
             activeRouteLocalProxyTraffic = false
             activeFlowAnalysisApp = ""
+            activeLogLevel = DefaultLogLevel
             powerSavingMode = true
             lastMemberHealthProbeAtElapsedMs = 0L
             runGlobalStep {
@@ -1899,6 +1902,7 @@ class TcptunVpnService : VpnService() {
         activeSocksListenAll = settings.socksListenAll
         activeRouteLocalProxyTraffic = settings.routeLocalProxyTraffic
         activeFlowAnalysisApp = settings.flowAnalysisApp
+        activeLogLevel = settings.logLevel
         powerSavingMode = settings.powerSavingMode
     }
 
@@ -1906,6 +1910,7 @@ class TcptunVpnService : VpnService() {
         return RuntimeSettings(
             mtu = tunMtu,
             powerSavingMode = powerSavingMode,
+            logLevel = activeLogLevel,
             socksPort = activeSocksPort,
             localProxyProtocol = activeLocalProxyProtocol,
             socksListenAll = activeSocksListenAll,
@@ -1989,6 +1994,10 @@ class TcptunVpnService : VpnService() {
                 configureFlowAnalysis(activeFlowAnalysisApp, epoch)
                 TcptunState.applyBridgeStatusEvent(epoch, bridge.statusJson())
                 bridge.configure(configJson)
+                bridge.setLogLevel(activeLogLevel)
+                check(bridge.logLevel() == activeLogLevel) {
+                    "tcptun bridge did not apply log.level=$activeLogLevel"
+                }
                 bridgeResources.beginTunTransfer()
                 bridge.setTun(vpnTun.fd, mtu)
                 bridgeResources.beginStart()
@@ -2316,7 +2325,7 @@ class TcptunVpnService : VpnService() {
         }
     }
 
-    private fun requestRuntimeSettingsRestart(reason: String, forceRestart: Boolean) {
+    private fun requestRuntimeSettingsApply(reason: String, forceRestart: Boolean) {
         val generation = runtimeSettingsApplyGate.request(forceRestart)
         TcptunState.appendLog("runtime settings apply requested: $reason")
         startCrashGuardedThread(
@@ -2325,7 +2334,7 @@ class TcptunVpnService : VpnService() {
                 if (!destroyed.get()) TcptunState.appendLog(failureDescription(error))
             },
         ) runtimeApply@{
-                Thread.sleep(RUNTIME_SETTINGS_RESTART_DEBOUNCE_MS)
+                Thread.sleep(RUNTIME_SETTINGS_APPLY_DEBOUNCE_MS)
                 if (destroyed.get()) return@runtimeApply
                 val forceThisApply = runtimeSettingsApplyGate.claim(generation) ?: return@runtimeApply
                 scheduleRuntimeSettingsApply(reason, generation, forceThisApply)
@@ -2398,12 +2407,12 @@ class TcptunVpnService : VpnService() {
             return
         }
         val settings = readRuntimeSettings(this)
-        val structuralChange = BridgeHealthPolicy.requiresRuntimeRestart(
+        var restartRequired = BridgeHealthPolicy.requiresRuntimeRestart(
             forceRestart = forceRestart,
             currentStructuralRuntimeSettings(),
             settings,
         )
-        if (!structuralChange) {
+        if (!restartRequired) {
             val stillCurrent = synchronized(lifecycleCommandLock) {
                 isRuntimeSettingsApplyLatest(generation) &&
                     !explicitStopRequested.get() &&
@@ -2418,6 +2427,24 @@ class TcptunVpnService : VpnService() {
                 }
                 return
             }
+            if (settings.logLevel != activeLogLevel) {
+                try {
+                    synchronized(bridgeLock) {
+                        bridge.setLogLevel(settings.logLevel)
+                        check(bridge.logLevel() == settings.logLevel) {
+                            "tcptun bridge did not apply log.level=${settings.logLevel}"
+                        }
+                    }
+                } catch (error: Throwable) {
+                    if (error.isFatalProcessError()) throw error
+                    restartRequired = true
+                    TcptunState.appendLog(
+                        "dynamic log.level update unavailable; restarting VPN: ${failureDescription(error)}",
+                    )
+                }
+            }
+        }
+        if (!restartRequired) {
             applyCachedRuntimeSettings(settings)
             TcptunState.updateDiagnostics {
                 it.copy(
@@ -2428,7 +2455,8 @@ class TcptunVpnService : VpnService() {
                 )
             }
             TcptunState.appendLog(
-                "runtime settings applied without VPN restart: power-saving=${settings.powerSavingMode}",
+                "runtime settings applied without VPN restart: " +
+                    "log-level=${settings.logLevel} power-saving=${settings.powerSavingMode}",
             )
             wakeBridgeMonitor()
             return
@@ -3315,6 +3343,7 @@ class TcptunVpnService : VpnService() {
         private const val EXTRA_RUNTIME_SETTINGS_VERSION = "runtimeSettingsVersion"
         private const val EXTRA_RUNTIME_MTU = "runtimeMtu"
         private const val EXTRA_RUNTIME_POWER_SAVING = "runtimePowerSaving"
+        private const val EXTRA_RUNTIME_LOG_LEVEL = "runtimeLogLevel"
         private const val EXTRA_RUNTIME_SOCKS_PORT = "runtimeSocksPort"
         private const val EXTRA_RUNTIME_LOCAL_PROXY_PROTOCOL = "runtimeLocalProxyProtocol"
         private const val EXTRA_RUNTIME_SOCKS_LISTEN_ALL = "runtimeSocksListenAll"
@@ -3340,7 +3369,7 @@ class TcptunVpnService : VpnService() {
         private const val TCPING_OUTBOUND_TOTAL_TIMEOUT_MS = 20_000L
         private const val MEMBER_HEALTH_PROBE_TIMEOUT_MS = 3_000L
         private const val MEMBER_HEALTH_PROBE_GRACE_MS = 1_000L
-        private const val RUNTIME_SETTINGS_RESTART_DEBOUNCE_MS = 800L
+        private const val RUNTIME_SETTINGS_APPLY_DEBOUNCE_MS = 800L
         private const val DESTROY_EXECUTOR_WAIT_MS = 2_000L
         private const val DEFERRED_DESTROY_WAIT_MS = 15_000L
         private const val DESTROY_NATIVE_TEARDOWN_WAIT_MS = 15_000L
@@ -3364,6 +3393,7 @@ class TcptunVpnService : VpnService() {
         private const val RUNNING_CONFIG_VERSION = 3
         private const val KEY_RUNTIME_MTU = "runtimeMtu"
         private const val KEY_RUNTIME_POWER_SAVING = "runtimePowerSaving"
+        private const val KEY_RUNTIME_LOG_LEVEL = "runtimeLogLevel"
         private const val KEY_RUNTIME_SOCKS_PORT = "runtimeSocksPort"
         private const val KEY_RUNTIME_LOCAL_PROXY_PROTOCOL = "runtimeLocalProxyProtocol"
         private const val KEY_RUNTIME_SOCKS_LISTEN_ALL = "runtimeSocksListenAll"
@@ -3406,6 +3436,7 @@ class TcptunVpnService : VpnService() {
             val configJson = plan.toBridgeJson(
                 localListenAddr,
                 localProxyProtocol = runtimeSettings.localProxyProtocol,
+                logLevel = runtimeSettings.logLevel,
                 socks5Username = runtimeSettings.socksUsername,
                 socks5Password = runtimeSettings.socksPassword,
                 managedRouteRules = RouteRuleStore.load(context),
@@ -3415,6 +3446,7 @@ class TcptunVpnService : VpnService() {
             val settingsPayloadLength = runtimeSettings.socksUsername.length +
                 runtimeSettings.socksPassword.length +
                 runtimeSettings.localProxyProtocol.length +
+                runtimeSettings.logLevel.length +
                 runtimeSettings.flowAnalysisApp.length
             require(
                 configJson.length + planJson.length + settingsPayloadLength <=
@@ -3433,6 +3465,7 @@ class TcptunVpnService : VpnService() {
             putExtra(EXTRA_RUNTIME_SETTINGS_VERSION, RUNTIME_SETTINGS_INTENT_VERSION)
             putExtra(EXTRA_RUNTIME_MTU, settings.mtu)
             putExtra(EXTRA_RUNTIME_POWER_SAVING, settings.powerSavingMode)
+            putExtra(EXTRA_RUNTIME_LOG_LEVEL, settings.logLevel)
             putExtra(EXTRA_RUNTIME_SOCKS_PORT, settings.socksPort)
             putExtra(EXTRA_RUNTIME_LOCAL_PROXY_PROTOCOL, settings.localProxyProtocol)
             putExtra(EXTRA_RUNTIME_SOCKS_LISTEN_ALL, settings.socksListenAll)
@@ -3456,6 +3489,9 @@ class TcptunVpnService : VpnService() {
             return RuntimeSettings(
                 mtu = intent.getIntExtra(EXTRA_RUNTIME_MTU, DEFAULT_VPN_MTU).coerceIn(1280, 1500),
                 powerSavingMode = intent.getBooleanExtra(EXTRA_RUNTIME_POWER_SAVING, true),
+                logLevel = normalizeLogLevel(
+                    intent.getStringExtra(EXTRA_RUNTIME_LOG_LEVEL).orEmpty(),
+                ),
                 socksPort = intent.getIntExtra(EXTRA_RUNTIME_SOCKS_PORT, DEFAULT_SOCKS_PORT)
                     .coerceIn(1, 65535),
                 localProxyProtocol = normalizeLocalProxyProtocol(
@@ -3600,12 +3636,18 @@ class TcptunVpnService : VpnService() {
             val powerSavingMode = prefs.readOrDefault(KEY_RUNTIME_POWER_SAVING, true) {
                 getBoolean(KEY_RUNTIME_POWER_SAVING, true)
             }
+            val logLevel = normalizeLogLevel(
+                prefs.readOrDefault(KEY_RUNTIME_LOG_LEVEL, DefaultLogLevel) {
+                    getString(KEY_RUNTIME_LOG_LEVEL, DefaultLogLevel).orEmpty()
+                },
+            )
             val socksPort = prefs.readOrDefault(KEY_RUNTIME_SOCKS_PORT, DEFAULT_SOCKS_PORT) {
                 getInt(KEY_RUNTIME_SOCKS_PORT, DEFAULT_SOCKS_PORT)
             }.coerceIn(1, 65535)
             return RuntimeSettings(
                 mtu = mtu,
                 powerSavingMode = powerSavingMode,
+                logLevel = logLevel,
                 socksPort = socksPort,
                 localProxyProtocol = normalizeLocalProxyProtocol(
                     prefs.readOrDefault(KEY_RUNTIME_LOCAL_PROXY_PROTOCOL, DefaultLocalProxyProtocol) {
@@ -3634,6 +3676,7 @@ class TcptunVpnService : VpnService() {
 
         fun writeRuntimeSettings(context: Context, settings: RuntimeSettings) {
             val normalizedPowerSavingMode = settings.powerSavingMode
+            val normalizedLogLevel = normalizeLogLevel(settings.logLevel)
             val normalizedSocksPort = settings.socksPort.coerceIn(1, 65535)
             val normalizedLocalProxyProtocol = normalizeLocalProxyProtocol(settings.localProxyProtocol)
             val normalizedRouteLocalProxyTraffic = settings.routeLocalProxyTraffic
@@ -3642,6 +3685,7 @@ class TcptunVpnService : VpnService() {
             require(settings.socksPassword.length <= MAX_RUNTIME_CREDENTIAL_LENGTH) { "SOCKS password is too long" }
             val normalizedSettings = settings.copy(
                 powerSavingMode = normalizedPowerSavingMode,
+                logLevel = normalizedLogLevel,
                 socksPort = normalizedSocksPort,
                 localProxyProtocol = normalizedLocalProxyProtocol,
                 socksUsername = settings.socksUsername,
@@ -3654,6 +3698,7 @@ class TcptunVpnService : VpnService() {
                 .edit()
                 .putInt(KEY_RUNTIME_MTU, settings.mtu.coerceIn(1280, 1500))
                 .putBoolean(KEY_RUNTIME_POWER_SAVING, normalizedPowerSavingMode)
+                .putString(KEY_RUNTIME_LOG_LEVEL, normalizedLogLevel)
                 .putInt(KEY_RUNTIME_SOCKS_PORT, normalizedSocksPort)
                 .putString(KEY_RUNTIME_LOCAL_PROXY_PROTOCOL, normalizedLocalProxyProtocol)
                 .putBoolean(KEY_RUNTIME_SOCKS_LISTEN_ALL, settings.socksListenAll)
@@ -3675,6 +3720,7 @@ class TcptunVpnService : VpnService() {
             TcptunState.appendLog(
                 "runtime settings saved: proxy=${normalizedSettings.localProxyProtocol}://" +
                     "${localSocksListenAddr(normalizedSettings)} mtu=${normalizedSettings.mtu} " +
+                    "log-level=$normalizedLogLevel " +
                     "power-saving=$normalizedPowerSavingMode " +
                     "route-local-proxy=$normalizedRouteLocalProxyTraffic " +
                     "flow-analysis=${normalizedFlowAnalysisApp.ifBlank { "disabled" }}",

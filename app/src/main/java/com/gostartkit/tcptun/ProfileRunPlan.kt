@@ -109,6 +109,7 @@ internal fun ProfileRunPlan.toBridgeJson(
     localListenAddr: String,
     localProxyProtocol: String = profiles.firstOrNull()?.upstreamProtocol ?: DefaultLocalProxyProtocol,
     verbose: Boolean = false,
+    logLevel: String? = null,
     socks5Username: String = "",
     socks5Password: String = "",
     managedRouteRules: List<ManagedRouteRule> = emptyList(),
@@ -121,6 +122,7 @@ internal fun ProfileRunPlan.toBridgeJson(
             localListenAddr = localListenAddr,
             localProxyProtocol = localProxyProtocol,
             verbose = verbose,
+            logLevel = logLevel,
             socks5Username = socks5Username,
             socks5Password = socks5Password,
             managedRouteRules = managedRouteRules,
@@ -136,6 +138,7 @@ internal fun ProfileRunPlan.toBridgeJson(
                 localListenAddr = localListenAddr,
                 localProxyProtocol = localProxyProtocol,
                 verbose = verbose,
+                logLevel = logLevel,
                 socks5Username = socks5Username,
                 socks5Password = socks5Password,
                 routeLocalProxyTraffic = routeLocalProxyTraffic,
@@ -204,8 +207,9 @@ internal fun ProfileRunPlan.toBridgeJson(
         }
         rules.put(route)
     }
+    val resolvedLogLevel = effectiveLogLevel(verbose, logLevel)
     return JSONObject()
-        .put("log", JSONObject().put("level", if (verbose) "debug" else "info"))
+        .put("log", JSONObject().put("level", resolvedLogLevel))
         .put("inbounds", JSONArray().put(inbound))
         .put("outbounds", outbounds)
         .put("route", JSONObject().put("default_outbound", BalancedOutboundTag).put("rules", rules))

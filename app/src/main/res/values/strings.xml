@@ -111,6 +111,8 @@
     <string name="diag_vpn">VPN</string>
     <string name="diag_underlying_network">Underlying network</string>
     <string name="diag_bridge">Bridge</string>
+    <string name="diag_core_version">Go core version</string>
+    <string name="diag_core_build">Go core build</string>
     <string name="diag_go_state">Go state</string>
     <string name="diag_go_phase">Go phase</string>
     <string name="diag_go_listen">Go listen</string>
@@ -167,13 +169,15 @@
     <string name="seconds_value">%1$ds</string>
     <string name="recent_restart_reason">Last restart reason</string>
     <string name="transparent_proxy_settings">Transparent proxy settings</string>
-    <string name="runtime_settings_note">Settings are saved while editing. When you go back, only changes that affect the tunnel (MTU, local proxy bind/auth, route local proxy) restart the running VPN.</string>
+    <string name="runtime_settings_note">Settings are saved while editing. Log level applies immediately; changes to MTU, local proxy bind/auth, or local proxy routing restart the running VPN.</string>
     <string name="native_tun_capabilities_note">Native TUN supports TCP and UDP. Go handles DNS inside the tunnel and enables fake-IP by default.</string>
     <string name="vpn_traffic_mode">VPN traffic mode</string>
     <string name="tcp_udp">TCP + UDP</string>
     <string name="current_effective">Current effective settings</string>
     <string name="back">Back</string>
     <string name="logs">Logs</string>
+    <string name="log_level">Log level (log.level)</string>
+    <string name="log_level_note">Applies immediately without restarting the VPN. Debug produces substantially more runtime output and may increase power use; Off disables core logs.</string>
     <string name="clear">Clear</string>
     <string name="save">Save</string>
     <string name="cancel">Cancel</string>
