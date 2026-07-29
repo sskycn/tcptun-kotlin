@@ -73,7 +73,7 @@ func (e *Engine) StatusJSON() string
 
 The diagnostics page shows `CoreVersion` and `CoreBuildID`, so installed builds
 can be matched to the exact tcptun-go revision. CI and release builds currently
-pin `a9a6e1999fe286f3f288ee1fcb0047b7a2df281d`.
+pin `206b002e304f0b20cc2b1148eaa17b5cc91a985f` (`tcptun-go` v0.2.4).
 
 Optional telemetry must be opted into with `RegisterEvent`. The app registers:
 
@@ -305,12 +305,19 @@ Create the Base64 value without line breaks:
 base64 < /path/to/tcptun-release.jks | tr -d '\n'
 ```
 
-Then publish a release:
+Then publish from a clean, up-to-date `main` branch:
 
 ```bash
-git tag v1.2.3
-git push origin v1.2.3
+make publish VERSION=v0.2.4
 ```
+
+The publish command validates the semantic version and Android version code,
+updates the defaults in `gradle.properties`, rebuilds the Android Bridge, runs
+the local Gradle quality gates, creates a release commit and annotated tag, and
+pushes both to `origin`. Use `RELEASE_BRANCH` or `RELEASE_REMOTE` to override the
+required branch or remote. For local release-script testing without a push, run
+`./scripts/release.sh v0.2.4 --no-push` (this still creates a local commit and
+tag).
 
 The resulting GitHub Release contains a universal APK plus smaller
 `arm64-v8a`, `armeabi-v7a`, and `x86_64` APKs, each with a SHA-256 checksum.

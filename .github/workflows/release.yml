@@ -26,7 +26,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: sskycn/tcptun-go
-          ref: a9a6e1999fe286f3f288ee1fcb0047b7a2df281d
+          ref: 206b002e304f0b20cc2b1148eaa17b5cc91a985f
           path: tcptun-go
 
       - name: Set up Java
