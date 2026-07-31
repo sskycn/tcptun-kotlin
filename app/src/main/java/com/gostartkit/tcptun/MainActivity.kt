@@ -232,8 +232,8 @@ private fun AppConfig.boundedForEditor(): AppConfig = copy(
     realityShortId = realityShortId.take(MaxProfileChoiceInputLength),
     realityFingerprint = realityFingerprint.take(MaxProfileChoiceInputLength),
     realitySpiderX = realitySpiderX.take(MaxProfileUriLength),
-    muxMode = muxMode.take(MaxProfileChoiceInputLength),
-    muxUdpMode = muxUdpMode.take(MaxProfileChoiceInputLength),
+    carrierMode = carrierMode.take(MaxProfileChoiceInputLength),
+    carrierUdpMode = carrierUdpMode.take(MaxProfileChoiceInputLength),
     upstreamProtocol = upstreamProtocol.take(MaxProfileChoiceInputLength),
     rawConfigJson = rawConfigJson.take(MaxProfileImportLength),
 )
@@ -3722,14 +3722,17 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                             )
                         } else {
                             val selectedSecurity = when {
-                                config.tunnelSecurity.equals("reality-quic", ignoreCase = true) -> "reality-quic"
-                                config.tunnelSecurity.equals("reality-tcp", ignoreCase = true) -> "reality-tcp"
                                 config.tunnelSecurity.equals("reality", ignoreCase = true) -> "reality"
                                 config.tls -> "tls"
                                 else -> "none"
                             }
-                            val isTcpReality = selectedSecurity in AppConfig.TcpRealitySecurityTypes
-                            val isRealityQuic = selectedSecurity == "reality-quic"
+                            val isReality = selectedSecurity == "reality"
+                            val carrierOptions = when {
+                                config.protocol != "native" -> listOf("tcp")
+                                isReality -> listOf("tcp", "auto", "quic")
+                                selectedSecurity == "tls" -> listOf("tcp", "quic")
+                                else -> listOf("tcp")
+                            }
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 OutlinedTextField(
                                     value = config.serverHost,
@@ -3754,16 +3757,26 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                 stringResource(R.string.protocol),
                                 config.protocol,
                                 AppConfig.Protocols,
-                                enabled = !isRealityQuic,
                             ) {
-                                config = config.copy(protocol = it)
-                                if (it != "native") config = config.withoutResumableMux()
+                                config = config.copy(
+                                    protocol = it,
+                                    carrierMode = if (it == "native") config.carrierMode else "tcp",
+                                    carrierUdpMode = if (it == "native") config.carrierUdpMode else "",
+                                )
+                                if (it != "native") {
+                                    config = config.withoutResumableMux().copy(
+                                        carrierInitialStreamReceiveWindow = 0,
+                                        carrierMaxStreamReceiveWindow = 0,
+                                        carrierInitialConnectionReceiveWindow = 0,
+                                        carrierMaxConnectionReceiveWindow = 0,
+                                    )
+                                }
                             }
                             ChoiceRow(
                                 stringResource(R.string.field_transport),
                                 config.transport,
                                 AppConfig.Transports,
-                                enabled = !isRealityQuic && !isTcpReality,
+                                enabled = !isReality,
                             ) {
                                 config = config.copy(transport = it)
                                 if (it != "raw") config = config.withoutResumableMux()
@@ -3800,56 +3813,37 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                 AppConfig.SecurityOptions,
                             ) { security ->
                                 config = when (security) {
-                                    "tls" -> config.copy(tunnelSecurity = "", tls = true)
-                                        .withoutResumableMux()
+                                    "tls" -> config.copy(
+                                        tunnelSecurity = "",
+                                        tls = true,
+                                        carrierMode = config.carrierMode.takeIf { it == "quic" } ?: "tcp",
+                                        carrierUdpMode = config.carrierUdpMode.takeIf {
+                                            config.carrierMode == "quic"
+                                        }.orEmpty(),
+                                    ).withoutResumableMux()
                                     "reality" -> config.copy(
-                                        // reality: TCP REALITY + native auto-QUIC when mux/raw.
                                         transport = "raw",
                                         tunnelSecurity = "reality",
                                         tls = false,
                                         tlsInsecure = false,
-                                        muxMode = config.muxMode.takeUnless { it.equals("quic", true) }.orEmpty(),
-                                        muxUdpMode = "",
-                                        muxInitialStreamReceiveWindow = 0,
-                                        muxMaxStreamReceiveWindow = 0,
-                                        muxInitialConnectionReceiveWindow = 0,
-                                        muxMaxConnectionReceiveWindow = 0,
-                                    )
-                                    "reality-tcp" -> config.copy(
-                                        // reality-tcp: TCP REALITY only (no auto-QUIC).
-                                        transport = "raw",
-                                        tunnelSecurity = "reality-tcp",
-                                        tls = false,
-                                        tlsInsecure = false,
-                                        muxMode = config.muxMode.takeUnless { it.equals("quic", true) }.orEmpty(),
-                                        muxUdpMode = "",
-                                        muxInitialStreamReceiveWindow = 0,
-                                        muxMaxStreamReceiveWindow = 0,
-                                        muxInitialConnectionReceiveWindow = 0,
-                                        muxMaxConnectionReceiveWindow = 0,
-                                    ).withoutResumableMux()
-                                    "reality-quic" -> config.copy(
-                                        protocol = "native",
-                                        transport = "raw",
-                                        tunnelSecurity = "reality-quic",
-                                        tls = false,
-                                        tlsInsecure = false,
                                         realityFingerprint = config.realityFingerprint.ifBlank { "chrome" },
-                                        realitySpiderX = "",
-                                        mux = true,
-                                        muxMode = "quic",
-                                        muxUdpMode = config.muxUdpMode.ifBlank { "auto" },
-                                    ).withoutResumableMux()
+                                        carrierMode = if (config.protocol == "native" && config.mux) {
+                                            config.carrierMode.takeIf { it in AppConfig.CarrierModes && it != "tcp" }
+                                                ?: "auto"
+                                        } else {
+                                            "tcp"
+                                        },
+                                    )
                                     else -> config.copy(
                                         tunnelSecurity = "",
                                         tls = false,
                                         tlsInsecure = false,
-                                        muxMode = config.muxMode.takeUnless { it.equals("quic", true) }.orEmpty(),
-                                        muxUdpMode = "",
-                                        muxInitialStreamReceiveWindow = 0,
-                                        muxMaxStreamReceiveWindow = 0,
-                                        muxInitialConnectionReceiveWindow = 0,
-                                        muxMaxConnectionReceiveWindow = 0,
+                                        carrierMode = "tcp",
+                                        carrierUdpMode = "",
+                                        carrierInitialStreamReceiveWindow = 0,
+                                        carrierMaxStreamReceiveWindow = 0,
+                                        carrierInitialConnectionReceiveWindow = 0,
+                                        carrierMaxConnectionReceiveWindow = 0,
                                     ).withoutResumableMux()
                                 }
                             }
@@ -3862,7 +3856,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
                             )
-                            if (isTcpReality || isRealityQuic) {
+                            if (isReality) {
                                 OutlinedTextField(
                                     value = config.realityPublicKey,
                                     onValueChange = {
@@ -3897,7 +3891,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                     )
                                 }
                             }
-                            if (isTcpReality) {
+                            if (isReality) {
                                 OutlinedTextField(
                                     value = config.realitySpiderX,
                                     onValueChange = {
@@ -3916,50 +3910,67 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                             ToggleRow(
                                 stringResource(R.string.field_mux),
                                 config.mux,
-                                enabled = !isRealityQuic,
                             ) {
                                 config = config.copy(mux = it)
                                 if (!it) {
                                     config = config.withoutResumableMux().copy(
+                                        carrierMode = "tcp",
+                                        carrierUdpMode = "",
                                         muxMaxSessions = 0,
                                         muxMaxStreamsPerSession = 0,
                                         muxWarmSpare = 0,
+                                        carrierInitialStreamReceiveWindow = 0,
+                                        carrierMaxStreamReceiveWindow = 0,
+                                        carrierInitialConnectionReceiveWindow = 0,
+                                        carrierMaxConnectionReceiveWindow = 0,
                                     )
                                 }
                             }
                             ChoiceRow(
-                                stringResource(R.string.field_mux_mode),
-                                config.muxMode.ifBlank { "group" },
-                                listOf("group", "quic"),
-                                enabled = config.mux && !isRealityQuic,
+                                stringResource(R.string.field_carrier_mode),
+                                config.carrierMode.ifBlank { "tcp" },
+                                carrierOptions,
                             ) { mode ->
-                                config = if (mode == "quic") {
-                                    config.copy(
+                                config = when (mode) {
+                                    "auto" -> config.copy(
                                         protocol = "native",
                                         transport = "raw",
-                                        tunnelSecurity = "",
-                                        tls = true,
+                                        tunnelSecurity = "reality",
+                                        tls = false,
+                                        tlsInsecure = false,
+                                        realityFingerprint = config.realityFingerprint.ifBlank { "chrome" },
                                         mux = true,
-                                        muxMode = "quic",
-                                        muxUdpMode = config.muxUdpMode.ifBlank { "auto" },
-                                    ).withoutResumableMux()
-                                } else {
-                                    config.copy(
-                                        muxMode = "group",
-                                        muxUdpMode = "",
-                                        muxInitialStreamReceiveWindow = 0,
-                                        muxMaxStreamReceiveWindow = 0,
-                                        muxInitialConnectionReceiveWindow = 0,
-                                        muxMaxConnectionReceiveWindow = 0,
+                                        carrierMode = "auto",
                                     )
+                                    "quic" -> config.copy(
+                                        protocol = "native",
+                                        transport = "raw",
+                                        tls = !isReality,
+                                        mux = true,
+                                        carrierMode = "quic",
+                                        carrierUdpMode = config.carrierUdpMode.ifBlank { "auto" },
+                                        realityFingerprint = if (isReality) {
+                                            config.realityFingerprint.ifBlank { "chrome" }
+                                        } else {
+                                            config.realityFingerprint
+                                        },
+                                    ).withoutResumableMux()
+                                    else -> config.copy(
+                                        carrierMode = "tcp",
+                                        carrierUdpMode = "",
+                                        carrierInitialStreamReceiveWindow = 0,
+                                        carrierMaxStreamReceiveWindow = 0,
+                                        carrierInitialConnectionReceiveWindow = 0,
+                                        carrierMaxConnectionReceiveWindow = 0,
+                                    ).withoutResumableMux()
                                 }
                             }
-                            if (config.mux && config.muxMode.equals("quic", ignoreCase = true)) {
+                            if (config.mux && config.carrierMode in setOf("quic", "auto")) {
                                 ChoiceRow(
-                                    stringResource(R.string.field_mux_udp_mode),
-                                    config.muxUdpMode.ifBlank { "reliable" },
+                                    stringResource(R.string.field_carrier_udp_mode),
+                                    config.carrierUdpMode.ifBlank { "reliable" },
                                     listOf("reliable", "auto", "datagram"),
-                                ) { mode -> config = config.copy(muxUdpMode = mode) }
+                                ) { mode -> config = config.copy(carrierUdpMode = mode) }
                             }
                             if (config.mux) {
                                 val effectiveMaxSessions = config.muxMaxSessions.takeIf { it > 0 } ?: 4
@@ -4059,7 +4070,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                     config.protocol == "native" &&
                                     config.transport == "raw" &&
                                     selectedSecurity == "reality" &&
-                                    !config.muxMode.equals("quic", ignoreCase = true)
+                                    config.carrierMode.equals("auto", ignoreCase = true)
                             ToggleRow(
                                 stringResource(R.string.field_mux_resume),
                                 config.muxResume,
@@ -4073,8 +4084,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                         tls = false,
                                         tlsInsecure = false,
                                         mux = true,
-                                        muxMode = "group",
-                                        muxUdpMode = "",
+                                        carrierMode = "auto",
                                         muxResume = true,
                                     )
                                 } else {

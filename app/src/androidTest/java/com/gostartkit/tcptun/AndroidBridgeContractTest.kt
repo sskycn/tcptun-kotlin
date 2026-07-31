@@ -35,7 +35,7 @@ class AndroidBridgeContractTest {
 
     @Test
     fun currentBridgeReportsVersionedCoreIdentity() {
-        assertEquals("v0.2.3", Androidbridge.coreVersion())
+        assertEquals("v0.2.4", Androidbridge.coreVersion())
         assertTrue(Regex("[0-9a-f]{12}(-dirty)?").matches(Androidbridge.coreBuildID()))
     }
 
@@ -146,8 +146,10 @@ class AndroidBridgeContractTest {
             sni = "example.com",
             tunnelSecurity = "reality",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
+            realityShortId = "a65f93c1",
+            realityFingerprint = "chrome",
             mux = true,
-            muxMode = "group",
+            carrierMode = "auto",
             muxResume = true,
             muxResumeTimeoutMillis = 15_000,
             muxResumeBufferSize = 4_194_304,
@@ -900,7 +902,7 @@ class AndroidBridgeContractTest {
         assertEquals("192.0.2.1:9443", proxy.getJSONArray("address").getString(0))
         assertFalse(proxy.has("server"))
         assertFalse(proxy.has("port"))
-        assertFalse(proxy.getJSONObject("mux").has("enabled"))
+        assertTrue(proxy.getJSONObject("mux").getBoolean("enabled"))
         assertEquals(2, root.getJSONArray("outbounds").length())
         val rules = root.getJSONObject("route").getJSONArray("rules")
         assertEquals(0, rules.length())
@@ -914,7 +916,7 @@ class AndroidBridgeContractTest {
     }
 
     @Test
-    fun generatedRealityQuicConfigStartsCurrentGoBridge() {
+    fun generatedRealityWithQuicCarrierStartsCurrentGoBridge() {
         val profile = AppConfig(
             name = "reality-quic",
             serverHost = "192.0.2.1",
@@ -923,13 +925,13 @@ class AndroidBridgeContractTest {
             transport = "raw",
             token = "android-reality-quic-test",
             sni = "example.com",
-            tunnelSecurity = "reality-quic",
+            tunnelSecurity = "reality",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
             realityShortId = "a65f93c1dbc5d54a",
             realityFingerprint = "chrome",
             mux = true,
-            muxMode = "quic",
-            muxUdpMode = "auto",
+            carrierMode = "quic",
+            carrierUdpMode = "auto",
             muxMaxSessions = 4,
             muxWarmSpare = 1,
         )
@@ -938,14 +940,17 @@ class AndroidBridgeContractTest {
         val config = profile.toBridgeJson(localListenAddr = "127.0.0.1:18086")
         val proxy = JSONObject(config).getJSONArray("outbounds").getJSONObject(0)
         val security = proxy.getJSONObject("security")
-        assertEquals("reality-quic", security.getString("type"))
+        assertEquals("reality", security.getString("type"))
         assertEquals("example.com", security.getString("server_name"))
         assertEquals("chrome", security.getString("fingerprint"))
-        assertFalse(security.has("spider_x"))
         assertFalse(security.has("insecure"))
+        val carrier = proxy.getJSONObject("carrier")
+        assertEquals("quic", carrier.getString("mode"))
+        assertEquals("auto", carrier.getString("udp_mode"))
         val mux = proxy.getJSONObject("mux")
-        assertEquals("quic", mux.getString("mode"))
-        assertEquals("auto", mux.getString("udp_mode"))
+        assertTrue(mux.getBoolean("enabled"))
+        assertFalse(mux.has("mode"))
+        assertFalse(mux.has("udp_mode"))
         assertEquals(4, mux.getInt("max_sessions"))
         assertEquals(1, mux.getInt("warm_spares"))
 
@@ -1104,7 +1109,7 @@ class AndroidBridgeContractTest {
         assertEquals("192.0.2.1:9443", proxy.getJSONArray("address").getString(0))
         assertFalse(proxy.has("server"))
         assertFalse(proxy.has("port"))
-        assertFalse(proxy.getJSONObject("mux").has("enabled"))
+        assertTrue(proxy.getJSONObject("mux").getBoolean("enabled"))
         assertEquals("tls", proxy.getJSONObject("security").getString("type"))
         assertEquals("example.com", proxy.getJSONObject("security").getString("server_name"))
         assertTrue(proxy.getJSONObject("security").getBoolean("insecure"))
@@ -1155,7 +1160,7 @@ class AndroidBridgeContractTest {
                   "short_id": "00",
                   "spider_x": "/"
                 },
-                "mux": {}
+                "mux": {"enabled": true}
               }],
               "route": {"default_outbound": "native", "rules": []},
               "dns": {}

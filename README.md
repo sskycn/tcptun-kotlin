@@ -73,7 +73,8 @@ func (e *Engine) StatusJSON() string
 
 The diagnostics page shows `CoreVersion` and `CoreBuildID`, so installed builds
 can be matched to the exact tcptun-go revision. CI and release builds currently
-pin `206b002e304f0b20cc2b1148eaa17b5cc91a985f` (`tcptun-go` v0.2.4).
+pin `79e9ab45d1e550a47b9cc3ff83cc09eec93ad44b`
+(`tcptun-go` v0.2.4-3-g79e9ab4).
 
 Optional telemetry must be opted into with `RegisterEvent`. The app registers:
 
@@ -110,8 +111,10 @@ StatusCallback state already folded into `TcptunState`; full `StatusJSON`
 reconciliation, loopback proxy probes, and the aggregate SOCKS/HTTP upstream
 probe run only on UI-driven refreshes. Unlock wakes and background logcat I/O
 are skipped.
-Generated profiles use group mux with no warm spare, so the Go runtime can retire
-idle carriers. When flow analysis is disabled and no app route is configured, the
+Generated profiles enable mux with no warm spare, so the Go runtime can retire
+idle physical connections. Carrier selection is configured independently through
+`carrier.mode`; `mux` only contains logical-stream pooling and resume options.
+When flow analysis is disabled and no app route is configured, the
 bridge also skips Android UID ownership lookups entirely.
 Native raw profiles using automatic TCP/QUIC REALITY can enable resumable mux
 streams. The structured editor persists and emits `mux.resume`,
@@ -137,9 +140,9 @@ Custom routing is stored in the strict JSON `route.rules`:
   ],
   "outbounds": [
     {"tag": "profile-a", "type": "native", "address": ["203.0.113.10:9443"],
-     "token": "secret", "transport": {"type": "raw"}, "mux": {}},
+     "token": "secret", "transport": {"type": "raw"}, "mux": {"enabled": true}},
     {"tag": "profile-b", "type": "native", "address": ["203.0.113.20:9443"],
-     "token": "secret", "transport": {"type": "raw"}, "mux": {}},
+     "token": "secret", "transport": {"type": "raw"}, "mux": {"enabled": true}},
     {"tag": "direct", "type": "direct"},
     {"tag": "profile-pool", "type": "balance", "affinity_ttl": "10m",
      "members": [
@@ -402,13 +405,13 @@ vless://00000000-0000-4000-8000-000000000000@203.0.113.10:443?security=reality&e
 Example native TCP REALITY format:
 
 ```text
-native://TOKEN@203.0.113.10:443?v=1&type=raw&security=reality-tcp&sni=example.com&fp=chrome&pbk=PUBLIC_KEY_PLACEHOLDER&sid=SHORT_ID&spx=%2F&mux=true#example
+native://TOKEN@203.0.113.10:443?v=1&type=raw&security=reality&sni=example.com&fp=chrome&pbk=PUBLIC_KEY_PLACEHOLDER&sid=SHORT_ID&spx=%2F&mux=true&carrier_mode=tcp#example
 ```
 
 Example native/QUIC REALITY format:
 
 ```text
-native://TOKEN@203.0.113.10:443?v=1&type=raw&security=reality-quic&sni=example.com&fp=chrome&pbk=PUBLIC_KEY_PLACEHOLDER&sid=SHORT_ID&mux=true&mux_mode=quic#example
+native://TOKEN@203.0.113.10:443?v=1&type=raw&security=reality&sni=example.com&fp=chrome&pbk=PUBLIC_KEY_PLACEHOLDER&sid=SHORT_ID&mux=true&carrier_mode=quic&carrier_udp_mode=auto#example
 ```
 
 ## Supported
@@ -417,9 +420,9 @@ native://TOKEN@203.0.113.10:443?v=1&type=raw&security=reality-quic&sni=example.c
 - `VpnService` with foreground service notification.
 - Config persistence with `SharedPreferences`.
 - Independently started local profiles with add, edit, delete, and share actions; active structured profiles form one dynamically weighted, session-affine pool.
-- URI sharing and compact `T3:` QR import/export for native, VLESS, VMess, and Trojan profiles, including TCP REALITY (`security=reality` / `reality-tcp`) and native QUIC REALITY (`security=reality-quic`). T3 preserves QUIC mux UDP mode and receive-window overrides; import remains compatible with legacy `T2:` payloads. Versioned payloads use tcptun-go's `EncodeProfile` / `DecodeProfile` bridge API and a dedicated profile DTO; Android only renders and scans the QR image.
+- URI sharing and compact `T3:` QR import/export for native, VLESS, VMess, and Trojan profiles. REALITY uses `security=reality`; `carrier_mode=tcp|auto|quic` selects the physical carrier independently. T3 preserves carrier selection, QUIC UDP mode, and receive-window overrides; import remains compatible with legacy `T2:` payloads and the removed `reality-tcp` / `reality-quic` forms. Versioned payloads use tcptun-go's `EncodeProfile` / `DecodeProfile` bridge API and a dedicated profile DTO; Android only renders and scans the QR image.
 - Protocol and transport selection UI.
-- Optional token, SNI, path, TLS, TLS insecure, REALITY short ID, mux mode, and upstream protocol UI. Native supports `reality` (TCP + optional auto-QUIC), `reality-tcp` (TCP only), and `reality-quic` (locks `native + raw + quic mux`).
+- Optional token, SNI, path, TLS, TLS insecure, REALITY short ID, carrier mode, mux limits, and upstream protocol UI. Native REALITY supports independent `tcp`, `auto`, and `quic` carrier selection; QUIC and automatic selection require mux.
 - IPv4/IPv6 default routes send all VPN traffic into tcptun-go; explicit rules run first and unmatched traffic uses the balanced active-profile pool.
 - Status display: `Stopped`, `Starting`, `Running`, `Error`.
 - Recent log display.

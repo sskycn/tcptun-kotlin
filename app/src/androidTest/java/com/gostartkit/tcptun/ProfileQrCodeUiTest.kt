@@ -84,8 +84,10 @@ class ProfileQrCodeUiTest {
             sni = "example.com",
             tunnelSecurity = "reality",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
+            realityShortId = "a65f93c1",
+            realityFingerprint = "chrome",
             mux = true,
-            muxMode = "group",
+            carrierMode = "auto",
             muxResume = true,
         )
         ProfileStore.save(composeRule.activity, ProfilesState(profiles = listOf(profile)))

@@ -114,6 +114,22 @@ object ProfileUriCodec {
         if (security == "reality-quic" && protocol != "native") {
             error("reality-quic requires native protocol")
         }
+        val mux = uri.getBooleanParameterCompat("mux", false)
+        val currentCarrierMode = uri.getQueryParameter("carrier_mode").orEmpty()
+        val currentCarrierUdpMode = uri.getQueryParameter("carrier_udp_mode").orEmpty()
+        val legacyCarrierMode = uri.getQueryParameter("mux_mode").orEmpty()
+        val legacyCarrierUdpMode = uri.getQueryParameter("mux_udp_mode").orEmpty()
+        val migrated = migratedCarrierFields(
+            tunnelSecurity = security,
+            protocol = protocol,
+            mux = mux,
+            carrierMode = currentCarrierMode.ifBlank { legacyCarrierMode },
+            carrierUdpMode = currentCarrierUdpMode.ifBlank { legacyCarrierUdpMode },
+            legacyMuxSchema =
+                currentCarrierMode.isBlank() &&
+                    currentCarrierUdpMode.isBlank() &&
+                    (legacyCarrierMode.isNotBlank() || legacyCarrierUdpMode.isNotBlank()),
+        )
         val transport = transportFromType(type)
         // Keep transport path independent of REALITY SpiderX. Falling back to
         // spx for raw profiles produced non-default paths (e.g. "/") that break
@@ -141,16 +157,18 @@ object ProfileUriCodec {
             tlsInsecure = uri.getBooleanParameterCompat("allowInsecure", false) ||
                 uri.getBooleanParameterCompat("tlsInsecure", false) ||
                 uri.getBooleanParameterCompat("insecure", false),
-            tunnelSecurity = security.takeIf { it in AppConfig.RealitySecurityTypes }.orEmpty(),
+            tunnelSecurity = migrated.tunnelSecurity.takeIf {
+                it in AppConfig.RealitySecurityTypes
+            }.orEmpty(),
             flow = uri.getQueryParameter("flow").orEmpty(),
             realityPublicKey = uri.getQueryParameter("pbk").orEmpty(),
             realityShortId = uri.getQueryParameter("sid").orEmpty()
                 .ifBlank { uri.getQueryParameter("reality_short_id").orEmpty() },
             realityFingerprint = uri.getQueryParameter("fp").orEmpty(),
             realitySpiderX = uri.getQueryParameter("spx").orEmpty(),
-            mux = uri.getBooleanParameterCompat("mux", false),
-            muxMode = uri.getQueryParameter("mux_mode").orEmpty().trim().lowercase(),
-            muxUdpMode = uri.getQueryParameter("mux_udp_mode").orEmpty().trim().lowercase(),
+            mux = mux,
+            carrierMode = migrated.carrierMode,
+            carrierUdpMode = migrated.carrierUdpMode,
             muxResume = uri.getBooleanParameterCompat("mux_resume", false),
             muxResumeTimeoutMillis = uri.getDurationMillisParameter("mux_resume_timeout"),
             muxResumeBufferSize = uri.getIntParameter("mux_resume_buffer_size"),
@@ -197,8 +215,8 @@ object ProfileUriCodec {
             error("reality-quic requires native protocol")
         }
         val security = when {
-            tlsValue in AppConfig.TcpRealitySecurityTypes -> tlsValue
-            securityField in AppConfig.TcpRealitySecurityTypes -> securityField
+            tlsValue in setOf("reality", "reality-tcp") -> tlsValue
+            securityField in setOf("reality", "reality-tcp") -> securityField
             tlsValue.isBlank() || tlsValue == "none" -> {
                 if (securityField == "reality") "reality" else ""
             }
@@ -210,6 +228,25 @@ object ProfileUriCodec {
             obj.has("mux") -> obj.optBoolean("mux", false)
             else -> false
         }
+        val currentCarrierMode = obj.optString("tcptun_carrier_mode")
+            .ifBlank { obj.optString("carrier_mode") }
+        val currentCarrierUdpMode = obj.optString("tcptun_carrier_udp_mode")
+            .ifBlank { obj.optString("carrier_udp_mode") }
+        val legacyCarrierMode = obj.optString("tcptun_mux_mode")
+            .ifBlank { obj.optString("mux_mode") }
+        val legacyCarrierUdpMode = obj.optString("tcptun_mux_udp_mode")
+            .ifBlank { obj.optString("mux_udp_mode") }
+        val migrated = migratedCarrierFields(
+            tunnelSecurity = security,
+            protocol = "vmess",
+            mux = mux,
+            carrierMode = currentCarrierMode.ifBlank { legacyCarrierMode },
+            carrierUdpMode = currentCarrierUdpMode.ifBlank { legacyCarrierUdpMode },
+            legacyMuxSchema =
+                currentCarrierMode.isBlank() &&
+                    currentCarrierUdpMode.isBlank() &&
+                    (legacyCarrierMode.isNotBlank() || legacyCarrierUdpMode.isNotBlank()),
+        )
         return AppConfig(
             id = UUID.randomUUID().toString(),
             name = obj.optString("ps", host).ifBlank { host },
@@ -222,15 +259,17 @@ object ProfileUriCodec {
             path = obj.optString("path", "/proxy").ifBlank { "/proxy" },
             tls = security == "tls",
             tlsInsecure = obj.optBoolean("allowInsecure", false) || obj.optBoolean("tlsInsecure", false),
-            tunnelSecurity = security.takeIf { it in AppConfig.TcpRealitySecurityTypes }.orEmpty(),
+            tunnelSecurity = migrated.tunnelSecurity.takeIf {
+                it in AppConfig.RealitySecurityTypes
+            }.orEmpty(),
             flow = obj.optString("tcptun_flow").ifBlank { obj.optString("flow") },
             realityPublicKey = obj.optString("pbk"),
             realityShortId = obj.optString("sid").ifBlank { obj.optString("reality_short_id") },
             realityFingerprint = obj.optString("fp"),
             realitySpiderX = obj.optString("spx"),
             mux = mux,
-            muxMode = obj.optString("tcptun_mux_mode").ifBlank { obj.optString("mux_mode") }.lowercase(),
-            muxUdpMode = obj.optString("tcptun_mux_udp_mode").ifBlank { obj.optString("mux_udp_mode") }.lowercase(),
+            carrierMode = migrated.carrierMode,
+            carrierUdpMode = migrated.carrierUdpMode,
             muxResume = obj.optBoolean("tcptun_mux_resume", obj.optBoolean("mux_resume", false)),
             muxResumeTimeoutMillis = obj.optDurationMillis(
                 "tcptun_mux_resume_timeout",
@@ -299,6 +338,22 @@ object ProfileUriCodec {
             "", "none", "tls" -> ""
             else -> tunnelSecurity
         }
+        val mux = obj.optBoolean("tunnel_mux", true)
+        val currentCarrierMode = obj.optString("tunnel_carrier_mode")
+        val currentCarrierUdpMode = obj.optString("tunnel_carrier_udp_mode")
+        val legacyCarrierMode = obj.optString("tunnel_mux_mode")
+        val legacyCarrierUdpMode = obj.optString("tunnel_mux_udp_mode")
+        val migrated = migratedCarrierFields(
+            tunnelSecurity = normalizedSecurity,
+            protocol = protocol,
+            mux = mux,
+            carrierMode = currentCarrierMode.ifBlank { legacyCarrierMode },
+            carrierUdpMode = currentCarrierUdpMode.ifBlank { legacyCarrierUdpMode },
+            legacyMuxSchema =
+                currentCarrierMode.isBlank() &&
+                    currentCarrierUdpMode.isBlank() &&
+                    (legacyCarrierMode.isNotBlank() || legacyCarrierUdpMode.isNotBlank()),
+        )
         val sni = obj.optString("tunnel_tls_server_name").ifBlank {
             obj.optString("reality_server_name")
         }
@@ -314,7 +369,7 @@ object ProfileUriCodec {
             path = obj.optString("tunnel_path", "/proxy").ifBlank { "/proxy" },
             tls = obj.optBoolean("tunnel_tls", false) || tunnelSecurity == "tls",
             tlsInsecure = obj.optBoolean("tunnel_tls_insecure", false),
-            tunnelSecurity = normalizedSecurity,
+            tunnelSecurity = migrated.tunnelSecurity,
             flow = obj.optString("tunnel_flow"),
             realityPublicKey = obj.optString("reality_public_key"),
             realityShortId = obj.optString("reality_short_id").ifBlank {
@@ -322,9 +377,9 @@ object ProfileUriCodec {
             },
             realityFingerprint = obj.optString("reality_fingerprint"),
             realitySpiderX = obj.optString("reality_spider_x"),
-            mux = obj.optBoolean("tunnel_mux", true),
-            muxMode = obj.optString("tunnel_mux_mode").lowercase(),
-            muxUdpMode = obj.optString("tunnel_mux_udp_mode").lowercase(),
+            mux = mux,
+            carrierMode = migrated.carrierMode,
+            carrierUdpMode = migrated.carrierUdpMode,
             muxResume = obj.optBoolean("tunnel_mux_resume", false),
             muxResumeTimeoutMillis = obj.optDurationMillis("tunnel_mux_resume_timeout"),
             muxResumeBufferSize = obj.optInt("tunnel_mux_resume_buffer_size", 0),
@@ -337,13 +392,12 @@ object ProfileUriCodec {
 
     private fun encodeVMess(config: AppConfig): String? {
         val tunnelSecurity = config.tunnelSecurity.trim().lowercase()
-        if (tunnelSecurity == "reality-quic") return null
         val host = config.serverHost.trim()
         val port = config.serverPort.trim()
         val token = config.token.trim()
         if (host.isBlank() || port.isBlank() || token.isBlank()) return null
         val tlsField = when {
-            tunnelSecurity in AppConfig.TcpRealitySecurityTypes -> tunnelSecurity
+            tunnelSecurity == "reality" -> "reality"
             config.tls -> "tls"
             else -> ""
         }
@@ -364,8 +418,8 @@ object ProfileUriCodec {
             .put("allowInsecure", config.tlsInsecure)
             .put("tcptun_mux", config.mux)
             .put("tcptun_network", AndroidTunNetworks.joinToString(","))
-        putJsonIfNotBlank(obj, "tcptun_mux_mode", config.muxMode)
-        putJsonIfNotBlank(obj, "tcptun_mux_udp_mode", config.muxUdpMode)
+        putJsonIfNotBlank(obj, "tcptun_carrier_mode", config.carrierMode)
+        putJsonIfNotBlank(obj, "tcptun_carrier_udp_mode", config.carrierUdpMode)
         if (config.muxResume) obj.put("tcptun_mux_resume", true)
         if (config.muxResumeTimeoutMillis > 0) {
             obj.put("tcptun_mux_resume_timeout", "${config.muxResumeTimeoutMillis}ms")
@@ -401,9 +455,7 @@ object ProfileUriCodec {
             putIfNotBlank(params, "pbk", config.realityPublicKey)
             putIfNotBlank(params, "sid", config.realityShortId)
             putIfNotBlank(params, "fp", config.realityFingerprint)
-            if (security in AppConfig.TcpRealitySecurityTypes) {
-                putIfNotBlank(params, "spx", config.realitySpiderX.ifBlank { config.path })
-            }
+            putIfNotBlank(params, "spx", config.realitySpiderX.ifBlank { config.path })
         }
         params["type"] = typeFromTransport(config.transport)
         putIfNotBlank(params, "flow", config.flow)
@@ -412,8 +464,8 @@ object ProfileUriCodec {
         if (config.transport != "raw") putIfNotBlank(params, "path", config.path)
         params["network"] = AndroidTunNetworks.joinToString(",")
         params["mux"] = config.mux.toString()
-        putIfNotBlank(params, "mux_mode", config.muxMode)
-        putIfNotBlank(params, "mux_udp_mode", config.muxUdpMode)
+        putIfNotBlank(params, "carrier_mode", config.carrierMode)
+        putIfNotBlank(params, "carrier_udp_mode", config.carrierUdpMode)
         if (config.muxResume) params["mux_resume"] = "true"
         if (config.muxResumeTimeoutMillis > 0) {
             params["mux_resume_timeout"] = "${config.muxResumeTimeoutMillis}ms"

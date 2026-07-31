@@ -212,8 +212,8 @@
     <string name="field_tls">TLS</string>
     <string name="field_tls_insecure">TLS insecure</string>
     <string name="field_mux">Mux</string>
-    <string name="field_mux_mode">Mux 模式</string>
-    <string name="field_mux_udp_mode">Mux UDP 模式</string>
+    <string name="field_carrier_mode">承载模式</string>
+    <string name="field_carrier_udp_mode">承载 UDP 模式</string>
     <string name="field_mux_max_sessions">最大真实连接数</string>
     <string name="field_mux_max_sessions_hint">留空：核心默认 4 · 范围 1–32</string>
     <string name="field_mux_max_streams_per_session">每条真实连接的最大逻辑流数</string>
@@ -225,7 +225,7 @@
     <string name="field_mux_resume_timeout_hint">留空：15000 · 范围 100–300000</string>
     <string name="field_mux_resume_buffer">恢复缓冲区（字节）</string>
     <string name="field_mux_resume_buffer_hint">留空：4194304 · 范围 65536–67108864</string>
-    <string name="mux_resume_note">服务端必须启用相同能力；仅支持 native + raw + REALITY 自动承载与 group mux。全量 JSON 模式可覆盖运行时全局缓冲预算。</string>
+    <string name="mux_resume_note">服务端必须启用相同能力；仅支持 native + raw + REALITY 自动承载。全量 JSON 模式可覆盖运行时全局缓冲预算。</string>
     <string name="diag_mux_sessions">当前真实连接数</string>
     <string name="diag_mux_streams">当前逻辑流数</string>
     <string name="full_config_mode">完整 tcptun-go JSON</string>

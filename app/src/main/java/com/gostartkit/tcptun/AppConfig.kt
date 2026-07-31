@@ -25,22 +25,45 @@ internal fun managedRouteInboundTags(routeLocalProxyTraffic: Boolean): JSONArray
 internal fun normalizeStoredServerHost(value: String): String =
     value.trim().removeSurrounding("[", "]")
 
-internal fun migratedMuxUdpMode(
+internal data class MigratedCarrierFields(
+    val tunnelSecurity: String,
+    val carrierMode: String,
+    val carrierUdpMode: String,
+)
+
+internal fun migratedCarrierFields(
     tunnelSecurity: String,
-    muxMode: String,
-    muxUdpMode: String,
-): String = muxUdpMode.trim().lowercase().ifBlank {
-    // Older Android builds parsed reality-quic URIs before they persisted
-    // mux_udp_mode. Current tcptun-go's generated client configuration uses
-    // auto, while an omitted value becomes reliable.
-    if (
-        tunnelSecurity.trim().equals("reality-quic", ignoreCase = true) &&
-        muxMode.trim().equals("quic", ignoreCase = true)
-    ) {
-        "auto"
-    } else {
-        ""
+    protocol: String,
+    mux: Boolean,
+    carrierMode: String,
+    carrierUdpMode: String,
+    legacyMuxSchema: Boolean,
+): MigratedCarrierFields {
+    val legacySecurity = tunnelSecurity.trim().lowercase()
+    val security = when (legacySecurity) {
+        "reality-tcp", "reality-quic" -> "reality"
+        else -> legacySecurity
     }
+    val mode = when {
+        legacySecurity == "reality-tcp" -> "tcp"
+        legacySecurity == "reality-quic" -> "quic"
+        carrierMode.trim().equals("group", ignoreCase = true) ->
+            if (protocol == "native" && security == "reality" && mux) "auto" else "tcp"
+        legacyMuxSchema &&
+            carrierMode.isBlank() &&
+            protocol == "native" &&
+            security == "reality" &&
+            mux -> "auto"
+        else -> carrierMode.trim().lowercase()
+    }
+    val udpMode = carrierUdpMode.trim().lowercase().ifBlank {
+        if (legacySecurity == "reality-quic") "auto" else ""
+    }
+    return MigratedCarrierFields(
+        tunnelSecurity = security,
+        carrierMode = mode,
+        carrierUdpMode = udpMode,
+    )
 }
 
 internal fun defaultNativeTunDnsConfig(): JSONObject = JSONObject()
@@ -95,18 +118,18 @@ data class AppConfig(
     val realityFingerprint: String = "",
     val realitySpiderX: String = "",
     val mux: Boolean = true,
-    val muxMode: String = "",
-    val muxUdpMode: String = "",
+    val carrierMode: String = "",
+    val carrierUdpMode: String = "",
     val muxResume: Boolean = false,
     val muxResumeTimeoutMillis: Int = 0,
     val muxResumeBufferSize: Int = 0,
     val muxMaxSessions: Int = 0,
     val muxMaxStreamsPerSession: Int = 0,
     val muxWarmSpare: Int = 0,
-    val muxInitialStreamReceiveWindow: Int = 0,
-    val muxMaxStreamReceiveWindow: Int = 0,
-    val muxInitialConnectionReceiveWindow: Int = 0,
-    val muxMaxConnectionReceiveWindow: Int = 0,
+    val carrierInitialStreamReceiveWindow: Int = 0,
+    val carrierMaxStreamReceiveWindow: Int = 0,
+    val carrierInitialConnectionReceiveWindow: Int = 0,
+    val carrierMaxConnectionReceiveWindow: Int = 0,
     val upstreamProtocol: String = "socks5",
     val rawConfigJson: String = "",
 ) {
@@ -136,43 +159,29 @@ data class AppConfig(
         val normalizedSecurity = tunnelSecurity.trim().lowercase()
         if (normalizedSecurity !in TunnelSecurityTypes) return "unsupported security: $tunnelSecurity"
         if (normalizedSecurity.isNotBlank() && tls) return "TLS cannot be combined with tunnel security"
-        // native supports reality (TCP + optional auto-QUIC), reality-tcp (TCP only),
-        // and reality-quic (QUIC only). Other tunnel protocols only use TCP REALITY.
-        if (normalizedSecurity in TcpRealitySecurityTypes && transport != "raw") {
-            return "$normalizedSecurity requires raw transport"
+        if (normalizedSecurity == "reality" && transport != "raw") {
+            return "reality requires raw transport"
         }
-        if (normalizedSecurity in RealitySecurityTypes) {
+        if (normalizedSecurity == "reality") {
             if (sni.isBlank()) return "$normalizedSecurity requires SNI"
             if (realityPublicKey.isBlank()) return "$normalizedSecurity requires a public key"
         }
-        if (normalizedSecurity == "reality-quic") {
-            if (protocol != "native") return "reality-quic requires native protocol"
-            if (transport != "raw") return "reality-quic requires raw transport"
-            if (!mux || !muxMode.equals("quic", ignoreCase = true)) {
-                return "reality-quic requires QUIC mux"
-            }
-            if (tlsInsecure) return "reality-quic cannot use TLS insecure"
-            if (realityShortId.isBlank()) return "reality-quic requires a short ID"
-            if (realitySpiderX.isNotBlank()) return "reality-quic does not use SpiderX"
-            val fingerprint = realityFingerprint.trim().lowercase()
-            if (fingerprint.isNotBlank() && fingerprint != "chrome") {
-                return "reality-quic currently supports only the chrome fingerprint"
-            }
+        val normalizedCarrierMode = carrierMode.trim().lowercase()
+        if (normalizedCarrierMode !in CarrierModes) return "unsupported carrier mode: $carrierMode"
+        val normalizedCarrierUdpMode = carrierUdpMode.trim().lowercase()
+        if (normalizedCarrierUdpMode !in CarrierUdpModes) {
+            return "unsupported carrier UDP mode: $carrierUdpMode"
         }
-        val normalizedMuxMode = muxMode.trim().lowercase()
-        if (normalizedMuxMode !in MuxModes) return "unsupported mux mode: $muxMode"
-        val normalizedMuxUdpMode = muxUdpMode.trim().lowercase()
-        if (normalizedMuxUdpMode !in MuxUdpModes) return "unsupported mux UDP mode: $muxUdpMode"
-        val muxReceiveWindows = listOf(
-            muxInitialStreamReceiveWindow,
-            muxMaxStreamReceiveWindow,
-            muxInitialConnectionReceiveWindow,
-            muxMaxConnectionReceiveWindow,
+        val carrierReceiveWindows = listOf(
+            carrierInitialStreamReceiveWindow,
+            carrierMaxStreamReceiveWindow,
+            carrierInitialConnectionReceiveWindow,
+            carrierMaxConnectionReceiveWindow,
         )
         val resumableSettingsConfigured =
             muxResume || muxResumeTimeoutMillis != 0 || muxResumeBufferSize != 0
-        if (!mux && (normalizedMuxMode.isNotBlank() || normalizedMuxUdpMode.isNotBlank() || resumableSettingsConfigured || muxMaxSessions != 0 || muxMaxStreamsPerSession != 0 || muxWarmSpare != 0 || muxReceiveWindows.any { it != 0 })) {
-            return "mux must be enabled when mux pool limits are configured"
+        if (!mux && (resumableSettingsConfigured || muxMaxSessions != 0 || muxMaxStreamsPerSession != 0 || muxWarmSpare != 0)) {
+            return "mux must be enabled when mux options are configured"
         }
         if (!muxResume && (muxResumeTimeoutMillis != 0 || muxResumeBufferSize != 0)) {
             return "mux resume must be enabled when resume limits are configured"
@@ -183,8 +192,8 @@ data class AppConfig(
             if (normalizedSecurity != "reality") {
                 return "mux resume requires reality automatic TCP/QUIC security"
             }
-            if (normalizedMuxMode.isNotBlank() && normalizedMuxMode != "group") {
-                return "mux resume requires group mux mode"
+            if (normalizedCarrierMode != "auto") {
+                return "mux resume requires automatic carrier mode"
             }
         }
         if (muxResumeTimeoutMillis !in 0..300_000) {
@@ -199,23 +208,23 @@ data class AppConfig(
         if (muxResumeBufferSize in 1..65_535) {
             return "mux resume buffer must be between 65536 and 67108864 bytes when set"
         }
-        if (normalizedMuxMode != "quic" && normalizedMuxUdpMode.isNotBlank()) {
-            return "mux UDP mode requires QUIC mux"
+        if (normalizedCarrierMode !in setOf("quic", "auto") && normalizedCarrierUdpMode.isNotBlank()) {
+            return "carrier UDP mode requires QUIC or automatic carrier mode"
         }
-        if (normalizedMuxMode != "quic" && muxReceiveWindows.any { it != 0 }) {
-            return "mux receive windows require QUIC mux"
+        if (normalizedCarrierMode !in setOf("quic", "auto") && carrierReceiveWindows.any { it != 0 }) {
+            return "carrier receive windows require QUIC or automatic carrier mode"
         }
-        if (muxInitialStreamReceiveWindow !in 0..16_777_216 || muxMaxStreamReceiveWindow !in 0..16_777_216) {
-            return "mux stream receive windows must be between 1 and 16777216 bytes when set"
+        if (carrierInitialStreamReceiveWindow !in 0..16_777_216 || carrierMaxStreamReceiveWindow !in 0..16_777_216) {
+            return "carrier stream receive windows must be between 1 and 16777216 bytes when set"
         }
-        if (muxInitialConnectionReceiveWindow !in 0..67_108_864 || muxMaxConnectionReceiveWindow !in 0..67_108_864) {
-            return "mux connection receive windows must be between 1 and 67108864 bytes when set"
+        if (carrierInitialConnectionReceiveWindow !in 0..67_108_864 || carrierMaxConnectionReceiveWindow !in 0..67_108_864) {
+            return "carrier connection receive windows must be between 1 and 67108864 bytes when set"
         }
-        if (muxMaxStreamReceiveWindow != 0 && muxInitialStreamReceiveWindow > muxMaxStreamReceiveWindow) {
-            return "mux initial stream receive window exceeds maximum"
+        if (carrierMaxStreamReceiveWindow != 0 && carrierInitialStreamReceiveWindow > carrierMaxStreamReceiveWindow) {
+            return "carrier initial stream receive window exceeds maximum"
         }
-        if (muxMaxConnectionReceiveWindow != 0 && muxInitialConnectionReceiveWindow > muxMaxConnectionReceiveWindow) {
-            return "mux initial connection receive window exceeds maximum"
+        if (carrierMaxConnectionReceiveWindow != 0 && carrierInitialConnectionReceiveWindow > carrierMaxConnectionReceiveWindow) {
+            return "carrier initial connection receive window exceeds maximum"
         }
         if (muxMaxSessions !in 0..32) return "mux max sessions must be between 1 and 32 when set"
         if (muxMaxStreamsPerSession !in 0..4096) return "mux max streams must be between 1 and 4096 when set"
@@ -224,14 +233,22 @@ data class AppConfig(
         if (muxWarmSpare !in 0 until effectiveMuxSessions) {
             return "mux warm spares must be between 0 and max sessions minus 1"
         }
-        if (normalizedMuxMode == "quic") {
-            if (protocol != "native") return "QUIC mux requires native protocol"
-            if (transport != "raw") return "QUIC mux requires raw transport"
-            if (!tls && normalizedSecurity != "reality-quic") {
-                return "QUIC mux requires TLS or reality-quic security"
+        if (normalizedCarrierMode in setOf("quic", "auto")) {
+            if (protocol != "native") return "$normalizedCarrierMode carrier requires native protocol"
+            if (transport != "raw") return "$normalizedCarrierMode carrier requires raw transport"
+            if (!mux) return "$normalizedCarrierMode carrier requires mux"
+            if (normalizedCarrierMode == "auto" && normalizedSecurity != "reality") {
+                return "automatic carrier requires reality security"
             }
-            if (normalizedSecurity.isNotBlank() && normalizedSecurity != "reality-quic") {
-                return "QUIC mux cannot be combined with $normalizedSecurity security"
+            if (normalizedCarrierMode == "quic" && !tls && normalizedSecurity != "reality") {
+                return "QUIC carrier requires TLS or reality security"
+            }
+            if (normalizedSecurity == "reality") {
+                if (realityShortId.isBlank()) return "$normalizedCarrierMode carrier requires a short ID"
+                val fingerprint = realityFingerprint.trim().lowercase()
+                if (fingerprint.isNotBlank() && fingerprint != "chrome") {
+                    return "$normalizedCarrierMode carrier currently supports only the chrome fingerprint"
+                }
             }
         }
         if (path.isBlank()) return "path is required"
@@ -261,8 +278,8 @@ data class AppConfig(
             realityShortId,
             realityFingerprint,
             realitySpiderX,
-            muxMode,
-            muxUdpMode,
+            carrierMode,
+            carrierUdpMode,
             upstreamProtocol,
         ).all { it.length <= MaxProfileUriLength }
     }
@@ -312,26 +329,47 @@ data class AppConfig(
                     .put("type", transport)
                     .put("path", normalizedPath()),
             )
+        val normalizedCarrierMode = carrierMode.trim().lowercase()
+        val normalizedCarrierUdpMode = carrierUdpMode.trim().lowercase()
+        if (
+            normalizedCarrierMode.isNotBlank() ||
+            normalizedCarrierUdpMode.isNotBlank() ||
+            carrierInitialStreamReceiveWindow > 0 ||
+            carrierMaxStreamReceiveWindow > 0 ||
+            carrierInitialConnectionReceiveWindow > 0 ||
+            carrierMaxConnectionReceiveWindow > 0
+        ) {
+            proxy.put(
+                "carrier",
+                JSONObject().apply {
+                    if (normalizedCarrierMode.isNotBlank()) put("mode", normalizedCarrierMode)
+                    if (normalizedCarrierUdpMode.isNotBlank()) put("udp_mode", normalizedCarrierUdpMode)
+                    if (carrierInitialStreamReceiveWindow > 0) {
+                        put("initial_stream_receive_window", carrierInitialStreamReceiveWindow)
+                    }
+                    if (carrierMaxStreamReceiveWindow > 0) {
+                        put("max_stream_receive_window", carrierMaxStreamReceiveWindow)
+                    }
+                    if (carrierInitialConnectionReceiveWindow > 0) {
+                        put("initial_connection_receive_window", carrierInitialConnectionReceiveWindow)
+                    }
+                    if (carrierMaxConnectionReceiveWindow > 0) {
+                        put("max_connection_receive_window", carrierMaxConnectionReceiveWindow)
+                    }
+                },
+            )
+        }
         if (mux) {
             proxy.put(
                 "mux",
                 JSONObject().apply {
-                    muxMode.trim().takeIf { it.isNotBlank() }?.let { put("mode", it.lowercase()) }
-                    muxUdpMode.trim().takeIf { it.isNotBlank() }?.let { put("udp_mode", it.lowercase()) }
+                    put("enabled", true)
                     if (muxResume) put("resume", true)
                     if (muxResumeTimeoutMillis > 0) put("resume_timeout", "${muxResumeTimeoutMillis}ms")
                     if (muxResumeBufferSize > 0) put("resume_buffer_size", muxResumeBufferSize)
                     if (muxMaxSessions > 0) put("max_sessions", muxMaxSessions)
                     if (muxMaxStreamsPerSession > 0) put("max_streams_per_session", muxMaxStreamsPerSession)
                     if (muxWarmSpare > 0) put("warm_spares", muxWarmSpare)
-                    if (muxInitialStreamReceiveWindow > 0) put("initial_stream_receive_window", muxInitialStreamReceiveWindow)
-                    if (muxMaxStreamReceiveWindow > 0) put("max_stream_receive_window", muxMaxStreamReceiveWindow)
-                    if (muxInitialConnectionReceiveWindow > 0) {
-                        put("initial_connection_receive_window", muxInitialConnectionReceiveWindow)
-                    }
-                    if (muxMaxConnectionReceiveWindow > 0) {
-                        put("max_connection_receive_window", muxMaxConnectionReceiveWindow)
-                    }
                 },
             )
         }
@@ -341,19 +379,16 @@ data class AppConfig(
             else -> proxy.put("token", token.trim())
         }
         val normalizedSecurity = tunnelSecurity.trim().lowercase()
-        if (normalizedSecurity in RealitySecurityTypes) {
+        if (normalizedSecurity == "reality") {
             proxy.put(
                 "security",
                 JSONObject().apply {
-                    put("type", normalizedSecurity)
+                    put("type", "reality")
                     .put("server_name", sni.trim())
                     .put("fingerprint", realityFingerprint.trim())
                     .put("public_key", realityPublicKey.trim())
                     .put("short_id", realityShortId.trim())
-                    // TCP REALITY variants use SpiderX; reality-quic does not.
-                    if (normalizedSecurity in TcpRealitySecurityTypes) {
-                        put("spider_x", realitySpiderX.trim())
-                    }
+                    .put("spider_x", realitySpiderX.trim())
                 },
             )
         } else if (tls) {
@@ -527,7 +562,7 @@ data class AppConfig(
         inbound.remove("listen_addresses")
         inbound.remove("port")
         inbound.remove("outbound")
-        migrateMux(inbound)
+        migrateCarrierAndMux(inbound)
         migrateTransportSecurity(inbound)
     }
 
@@ -536,7 +571,7 @@ data class AppConfig(
         if (addresses.length() > 0) outbound.put("address", addresses)
         outbound.remove("server")
         outbound.remove("port")
-        migrateMux(outbound)
+        migrateCarrierAndMux(outbound)
         migrateTransportSecurity(outbound)
     }
 
@@ -635,12 +670,56 @@ data class AppConfig(
         return JSONArray().apply { hosts.distinct().forEach { put(joinHostPort(it, port)) } }
     }
 
-    private fun migrateMux(endpoint: JSONObject) {
-        val muxConfig = endpoint.optJSONObject("mux") ?: return
-        if (muxConfig.has("enabled") && !muxConfig.optBoolean("enabled")) {
-            endpoint.remove("mux")
-        } else {
-            muxConfig.remove("enabled")
+    private fun migrateCarrierAndMux(endpoint: JSONObject) {
+        val muxConfig = endpoint.optJSONObject("mux")
+        val securityConfig = endpoint.optJSONObject("security")
+        val legacySecurity = securityConfig?.optString("type")?.trim()?.lowercase().orEmpty()
+        val carrierConfig = endpoint.optJSONObject("carrier")
+            ?: JSONObject().also { endpoint.put("carrier", it) }
+        val legacyMuxSchema = muxConfig != null && !muxConfig.has("enabled")
+
+        val carrierKeys = listOf(
+            "mode",
+            "udp_mode",
+            "initial_stream_receive_window",
+            "max_stream_receive_window",
+            "initial_connection_receive_window",
+            "max_connection_receive_window",
+        )
+        muxConfig?.let { mux ->
+            carrierKeys.forEach { key ->
+                if (!carrierConfig.has(key) && mux.has(key)) {
+                    carrierConfig.put(key, mux.get(key))
+                }
+                mux.remove(key)
+            }
+        }
+
+        val migrated = migratedCarrierFields(
+            tunnelSecurity = legacySecurity,
+            protocol = endpoint.optString("type").trim().lowercase(),
+            mux = muxConfig != null && (!muxConfig.has("enabled") || muxConfig.optBoolean("enabled")),
+            carrierMode = carrierConfig.optString("mode"),
+            carrierUdpMode = carrierConfig.optString("udp_mode"),
+            legacyMuxSchema = legacyMuxSchema,
+        )
+        if (legacySecurity == "reality-tcp" || legacySecurity == "reality-quic") {
+            securityConfig?.put("type", migrated.tunnelSecurity)
+        }
+        if (migrated.carrierMode.isNotBlank()) {
+            carrierConfig.put("mode", migrated.carrierMode)
+        }
+        if (migrated.carrierUdpMode.isNotBlank()) {
+            carrierConfig.put("udp_mode", migrated.carrierUdpMode)
+        }
+        if (carrierConfig.length() == 0) endpoint.remove("carrier")
+
+        if (muxConfig != null) {
+            if (muxConfig.has("enabled") && !muxConfig.optBoolean("enabled")) {
+                endpoint.remove("mux")
+            } else {
+                muxConfig.put("enabled", true)
+            }
         }
     }
 
@@ -734,14 +813,11 @@ data class AppConfig(
         val Protocols = listOf("native", "vless", "vmess", "trojan")
         val Transports = listOf("raw", "ws", "h2", "h3")
         val UpstreamProtocols = LocalProxyProtocols
-        val MuxModes = listOf("", "group", "quic")
-        val MuxUdpModes = listOf("", "reliable", "auto", "datagram")
-        // Matches tcptun-go: reality (TCP + native auto-QUIC), reality-tcp (TCP only),
-        // reality-quic (native QUIC REALITY).
-        val SecurityOptions = listOf("none", "tls", "reality", "reality-tcp", "reality-quic")
-        val TunnelSecurityTypes = listOf("", "reality", "reality-tcp", "reality-quic")
-        val TcpRealitySecurityTypes = setOf("reality", "reality-tcp")
-        val RealitySecurityTypes = setOf("reality", "reality-tcp", "reality-quic")
+        val CarrierModes = listOf("", "tcp", "auto", "quic")
+        val CarrierUdpModes = listOf("", "reliable", "auto", "datagram")
+        val SecurityOptions = listOf("none", "tls", "reality")
+        val TunnelSecurityTypes = listOf("", "reality")
+        val RealitySecurityTypes = setOf("reality")
         private const val AndroidVpnInboundTag = "android-vpn"
         private val WildcardHosts = setOf("0.0.0.0", "::", "*")
         private val LoopbackHosts = setOf("127.0.0.1", "::1", "localhost")
@@ -752,44 +828,66 @@ data class AppConfig(
         }
 
         fun fromJson(obj: JSONObject): AppConfig {
-            val tunnelSecurity = obj.optString("tunnelSecurity").trim().lowercase()
-            val muxMode = obj.optString("muxMode").trim().lowercase()
-            val muxUdpMode = migratedMuxUdpMode(
-                tunnelSecurity = tunnelSecurity,
-                muxMode = muxMode,
-                muxUdpMode = obj.optString("muxUdpMode"),
+            val protocol = obj.optString("protocol", "native")
+            val mux = obj.optBoolean("mux", true)
+            val currentCarrierSchema =
+                obj.has("carrierMode") ||
+                    obj.has("carrierUdpMode") ||
+                    obj.has("carrierInitialStreamReceiveWindow") ||
+                    obj.has("carrierMaxStreamReceiveWindow") ||
+                    obj.has("carrierInitialConnectionReceiveWindow") ||
+                    obj.has("carrierMaxConnectionReceiveWindow")
+            val migrated = migratedCarrierFields(
+                tunnelSecurity = obj.optString("tunnelSecurity"),
+                protocol = protocol,
+                mux = mux,
+                carrierMode = obj.optString("carrierMode").ifBlank { obj.optString("muxMode") },
+                carrierUdpMode = obj.optString("carrierUdpMode").ifBlank { obj.optString("muxUdpMode") },
+                legacyMuxSchema = !currentCarrierSchema,
             )
             return AppConfig(
                 id = obj.optString("id").ifBlank { UUID.randomUUID().toString() },
                 name = obj.optString("name", "proxy").ifBlank { "proxy" },
                 serverHost = normalizeStoredServerHost(obj.optString("serverHost")),
                 serverPort = obj.optString("serverPort", "9443"),
-                protocol = obj.optString("protocol", "native"),
+                protocol = protocol,
                 transport = obj.optString("transport", "raw"),
                 token = obj.optString("token"),
                 sni = obj.optString("sni"),
                 path = obj.optString("path", "/proxy"),
                 tls = obj.optBoolean("tls", false),
                 tlsInsecure = obj.optBoolean("tlsInsecure", false),
-                tunnelSecurity = tunnelSecurity,
+                tunnelSecurity = migrated.tunnelSecurity,
                 flow = obj.optString("flow"),
                 realityPublicKey = obj.optString("realityPublicKey"),
                 realityShortId = obj.optString("realityShortId"),
                 realityFingerprint = obj.optString("realityFingerprint"),
                 realitySpiderX = obj.optString("realitySpiderX"),
-                mux = obj.optBoolean("mux", true),
-                muxMode = muxMode,
-                muxUdpMode = muxUdpMode,
+                mux = mux,
+                carrierMode = migrated.carrierMode,
+                carrierUdpMode = migrated.carrierUdpMode,
                 muxResume = obj.optBoolean("muxResume", false),
                 muxResumeTimeoutMillis = obj.optInt("muxResumeTimeoutMillis", 0),
                 muxResumeBufferSize = obj.optInt("muxResumeBufferSize", 0),
                 muxMaxSessions = obj.optInt("muxMaxSessions", 0),
                 muxMaxStreamsPerSession = obj.optInt("muxMaxStreamsPerSession", 0),
                 muxWarmSpare = obj.optInt("muxWarmSpare", 0),
-                muxInitialStreamReceiveWindow = obj.optInt("muxInitialStreamReceiveWindow", 0),
-                muxMaxStreamReceiveWindow = obj.optInt("muxMaxStreamReceiveWindow", 0),
-                muxInitialConnectionReceiveWindow = obj.optInt("muxInitialConnectionReceiveWindow", 0),
-                muxMaxConnectionReceiveWindow = obj.optInt("muxMaxConnectionReceiveWindow", 0),
+                carrierInitialStreamReceiveWindow = obj.optInt(
+                    "carrierInitialStreamReceiveWindow",
+                    obj.optInt("muxInitialStreamReceiveWindow", 0),
+                ),
+                carrierMaxStreamReceiveWindow = obj.optInt(
+                    "carrierMaxStreamReceiveWindow",
+                    obj.optInt("muxMaxStreamReceiveWindow", 0),
+                ),
+                carrierInitialConnectionReceiveWindow = obj.optInt(
+                    "carrierInitialConnectionReceiveWindow",
+                    obj.optInt("muxInitialConnectionReceiveWindow", 0),
+                ),
+                carrierMaxConnectionReceiveWindow = obj.optInt(
+                    "carrierMaxConnectionReceiveWindow",
+                    obj.optInt("muxMaxConnectionReceiveWindow", 0),
+                ),
                 upstreamProtocol = obj.optString("upstreamProtocol", "socks5"),
                 rawConfigJson = obj.optString("rawConfigJson"),
             )
@@ -867,18 +965,18 @@ data class AppConfig(
             .put("realityFingerprint", realityFingerprint)
             .put("realitySpiderX", realitySpiderX)
             .put("mux", mux)
-            .put("muxMode", muxMode)
-            .put("muxUdpMode", muxUdpMode)
+            .put("carrierMode", carrierMode)
+            .put("carrierUdpMode", carrierUdpMode)
             .put("muxResume", muxResume)
             .put("muxResumeTimeoutMillis", muxResumeTimeoutMillis)
             .put("muxResumeBufferSize", muxResumeBufferSize)
             .put("muxMaxSessions", muxMaxSessions)
             .put("muxMaxStreamsPerSession", muxMaxStreamsPerSession)
             .put("muxWarmSpare", muxWarmSpare)
-            .put("muxInitialStreamReceiveWindow", muxInitialStreamReceiveWindow)
-            .put("muxMaxStreamReceiveWindow", muxMaxStreamReceiveWindow)
-            .put("muxInitialConnectionReceiveWindow", muxInitialConnectionReceiveWindow)
-            .put("muxMaxConnectionReceiveWindow", muxMaxConnectionReceiveWindow)
+            .put("carrierInitialStreamReceiveWindow", carrierInitialStreamReceiveWindow)
+            .put("carrierMaxStreamReceiveWindow", carrierMaxStreamReceiveWindow)
+            .put("carrierInitialConnectionReceiveWindow", carrierInitialConnectionReceiveWindow)
+            .put("carrierMaxConnectionReceiveWindow", carrierMaxConnectionReceiveWindow)
             .put("upstreamProtocol", upstreamProtocol)
             .put("rawConfigJson", rawConfigJson)
     }

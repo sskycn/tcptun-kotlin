@@ -7,32 +7,46 @@ import org.junit.Test
 
 class AppConfigCompatibilityTest {
     @Test
-    fun migratesLegacyRealityQuicProfileToCurrentGoMuxDefaults() {
+    fun migratesLegacyRealityQuicProfileToCurrentCarrierSchema() {
         assertEquals("2001:db8::1", normalizeStoredServerHost("[2001:db8::1]"))
         assertEquals(
-            "auto",
-            migratedMuxUdpMode(
-                tunnelSecurity = "reality-quic",
-                muxMode = "quic",
-                muxUdpMode = "",
-            ),
-        )
-    }
-
-    @Test
-    fun doesNotAddQuicUdpModeToLegacyGroupMux() {
-        assertEquals(
-            "",
-            migratedMuxUdpMode(
+            MigratedCarrierFields(
                 tunnelSecurity = "reality",
-                muxMode = "group",
-                muxUdpMode = "",
+                carrierMode = "quic",
+                carrierUdpMode = "auto",
+            ),
+            migratedCarrierFields(
+                tunnelSecurity = "reality-quic",
+                protocol = "native",
+                mux = true,
+                carrierMode = "quic",
+                carrierUdpMode = "",
+                legacyMuxSchema = true,
             ),
         )
     }
 
     @Test
-    fun acceptsNativeRealityTcpSecurity() {
+    fun migratesLegacyRealityGroupMuxToAutomaticCarrier() {
+        assertEquals(
+            MigratedCarrierFields(
+                tunnelSecurity = "reality",
+                carrierMode = "auto",
+                carrierUdpMode = "",
+            ),
+            migratedCarrierFields(
+                tunnelSecurity = "reality",
+                protocol = "native",
+                mux = true,
+                carrierMode = "group",
+                carrierUdpMode = "",
+                legacyMuxSchema = true,
+            ),
+        )
+    }
+
+    @Test
+    fun acceptsNativeRealityWithTcpCarrier() {
         val profile = AppConfig(
             name = "native-tcp",
             serverHost = "edge.example.com",
@@ -41,21 +55,21 @@ class AppConfigCompatibilityTest {
             transport = "raw",
             token = "secret",
             sni = "example.com",
-            tunnelSecurity = "reality-tcp",
+            tunnelSecurity = "reality",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
             realityShortId = "a65f93c1",
             realityFingerprint = "chrome",
             realitySpiderX = "/",
             mux = true,
-            muxMode = "group",
+            carrierMode = "tcp",
         )
         assertNull(profile.validate())
-        assertTrue("reality-tcp" in AppConfig.SecurityOptions)
-        assertTrue("reality-tcp" in AppConfig.TunnelSecurityTypes)
+        assertTrue("reality" in AppConfig.SecurityOptions)
+        assertEquals(listOf("", "reality"), AppConfig.TunnelSecurityTypes)
     }
 
     @Test
-    fun nativeRealityAllowsGroupMuxWhileRealityTcpIsTcpOnly() {
+    fun nativeRealitySupportsIndependentCarrierSelection() {
         val reality = AppConfig(
             name = "native-auto",
             serverHost = "edge.example.com",
@@ -67,21 +81,13 @@ class AppConfigCompatibilityTest {
             tunnelSecurity = "reality",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
             mux = true,
-            muxMode = "group",
+            carrierMode = "auto",
+            realityShortId = "a65f93c1",
+            realityFingerprint = "chrome",
         )
         assertNull(reality.validate())
-        assertNull(
-            reality.copy(tunnelSecurity = "reality-tcp", realitySpiderX = "/").validate(),
-        )
-        assertEquals(
-            "QUIC mux requires TLS or reality-quic security",
-            reality.copy(
-                tunnelSecurity = "reality-tcp",
-                muxMode = "quic",
-                muxUdpMode = "auto",
-                tls = false,
-            ).validate(),
-        )
+        assertNull(reality.copy(carrierMode = "tcp").validate())
+        assertNull(reality.copy(carrierMode = "quic", carrierUdpMode = "auto").validate())
     }
 
     @Test
@@ -111,7 +117,7 @@ class AppConfigCompatibilityTest {
     }
 
     @Test
-    fun acceptsResumableNativeRealityGroupMuxWithinGoLimits() {
+    fun acceptsResumableNativeRealityAutomaticCarrierWithinGoLimits() {
         val profile = resumableRealityProfile()
 
         assertNull(profile.validate())
@@ -127,11 +133,11 @@ class AppConfigCompatibilityTest {
         )
         assertEquals(
             "mux resume requires reality automatic TCP/QUIC security",
-            profile.copy(tunnelSecurity = "reality-tcp").validate(),
+            profile.copy(tunnelSecurity = "").validate(),
         )
         assertEquals(
-            "mux resume requires group mux mode",
-            profile.copy(muxMode = "quic").validate(),
+            "mux resume requires automatic carrier mode",
+            profile.copy(carrierMode = "quic").validate(),
         )
         assertEquals(
             "mux resume timeout must be between 100 and 300000 milliseconds when set",
@@ -157,8 +163,10 @@ class AppConfigCompatibilityTest {
         sni = "example.com",
         tunnelSecurity = "reality",
         realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
+        realityShortId = "a65f93c1",
+        realityFingerprint = "chrome",
         mux = true,
-        muxMode = "group",
+        carrierMode = "auto",
         muxResume = true,
         muxResumeTimeoutMillis = 15_000,
         muxResumeBufferSize = 4_194_304,
