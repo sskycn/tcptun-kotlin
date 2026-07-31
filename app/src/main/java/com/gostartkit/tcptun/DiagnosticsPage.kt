@@ -1,5 +1,6 @@
 package com.tcptun.client
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -29,6 +30,8 @@ internal fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
     val diagnostics = vpnState.diagnostics
     val coreIdentity = remember { tcptunCoreIdentity() }
     val noneLabel = stringResource(R.string.none)
+
+    BackHandler(onBack = onBack)
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,

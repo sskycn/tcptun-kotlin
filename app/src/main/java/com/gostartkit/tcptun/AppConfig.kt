@@ -347,6 +347,7 @@ data class AppConfig(
                 socks5Password = socks5Password,
                 verbose = verbose,
                 logLevel = logLevel,
+                managedRouteRules = managedRouteRules,
                 routeLocalProxyTraffic = routeLocalProxyTraffic,
             )
         }
@@ -470,6 +471,9 @@ data class AppConfig(
         val rules = JSONArray()
         val activeManagedRules = managedRouteRules.map(ManagedRouteRule::normalized)
             .filter { it.enabled && it.isValid() }
+        require(activeManagedRules.size <= MaxActiveManagedRouteRuleCount) {
+            "at most $MaxActiveManagedRouteRuleCount managed route rules can be enabled"
+        }
         if (activeManagedRules.any { it.outbound == ManagedRouteOutbound.Direct }) {
             rules.put(
                 JSONObject()
@@ -510,6 +514,7 @@ data class AppConfig(
         socks5Password: String,
         verbose: Boolean,
         logLevel: String?,
+        managedRouteRules: List<ManagedRouteRule>,
         routeLocalProxyTraffic: Boolean,
     ): String {
         requireSafeJsonNesting(rawConfigJson)
@@ -539,7 +544,9 @@ data class AppConfig(
             inferred.ifBlank { outbounds.optJSONObject(0)?.optString("tag")?.trim().orEmpty() }
         }
         require(defaultOutbound.isNotBlank()) { "route.default_outbound or a tagged outbound is required" }
-        if (!route.has("default_outbound")) route.put("default_outbound", defaultOutbound)
+        if (route.optString("default_outbound").trim().isBlank()) {
+            route.put("default_outbound", defaultOutbound)
+        }
 
         val (listenHost, listenPort) = splitHostPort(localListenAddr)
         val normalizedListenAddr = joinHostPort(listenHost, listenPort)
@@ -577,12 +584,73 @@ data class AppConfig(
         }
         migrateRemovedDirectFirstOutbounds(route, outbounds)
         root.put("inbounds", inbounds)
-        if (!route.has("rules")) route.put("rules", JSONArray())
+        val existingRules = when {
+            !route.has("rules") -> JSONArray()
+            else -> route.optJSONArray("rules")
+                ?: throw IllegalArgumentException("route.rules must be an array")
+        }
         remapInboundRules(
-            rules = route.optJSONArray("rules"),
+            rules = existingRules,
             replacedTags = replacedInboundTags,
             routeLocalProxyTraffic = routeLocalProxyTraffic,
         )
+
+        val activeManagedRules = managedRouteRules.map(ManagedRouteRule::normalized)
+            .filter { it.enabled && it.isValid() }
+        require(activeManagedRules.size <= MaxActiveManagedRouteRuleCount) {
+            "at most $MaxActiveManagedRouteRuleCount managed route rules can be enabled"
+        }
+        val connectivityRuleCount = if (
+            activeManagedRules.any { it.outbound == ManagedRouteOutbound.Direct }
+        ) {
+            1
+        } else {
+            0
+        }
+        val finalRuleCount = existingRules.length() + activeManagedRules.size + connectivityRuleCount
+        require(finalRuleCount <= MaxRuntimeRouteRuleCount) {
+            "at most $MaxRuntimeRouteRuleCount total route rules can be configured"
+        }
+
+        val runtimeDefaultOutbound = route.optString("default_outbound").trim()
+        require(runtimeDefaultOutbound.isNotBlank()) { "route.default_outbound is required" }
+        val managedDirectOutbound = if (connectivityRuleCount > 0) {
+            findOrAddManagedDirectOutbound(outbounds)
+        } else {
+            null
+        }
+        val mergedRules = JSONArray()
+        if (connectivityRuleCount > 0) {
+            mergedRules.put(
+                JSONObject()
+                    .put("inbound", managedRouteInboundTags(routeLocalProxyTraffic))
+                    .put("network", JSONArray().put("tcp"))
+                    .put(
+                        "domains",
+                        JSONArray()
+                            .put("connectivitycheck.gstatic.com")
+                            .put("cp.cloudflare.com"),
+                    )
+                    .put("outbound", runtimeDefaultOutbound),
+            )
+        }
+        activeManagedRules.forEach { rule ->
+            val targetOutbound = when (rule.outbound) {
+                ManagedRouteOutbound.Proxy -> runtimeDefaultOutbound
+                ManagedRouteOutbound.Direct -> requireNotNull(managedDirectOutbound)
+            }
+            mergedRules.put(
+                rule.putMatchCondition(
+                    JSONObject()
+                        .put("inbound", managedRouteInboundTags(routeLocalProxyTraffic))
+                        .put("outbound", targetOutbound),
+                ),
+            )
+        }
+        for (index in 0 until existingRules.length()) {
+            mergedRules.put(existingRules.get(index))
+        }
+        route.put("rules", mergedRules)
         if (verbose || logLevel != null) {
             val log = root.optJSONObject("log") ?: JSONObject().also { root.put("log", it) }
             log.put("level", effectiveLogLevel(verbose, logLevel))
@@ -646,6 +714,26 @@ data class AppConfig(
         }
         if (AndroidTunNetworks.all(networks::contains)) return
         outbound.put("network", JSONArray().apply { AndroidTunNetworks.forEach(::put) })
+    }
+
+    private fun findOrAddManagedDirectOutbound(outbounds: JSONArray): String {
+        val usedTags = mutableSetOf<String>()
+        for (index in 0 until outbounds.length()) {
+            val outbound = outbounds.optJSONObject(index) ?: continue
+            val tag = outbound.optString("tag").trim()
+            if (tag.isNotBlank()) usedTags += tag
+            if (tag.isNotBlank() && outbound.optString("type").trim() == "direct") return tag
+        }
+
+        val baseTag = "android-managed-direct"
+        var candidate = baseTag
+        var suffix = 2
+        while (candidate in usedTags) {
+            candidate = "$baseTag-$suffix"
+            suffix += 1
+        }
+        outbounds.put(JSONObject().put("tag", candidate).put("type", "direct"))
+        return candidate
     }
 
     private fun migrateRemovedDirectFirstOutbounds(route: JSONObject, outbounds: JSONArray) {
@@ -975,15 +1063,26 @@ data class AppConfig(
     }
 
     fun save(context: Context): Result<Unit> {
-        val current = ProfileStore.load(context)
-        val profiles = current.profiles.toMutableList()
-        val index = profiles.indexOfFirst { it.id == id }
-        if (index >= 0) {
-            profiles[index] = this
-        } else {
-            profiles.add(this)
+        return runRecoverableCatching {
+            repeat(4) {
+                val snapshot = ProfileStore.snapshot(context)
+                val current = snapshot.requireAuthoritativeState()
+                val profiles = current.profiles.toMutableList()
+                val index = profiles.indexOfFirst { it.id == id }
+                if (index >= 0) {
+                    profiles[index] = this
+                } else {
+                    profiles.add(this)
+                }
+                val saved = ProfileStore.saveIfCurrent(
+                    context,
+                    snapshot,
+                    current.copy(profiles = profiles),
+                ).getOrThrow()
+                if (saved != null) return@runRecoverableCatching
+            }
+            error("profile state changed repeatedly; please retry")
         }
-        return ProfileStore.save(context, current.copy(profiles = profiles))
     }
 
     fun label(): String {
@@ -1092,7 +1191,49 @@ data class ProfilesState(
 internal data class ProfileStoreSnapshot(
     val state: ProfilesState,
     val mutationRevision: Long,
-)
+    val readFailure: Throwable? = null,
+) {
+    val isAuthoritative: Boolean
+        get() = readFailure == null
+
+    internal fun requireAuthoritativeState(): ProfilesState {
+        val failure = readFailure ?: return state
+        throw IllegalStateException("profile storage is unavailable; retry the operation", failure)
+    }
+}
+
+internal data class RecoveringProfileStoreRead(
+    val state: ProfilesState,
+    val readFailure: Throwable? = null,
+) {
+    val isAuthoritative: Boolean
+        get() = readFailure == null
+
+    internal fun requireAuthoritativeState(): ProfilesState {
+        val failure = readFailure ?: return state
+        throw IllegalStateException("profile storage is unavailable; retry the operation", failure)
+    }
+}
+
+internal fun recoverProfileStoreRead(
+    fallback: ProfilesState,
+    read: () -> ProfilesState,
+): RecoveringProfileStoreRead = try {
+    RecoveringProfileStoreRead(read())
+} catch (error: Throwable) {
+    if (error.isFatalProcessError()) throw error
+    RecoveringProfileStoreRead(fallback, error)
+}
+
+internal fun profileStoreCasMatches(
+    expected: ProfileStoreSnapshot,
+    currentMutationRevision: Long,
+    current: RecoveringProfileStoreRead,
+): Boolean {
+    val expectedState = expected.requireAuthoritativeState()
+    if (currentMutationRevision != expected.mutationRevision) return false
+    return current.requireAuthoritativeState() == expectedState
+}
 
 object ProfileStore {
     private data class EncodedState(
@@ -1128,35 +1269,39 @@ object ProfileStore {
 
     @Synchronized
     internal fun snapshot(context: Context): ProfileStoreSnapshot {
-        val state = loadRecoveringInternal(context.applicationContext ?: context)
-        return ProfileStoreSnapshot(state, mutationRevision.get())
+        val read = readRecoveringInternal(context.applicationContext ?: context)
+        return ProfileStoreSnapshot(read.state, mutationRevision.get(), read.readFailure)
     }
 
     @Synchronized
     fun load(context: Context): ProfilesState = loadRecoveringInternal(context.applicationContext ?: context)
 
-    private fun loadRecoveringInternal(context: Context): ProfilesState = try {
-        loadInternal(context)
-    } catch (error: Throwable) {
-        if (error.isFatalProcessError()) throw error
-        // A malformed preference must not crash Activity/Service startup. Do not
-        // overwrite here: the same boundary also catches transient storage errors,
-        // and replacing valid profiles with an empty state would turn recovery into
-        // data loss. The next successful explicit save repairs the stored value.
-        runRecoverableCatching {
-            TcptunState.appendLog("profile storage unavailable: ${failureDescription(error)}")
+    private fun loadRecoveringInternal(context: Context): ProfilesState = readRecoveringInternal(context).state
+
+    private fun loadAuthoritativeInternal(context: Context): ProfilesState =
+        readRecoveringInternal(context).requireAuthoritativeState()
+
+    private fun readRecoveringInternal(context: Context): RecoveringProfileStoreRead {
+        val read = recoverProfileStoreRead(ProfilesState(emptyList())) { loadInternal(context) }
+        read.readFailure?.let { error ->
+            // Read-only callers may render the fallback, but mutation paths must
+            // call requireAuthoritativeState() and fail closed.
+            runRecoverableCatching {
+                TcptunState.appendLog("profile storage unavailable: ${failureDescription(error)}")
+            }
         }
-        ProfilesState(emptyList())
+        return read
     }
 
     private fun loadInternal(context: Context): ProfilesState {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val raw = prefs.getString(KEY_PROFILES, null)
-        if (!raw.isNullOrBlank()) {
-            if (raw.length > MaxStoredProfilesLength) return ProfilesState(emptyList())
+        if (raw != null) {
+            require(raw.isNotBlank()) { "stored profile data is empty" }
+            require(raw.length <= MaxStoredProfilesLength) { "stored profile data is too large" }
             requireSafeJsonNesting(raw)
             val arr = JSONArray(raw)
-            if (arr.length() > MaxStoredProfileCount) return ProfilesState(emptyList())
+            require(arr.length() <= MaxStoredProfileCount) { "too many stored profiles" }
             var repaired = false
             val seenIds = mutableSetOf<String>()
             val profiles = buildList {
@@ -1181,39 +1326,50 @@ object ProfileStore {
                     add(decoded.copy(id = normalizedId))
                 }
             }
-            val stateVersion = runRecoverableCatching { prefs.getInt(KEY_STATE_VERSION, 0) }.getOrDefault(0)
-            val storedActive = runRecoverableCatching { prefs.getString(KEY_ACTIVE, null) }.getOrNull()
-                ?.takeIf { stateVersion >= STATE_VERSION_INDEPENDENT_OUTBOUNDS }
-                ?.let { encoded ->
-                    runRecoverableCatching {
-                        if (encoded.length > MaxStoredProfilesLength) error("active profile data is too large")
-                        requireSafeJsonNesting(encoded)
-                        val active = JSONArray(encoded)
-                        buildSet {
-                            for (index in 0 until active.length()) {
-                                active.optString(index)
-                                    .trim()
-                                    .takeIf { it.isNotBlank() && it.length <= MaxProfileIdLength }
-                                    ?.let(::add)
-                            }
+            val stateVersion = prefs.getInt(KEY_STATE_VERSION, 0)
+            val storedActive = if (stateVersion >= STATE_VERSION_INDEPENDENT_OUTBOUNDS) {
+                val encoded = prefs.getString(KEY_ACTIVE, null)
+                    ?: throw IllegalStateException("active profile data is missing")
+                require(encoded.length <= MaxStoredProfilesLength) { "active profile data is too large" }
+                requireSafeJsonNesting(encoded)
+                val active = JSONArray(encoded)
+                require(active.length() <= MaxStoredProfileCount) { "too many active profiles" }
+                buildSet {
+                    for (index in 0 until active.length()) {
+                        val value = active.opt(index)
+                        if (value !is String) {
+                            repaired = true
+                            continue
                         }
-                    }.getOrNull()
+                        val normalized = value.trim()
+                        if (
+                            normalized.isBlank() ||
+                            normalized.length > MaxProfileIdLength ||
+                            !add(normalized)
+                        ) {
+                            repaired = true
+                        }
+                    }
                 }
+            } else {
+                emptySet()
+            }
             val knownIds = profiles.mapTo(mutableSetOf(), AppConfig::id)
             val activeIds = storedActive.orEmpty().filterTo(linkedSetOf()) { it in knownIds }
+            if (activeIds.size != storedActive.size) repaired = true
             val state = ProfilesState(profiles, activeIds)
             if (
                 repaired ||
                 profiles.size != arr.length() ||
                 stateVersion < STATE_VERSION_INDEPENDENT_OUTBOUNDS ||
-                !runRecoverableCatching { prefs.contains(KEY_ACTIVE) }.getOrDefault(false)
+                !prefs.contains(KEY_ACTIVE)
             ) {
-                save(context, state)
+                save(context, state).getOrThrow()
             }
             return state
         }
         val migrated = migrateSingleProfile(context)
-        save(context, migrated)
+        save(context, migrated).getOrThrow()
         return migrated
     }
 
@@ -1261,12 +1417,11 @@ object ProfileStore {
     }
 
     @Synchronized
-    fun clearActive(context: Context): Result<Unit> {
-        val state = load(context)
-        return if (state.activeIds.isNotEmpty()) {
-            save(context, state.copy(activeIds = emptySet()))
-        } else {
-            Result.success(Unit)
+    fun clearActive(context: Context): Result<Unit> = runRecoverableCatching {
+        val appContext = context.applicationContext ?: context
+        val state = loadAuthoritativeInternal(appContext)
+        if (state.activeIds.isNotEmpty()) {
+            writeState(appContext, state.copy(activeIds = emptySet()))
         }
     }
 
@@ -1283,7 +1438,7 @@ object ProfileStore {
             return@runRecoverableCatching false
         }
         val appContext = context.applicationContext ?: context
-        val current = loadRecoveringInternal(appContext)
+        val current = loadAuthoritativeInternal(appContext)
         if (expectedMutationRevision != null && mutationRevision.get() != expectedMutationRevision) {
             return@runRecoverableCatching false
         }
@@ -1309,7 +1464,7 @@ object ProfileStore {
     ): Result<Boolean> = runRecoverableCatching {
         if (mutationRevision.get() != expectedMutationRevision) return@runRecoverableCatching false
         val appContext = context.applicationContext ?: context
-        val current = loadRecoveringInternal(appContext)
+        val current = loadAuthoritativeInternal(appContext)
         if (mutationRevision.get() != expectedMutationRevision) return@runRecoverableCatching false
         if (current.activeIds.isEmpty()) return@runRecoverableCatching true
         val encoded = encodeState(current.copy(activeIds = emptySet()))
@@ -1334,7 +1489,7 @@ object ProfileStore {
             return@runRecoverableCatching false
         }
         val appContext = context.applicationContext ?: context
-        val current = loadRecoveringInternal(appContext)
+        val current = loadAuthoritativeInternal(appContext)
         if (expectedMutationRevision != null && mutationRevision.get() != expectedMutationRevision) {
             return@runRecoverableCatching false
         }
@@ -1382,18 +1537,19 @@ object ProfileStore {
         context: Context,
         expected: ProfileStoreSnapshot,
         next: ProfilesState,
-    ): Result<ProfilesState?> = runRecoverableCatching {
+    ): Result<ProfileStoreSnapshot?> = runRecoverableCatching {
+        expected.requireAuthoritativeState()
         if (mutationRevision.get() != expected.mutationRevision) return@runRecoverableCatching null
         val appContext = context.applicationContext ?: context
-        val current = loadRecoveringInternal(appContext)
-        if (
-            mutationRevision.get() != expected.mutationRevision ||
-            current != expected.state
-        ) {
+        val current = readRecoveringInternal(appContext)
+        if (!profileStoreCasMatches(expected, mutationRevision.get(), current)) {
             return@runRecoverableCatching null
         }
         writeState(appContext, next)
-        loadRecoveringInternal(appContext)
+        ProfileStoreSnapshot(
+            state = loadAuthoritativeInternal(appContext),
+            mutationRevision = mutationRevision.get(),
+        )
     }
 
     private fun migrateSingleProfile(context: Context): ProfilesState {

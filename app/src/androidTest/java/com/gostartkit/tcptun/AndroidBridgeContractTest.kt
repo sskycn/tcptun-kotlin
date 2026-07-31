@@ -347,6 +347,7 @@ class AndroidBridgeContractTest {
         try {
             prefs.edit().putInt("profiles", 7).commit()
             assertEquals(emptyList<AppConfig>(), ProfileStore.load(context).profiles)
+            assertFalse(ProfileStore.snapshot(context).isAuthoritative)
 
             val first = AppConfig(id = "duplicate", name = "first", serverHost = "192.0.2.10", token = "one")
             val second = AppConfig(id = "duplicate", name = "second", serverHost = "192.0.2.20", token = "two")
@@ -382,6 +383,7 @@ class AndroidBridgeContractTest {
         val prefs = context.getSharedPreferences("tcptun_routes", 0)
         prefs.edit().clear().commit()
         try {
+            RouteRuleStore.save(context, emptyList()).getOrThrow()
             prefs.edit().putBoolean("managedRouteRules", true).commit()
             assertEquals(emptyList<ManagedRouteRule>(), RouteRuleStore.load(context))
 
@@ -405,9 +407,99 @@ class AndroidBridgeContractTest {
             prefs.edit().putString("managedRouteRules", encoded).commit()
 
             val loaded = RouteRuleStore.load(context)
+            val reloaded = RouteRuleStore.load(context)
 
             assertEquals(2, loaded.size)
             assertEquals(2, loaded.map(ManagedRouteRule::id).toSet().size)
+            assertEquals(loaded.map(ManagedRouteRule::id), reloaded.map(ManagedRouteRule::id))
+        } finally {
+            prefs.edit().clear().commit()
+        }
+    }
+
+    @Test
+    fun routeRuleStoreRejectsNewOverflowAndMigratesHistoricalOverflowInPlace() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val prefs = context.getSharedPreferences("tcptun_routes", 0)
+        prefs.edit().clear().commit()
+        try {
+            val accepted = List(MaxActiveManagedRouteRuleCount) { index ->
+                ManagedRouteRule(id = "accepted-$index", value = "accepted$index.example")
+            }
+            RouteRuleStore.save(context, accepted).getOrThrow()
+
+            val rejected = RouteRuleStore.save(
+                context,
+                accepted + ManagedRouteRule(id = "overflow", value = "overflow.example"),
+            )
+            assertTrue(rejected.isFailure)
+            assertTrue(rejected.exceptionOrNull()?.message.orEmpty().contains("255 managed route rules"))
+            assertEquals(accepted.map(ManagedRouteRule::id), RouteRuleStore.load(context).map(ManagedRouteRule::id))
+
+            val historical = JSONArray().apply {
+                repeat(MaxActiveManagedRouteRuleCount + 2) { index ->
+                    put(
+                        JSONObject()
+                            .put("id", "historical-$index")
+                            .put("type", ManagedRouteRuleType.DomainSuffix.name)
+                            .put("value", "historical$index.example")
+                            .put("outbound", ManagedRouteOutbound.Proxy.name)
+                            .put("enabled", true),
+                    )
+                }
+            }
+            prefs.edit().putString("managedRouteRules", historical.toString()).commit()
+
+            val migrated = RouteRuleStore.load(context)
+
+            assertEquals(MaxActiveManagedRouteRuleCount + 2, migrated.size)
+            assertEquals(MaxActiveManagedRouteRuleCount, migrated.count(ManagedRouteRule::enabled))
+            assertFalse(migrated[MaxActiveManagedRouteRuleCount].enabled)
+            assertFalse(migrated[MaxActiveManagedRouteRuleCount + 1].enabled)
+            val persisted = JSONArray(prefs.getString("managedRouteRules", "[]"))
+            assertFalse(persisted.getJSONObject(MaxActiveManagedRouteRuleCount).getBoolean("enabled"))
+            assertFalse(persisted.getJSONObject(MaxActiveManagedRouteRuleCount + 1).getBoolean("enabled"))
+        } finally {
+            prefs.edit().clear().commit()
+        }
+    }
+
+    @Test
+    fun routeRuleStoreRejectsRuntimePayloadOverflowBeforeReplacingStoredRules() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val prefs = context.getSharedPreferences("tcptun_routes", 0)
+        prefs.edit().clear().commit()
+        try {
+            val baseline = listOf(ManagedRouteRule(id = "baseline", value = "baseline.example"))
+            RouteRuleStore.save(context, baseline).getOrThrow()
+            val oversized = List(96) { index ->
+                ManagedRouteRule(
+                    id = "large-$index",
+                    value = "a".repeat(MaxManagedRouteRuleValueLength - 2) + ".x",
+                )
+            }
+
+            val rejected = RouteRuleStore.save(context, oversized)
+
+            assertTrue(rejected.isFailure)
+            assertTrue(rejected.exceptionOrNull()?.message.orEmpty().contains("too large"))
+            assertEquals(baseline, RouteRuleStore.load(context))
+
+            val plan = ProfileRunPlan(
+                listOf(
+                    AppConfig(
+                        id = "route-payload",
+                        name = "route-payload",
+                        serverHost = "192.0.2.1",
+                        token = "secret",
+                    ),
+                ),
+            )
+            assertTrue(
+                runCatching {
+                    TcptunVpnService.preflightStartPayload(context, plan, oversized)
+                }.isFailure,
+            )
         } finally {
             prefs.edit().clear().commit()
         }
@@ -689,6 +781,38 @@ class AndroidBridgeContractTest {
 
         assertEngineStarts(config.toString())
         assertEngineHotSwitchesOutbound(config.toString(), secondaryTag)
+    }
+
+    @Test
+    fun missingManagedRouteProfileFallsBackToDynamicPoolWithoutDroppingRule() {
+        val profile = AppConfig(
+            id = "remaining-profile",
+            name = "remaining",
+            serverHost = "192.0.2.10",
+            serverPort = "443",
+            token = "remaining-token",
+        )
+        val config = JSONObject(
+            ProfileRunPlan(listOf(profile)).toBridgeJson(
+                localListenAddr = "127.0.0.1:18088",
+                managedRouteRules = listOf(
+                    ManagedRouteRule(
+                        id = "stale-profile-route",
+                        type = ManagedRouteRuleType.DomainSuffix,
+                        value = "stale.example",
+                        outboundProfileId = "deleted-profile",
+                    ),
+                ),
+            ),
+        )
+
+        val rules = config.getJSONObject("route").getJSONArray("rules")
+        assertEquals(2, rules.length())
+        val staleRule = rules.getJSONObject(1)
+        assertEquals("stale.example", staleRule.getJSONArray("domain_suffixes").getString(0))
+        assertEquals("profile-pool", staleRule.getString("outbound"))
+        assertFalse(staleRule.has("network"))
+        Androidbridge.validateConfig(config.toString())
     }
 
     @Test
@@ -1106,6 +1230,93 @@ class AndroidBridgeContractTest {
         assertFalse(root.has("discovery"))
 
         assertEngineStarts(config)
+    }
+
+    @Test
+    fun fullConfigPrependsManagedRulesUsingRawDefaultAndAddsUniqueDirectOutbound() {
+        val raw = """
+            {
+              "outbounds": [
+                {"tag": "raw-default", "type": "blackhole"},
+                {"tag": "android-managed-direct", "type": "blackhole"}
+              ],
+              "route": {
+                "default_outbound": "raw-default",
+                "rules": [
+                  {"domain_suffixes": ["preserved.example"], "outbound": "raw-default"}
+                ]
+              }
+            }
+        """.trimIndent()
+        val config = JSONObject(
+            AppConfig(name = "raw-managed", rawConfigJson = raw).toBridgeJson(
+                localListenAddr = "127.0.0.1:18096",
+                managedRouteRules = listOf(
+                    ManagedRouteRule(
+                        id = "raw-direct",
+                        type = ManagedRouteRuleType.DomainSuffix,
+                        value = "direct.example",
+                        outbound = ManagedRouteOutbound.Direct,
+                    ),
+                    ManagedRouteRule(
+                        id = "raw-proxy",
+                        type = ManagedRouteRuleType.IPCidr,
+                        value = "203.0.113.0/24",
+                        outbound = ManagedRouteOutbound.Proxy,
+                    ),
+                ),
+            ),
+        )
+
+        val outbounds = config.getJSONArray("outbounds")
+        val tags = (0 until outbounds.length()).map { outbounds.getJSONObject(it).getString("tag") }
+        assertEquals(tags.size, tags.toSet().size)
+        val directOutbounds = (0 until outbounds.length())
+            .map(outbounds::getJSONObject)
+            .filter { it.getString("type") == "direct" }
+        assertEquals(1, directOutbounds.size)
+        assertEquals("android-managed-direct-2", directOutbounds.single().getString("tag"))
+
+        val rules = config.getJSONObject("route").getJSONArray("rules")
+        assertEquals(4, rules.length())
+        assertEquals("raw-default", rules.getJSONObject(0).getString("outbound"))
+        assertEquals("android-managed-direct-2", rules.getJSONObject(1).getString("outbound"))
+        assertEquals("direct.example", rules.getJSONObject(1).getJSONArray("domain_suffixes").getString(0))
+        assertEquals("raw-default", rules.getJSONObject(2).getString("outbound"))
+        assertEquals("203.0.113.0/24", rules.getJSONObject(2).getJSONArray("ip_cidrs").getString(0))
+        assertEquals("raw-default", rules.getJSONObject(3).getString("outbound"))
+        assertEquals("preserved.example", rules.getJSONObject(3).getJSONArray("domain_suffixes").getString(0))
+        Androidbridge.validateConfig(config.toString())
+    }
+
+    @Test
+    fun fullConfigManagedRulesRespectCombinedRuntimeRuleLimit() {
+        val existingRules = JSONArray().apply {
+            repeat(2) { index ->
+                put(
+                    JSONObject()
+                        .put("domain_suffixes", JSONArray().put("existing$index.example"))
+                        .put("outbound", "raw-default"),
+                )
+            }
+        }
+        val raw = JSONObject()
+            .put("outbounds", JSONArray().put(JSONObject().put("tag", "raw-default").put("type", "blackhole")))
+            .put("route", JSONObject().put("default_outbound", "raw-default").put("rules", existingRules))
+            .toString()
+        val managed = List(MaxActiveManagedRouteRuleCount) { index ->
+            ManagedRouteRule(id = "managed-$index", value = "managed$index.example")
+        }
+
+        val rejected = runCatching {
+            AppConfig(name = "raw-overflow", rawConfigJson = raw).toBridgeJson(
+                localListenAddr = "127.0.0.1:18097",
+                managedRouteRules = managed,
+            )
+        }
+
+        assertTrue(rejected.isFailure)
+        assertTrue(rejected.exceptionOrNull()?.message.orEmpty().contains("256 total route rules"))
     }
 
     @Test

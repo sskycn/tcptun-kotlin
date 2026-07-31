@@ -286,14 +286,11 @@ object TcptunState {
             // mark after a successful start/update re-enables it.
             connectionsReady = if (terminal || transitioning) false else current.connectionsReady,
             lastError = if (value == "Error") current.lastError else "",
-            diagnostics = current.diagnostics.copy(
-                vpnStatus = value,
-                bridgeClientIps = if (terminal) {
-                    emptyList()
-                } else {
-                    current.diagnostics.bridgeClientIps
-                },
-            ),
+            diagnostics = if (terminal) {
+                terminalDiagnostics(current.diagnostics, value, current.lastError)
+            } else {
+                current.diagnostics.copy(vpnStatus = value)
+            },
             tcping = if (terminal) TcpingProgress() else current.tcping,
             profileHealth = if (terminal) emptyMap() else current.profileHealth,
         )
@@ -363,7 +360,7 @@ object TcptunState {
             status = "Error",
             connectionsReady = false,
             lastError = safeMessage,
-            diagnostics = current.diagnostics.copy(vpnStatus = "Error", bridgeClientIps = emptyList()),
+            diagnostics = terminalDiagnostics(current.diagnostics, "Error", safeMessage),
             tcping = TcpingProgress(),
             profileHealth = emptyMap(),
         )
@@ -384,6 +381,51 @@ object TcptunState {
         if (epoch <= 0L || epoch != bridgeEpoch) return false
         val current = _state.value
         _state.value = current.copy(diagnostics = update(current.diagnostics))
+        return true
+    }
+
+    /**
+     * Applies an authoritative StatusJSON snapshot and advances the same cursor
+     * used by callbacks. This prevents a delayed callback from overwriting a
+     * newer pull-to-refresh snapshot.
+     */
+    @Synchronized
+    internal fun reconcileBridgeStatusSnapshotForEpoch(
+        epoch: Long,
+        sessionId: Long,
+        sequence: Long,
+        bridgeStatus: String,
+        bridgeLastError: String,
+        eventState: String = "",
+        update: (TcptunDiagnostics) -> TcptunDiagnostics,
+    ): Boolean {
+        if (epoch <= 0L || epoch != bridgeEpoch) return false
+        val safeSessionId = sessionId.coerceAtLeast(0L)
+        val safeSequence = sequence.coerceAtLeast(0L)
+        if (
+            safeSessionId < bridgeSessionId ||
+            (safeSessionId == bridgeSessionId && safeSequence < bridgeSequence)
+        ) {
+            return false
+        }
+        bridgeSessionId = safeSessionId
+        bridgeSequence = safeSequence
+        val current = _state.value
+        val updatedDiagnostics = update(current.diagnostics).copy(
+            bridgeStatus = bridgeStatus,
+            bridgeSessionId = safeSessionId,
+            bridgeSequence = safeSequence,
+        )
+        _state.value = current.copy(
+            lastError = bridgeDisplayError(
+                runtimeStatus = current.status,
+                currentError = current.lastError,
+                bridgeStatus = bridgeStatus,
+                bridgeLastError = bridgeLastError,
+                eventState = eventState,
+            ),
+            diagnostics = updatedDiagnostics,
+        )
         return true
     }
 
@@ -436,12 +478,17 @@ object TcptunState {
         bridgeSequence = event.sequence
 
         val current = _state.value
+        val simpleBridgeStatus = bridgeSimpleStatus(event.state)
         _state.value = current.copy(
-            lastError = event.lastError.takeIf {
-                event.state.equals("error", ignoreCase = true) && it.isNotBlank()
-            } ?: current.lastError,
+            lastError = bridgeDisplayError(
+                runtimeStatus = current.status,
+                currentError = current.lastError,
+                bridgeStatus = simpleBridgeStatus,
+                bridgeLastError = event.lastError,
+                eventState = event.state,
+            ),
             diagnostics = current.diagnostics.copy(
-                bridgeStatus = bridgeSimpleStatus(event.state),
+                bridgeStatus = simpleBridgeStatus,
                 bridgeEventState = event.state.ifBlank { "Unknown" },
                 bridgeEventReason = event.reason.ifBlank { "None" },
                 bridgeEventPhase = event.phase.ifBlank { "None" },
@@ -621,7 +668,7 @@ object TcptunState {
         return _state.value.tcping.requestId == requestId && _state.value.tcping.running
     }
 
-    private fun bridgeSimpleStatus(state: String): String {
+    internal fun bridgeSimpleStatus(state: String): String {
         return when (state.lowercase()) {
             "starting" -> "Starting"
             "stopping" -> "Stopping"
@@ -633,6 +680,52 @@ object TcptunState {
             else -> "Unknown"
         }
     }
+
+    private fun bridgeDisplayError(
+        runtimeStatus: String,
+        currentError: String,
+        bridgeStatus: String,
+        bridgeLastError: String,
+        eventState: String = "",
+    ): String {
+        // A bridge snapshot must never erase a terminal service/lifecycle error.
+        if (runtimeStatus == "Error") return currentError
+        val safeError = bridgeLastError.take(MAX_STATUS_FIELD_LENGTH).trim()
+        if (
+            (bridgeStatus == "Error" || eventState.equals("error", ignoreCase = true)) &&
+            safeError.isNotBlank()
+        ) {
+            return safeError
+        }
+        val healthyEvent = isExplicitlyHealthyBridgeEventState(eventState)
+        return if (bridgeStatus == "Running" && (eventState.isBlank() || healthyEvent)) "" else currentError
+    }
+
+    private fun terminalDiagnostics(
+        diagnostics: TcptunDiagnostics,
+        status: String,
+        error: String,
+    ): TcptunDiagnostics = diagnostics.copy(
+        vpnStatus = status,
+        bridgeStatus = status,
+        bridgeEventState = status.lowercase(),
+        bridgeEventReason = if (status == "Error") "SERVICE_ERROR" else "None",
+        bridgeEventPhase = if (status == "Error") "Runtime stopped after an error" else "None",
+        bridgeListen = "",
+        bridgeRemote = "",
+        bridgeActiveConnections = 0,
+        bridgeClientIps = emptyList(),
+        bridgeMuxSources = 0,
+        bridgeMuxSessions = 0,
+        bridgeMuxStreams = 0,
+        bridgeRecoverable = false,
+        bridgeLastError = if (status == "Error") error else "",
+        bridgeTimestampMs = 0,
+        bridgeSessionId = 0,
+        bridgeSequence = 0,
+        localProxyReachable = false,
+        socketProtectEnabled = false,
+    )
 
     private fun JSONObject.optStatusString(name: String): String {
         val value = opt(name)

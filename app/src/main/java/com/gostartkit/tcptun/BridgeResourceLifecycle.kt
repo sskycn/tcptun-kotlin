@@ -74,7 +74,15 @@ internal class BridgeRuntimeLease {
                 if (!canContinue()) return RuntimeLeaseClaim.Cancelled
                 val remainingNanos = deadlineNanos - System.nanoTime()
                 if (remainingNanos <= 0L) return RuntimeLeaseClaim.TimedOut
-                val waitMillis = (remainingNanos / 1_000_000L).coerceAtLeast(1L)
+                // Lifecycle ownership can be revoked without releasing the
+                // current runtime lease (for example, when the user stops a
+                // replacement service while the previous service is still
+                // tearing down). Poll the cancellation predicate instead of
+                // sleeping for the whole lease timeout so that the serialized
+                // lifecycle executor is not held for tens of seconds.
+                val waitMillis = (remainingNanos / 1_000_000L)
+                    .coerceAtLeast(1L)
+                    .coerceAtMost(CANCELLATION_POLL_INTERVAL_MILLIS)
                 try {
                     monitor.wait(waitMillis)
                 } catch (_: InterruptedException) {
@@ -94,6 +102,10 @@ internal class BridgeRuntimeLease {
         ownerId = 0L
         monitor.notifyAll()
         true
+    }
+
+    private companion object {
+        const val CANCELLATION_POLL_INTERVAL_MILLIS = 100L
     }
 }
 

@@ -7,6 +7,10 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class BridgeLifecycleTest {
     @Test
@@ -127,6 +131,32 @@ class BridgeLifecycleTest {
 
         assertEquals(RuntimeLeaseClaim.Cancelled, claim)
         assertEquals(1L, lease.owner)
+    }
+
+    @Test
+    fun runtimeLeaseWaitObservesCancellationBeforeTheLeaseTimeout() {
+        val lease = BridgeRuntimeLease()
+        lease.acquire(1L, timeoutMillis = 0L)
+        val canContinue = AtomicBoolean(true)
+        val waitStarted = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+
+        try {
+            val waitingClaim = executor.submit<RuntimeLeaseClaim> {
+                lease.acquire(2L, timeoutMillis = 5_000L) {
+                    waitStarted.countDown()
+                    canContinue.get()
+                }
+            }
+            assertTrue(waitStarted.await(2, TimeUnit.SECONDS))
+
+            canContinue.set(false)
+
+            assertEquals(RuntimeLeaseClaim.Cancelled, waitingClaim.get(2, TimeUnit.SECONDS))
+            assertEquals(1L, lease.owner)
+        } finally {
+            executor.shutdownNow()
+        }
     }
 
     @Test

@@ -79,4 +79,17 @@ class ServiceCoordinationTest {
         // Component teardown can be repeated without double-cancelling ownership.
         slot.cancel()
     }
+
+    @Test
+    fun roundRobinBatchSelectorBoundsWorkAndEventuallyVisitsEveryEntry() {
+        val selector = RoundRobinBatchSelector()
+        val values = listOf("a", "b", "c", "d", "e")
+
+        assertEquals(listOf("a", "b"), selector.select(values, 2))
+        assertEquals(listOf("c", "d"), selector.select(values, 2))
+        assertEquals(listOf("e", "a"), selector.select(values, 2))
+
+        selector.clear()
+        assertEquals(values, selector.select(values, 99))
+    }
 }

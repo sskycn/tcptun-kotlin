@@ -91,3 +91,23 @@ internal class LatestTaskSlot {
         current = null
     }
 }
+
+/** Selects a bounded rotating slice so expensive serial probes cannot starve later entries. */
+internal class RoundRobinBatchSelector {
+    private var nextIndex = 0
+
+    @Synchronized
+    fun <T> select(values: List<T>, maxCount: Int): List<T> {
+        if (values.isEmpty() || maxCount <= 0) return emptyList()
+        val count = minOf(values.size, maxCount)
+        val start = nextIndex.mod(values.size)
+        val selected = List(count) { offset -> values[(start + offset) % values.size] }
+        nextIndex = (start + count) % values.size
+        return selected
+    }
+
+    @Synchronized
+    fun clear() {
+        nextIndex = 0
+    }
+}

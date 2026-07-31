@@ -195,7 +195,11 @@ internal fun ProfileRunPlan.toBridgeJson(
             rule.outbound == ManagedRouteOutbound.Direct -> "direct"
             rule.outboundProfileId.isBlank() -> BalancedOutboundTag
             targetProfile != null -> tags.getValue(targetProfile.id)
-            else -> return@forEach
+            // Profile deletion or legacy ID repair can leave a stale reference.
+            // The route editor presents that state as the dynamic pool, so the
+            // generated runtime must use the same fallback instead of silently
+            // dropping the rule.
+            else -> BalancedOutboundTag
         }
         val route = rule.putMatchCondition(
             JSONObject()

@@ -116,6 +116,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -155,6 +157,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import org.json.JSONObject
@@ -189,8 +193,12 @@ private val VpnPlanCommandScope = CoroutineScope(
 )
 private val VpnPlanCommandGeneration = AtomicInteger()
 private val VpnPlanCommandJob = AtomicReference<Job?>(null)
-private val VpnPlanUpdateReadyBaseline = AtomicReference<Boolean?>(null)
+private val UiErrorMessages = Channel<String>(
+    capacity = 32,
+    onBufferOverflow = BufferOverflow.DROP_OLDEST,
+)
 private val ProcessProfileMutationMutex = Mutex()
+private val ProcessRouteRuleMutationMutex = Mutex()
 private val QrCodeGenerationMutex = Mutex()
 private const val MaxProfileMutationAttempts = 4
 private const val MaxProfileNameInputLength = 512
@@ -198,6 +206,15 @@ private const val MaxProfileHostInputLength = 2_048
 private const val MaxProfileChoiceInputLength = 256
 private const val MaxRealityKeyInputLength = 4_096
 private const val MaxEchKeyInputLength = 4_096
+
+private val PendingRunPlanSaver = Saver<ProfileRunPlan?, String>(
+    save = { plan -> encodePendingRunPlan(plan) },
+    restore = { encoded -> decodePendingRunPlan(encoded) },
+)
+private val PendingProfileSaver = Saver<AppConfig?, String>(
+    save = { profile -> encodePendingProfile(profile) },
+    restore = { encoded -> decodePendingProfile(encoded) },
+)
 
 private val CardShapeCompact = RoundedCornerShape(12.dp)
 private val MenuShape = RoundedCornerShape(12.dp)
@@ -256,7 +273,9 @@ private fun AppConfig.withoutEch(): AppConfig = copy(
 )
 
 private fun reportUiError(message: String) {
-    TcptunState.appendLog("UI error: ${message.trim().ifBlank { "Unknown error" }}")
+    val displayMessage = message.trim().ifBlank { "Unknown error" }
+    TcptunState.appendLog("UI error: $displayMessage")
+    UiErrorMessages.trySend(displayMessage)
 }
 
 internal data class LocalIpInfo(
@@ -719,9 +738,15 @@ internal fun TcptunScreen(
     val invalidClipboard = stringResource(R.string.invalid_clipboard_data)
     val undoLabel = stringResource(R.string.undo)
     var storedState by remember { mutableStateOf<ProfilesState?>(null) }
-    var pendingDeepLinkProfile by remember { mutableStateOf<AppConfig?>(null) }
-    var pendingConfig by remember { mutableStateOf<ProfileRunPlan?>(null) }
-    var pendingNotificationConfig by remember { mutableStateOf<ProfileRunPlan?>(null) }
+    var pendingDeepLinkProfile by rememberSaveable(stateSaver = PendingProfileSaver) {
+        mutableStateOf<AppConfig?>(null)
+    }
+    var pendingConfig by rememberSaveable(stateSaver = PendingRunPlanSaver) {
+        mutableStateOf<ProfileRunPlan?>(null)
+    }
+    var pendingNotificationConfig by rememberSaveable(stateSaver = PendingRunPlanSaver) {
+        mutableStateOf<ProfileRunPlan?>(null)
+    }
     var editingProfile by remember { mutableStateOf<AppConfig?>(null) }
     var showIpInformation by remember { mutableStateOf(false) }
     var showDiagnostics by remember { mutableStateOf(false) }
@@ -735,6 +760,11 @@ internal fun TcptunScreen(
     var profileQrCode by remember { mutableStateOf<AppConfig?>(null) }
     var tcpingTargetIndex by remember { mutableStateOf(0) }
     val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(snackbarHostState) {
+        for (message in UiErrorMessages) {
+            snackbarHostState.showDismissibleSnackbar(message)
+        }
+    }
     val screenScope = rememberCoroutineScope()
     val profileMutationMutex = ProcessProfileMutationMutex
     val profileReloadGeneration = remember { AtomicInteger() }
@@ -784,10 +814,28 @@ internal fun TcptunScreen(
     fun requestVpnStart(plan: ProfileRunPlan) {
         startVpn(context, plan)
     }
+    fun failPendingVpnStart(plan: ProfileRunPlan, message: String) {
+        reportUiError(message)
+        VpnPlanCommandScope.launch {
+            runRecoverableCatching {
+                rollbackInitialStartAfterDispatchFailure(context.applicationContext, plan)
+            }.onFailure { rollbackError ->
+                TcptunState.appendLog(
+                    "failed VPN start rollback failed: ${failureDescription(rollbackError)}",
+                )
+            }
+        }
+    }
     val vpnLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val plan = pendingConfig
         pendingConfig = null
-        if (plan != null && result.resultCode == Activity.RESULT_OK) requestVpnStart(plan)
+        if (plan != null) {
+            if (result.resultCode == Activity.RESULT_OK) {
+                requestVpnStart(plan)
+            } else {
+                failPendingVpnStart(plan, resources.getString(R.string.start_failed))
+            }
+        }
     }
     val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val plan = pendingNotificationConfig ?: return@rememberLauncherForActivityResult
@@ -803,12 +851,18 @@ internal fun TcptunScreen(
                     pendingConfig = plan
                     runRecoverableCatching { vpnLauncher.launch(prepare) }.onFailure { error ->
                         pendingConfig = null
-                        reportUiError(error.message ?: resources.getString(R.string.start_failed))
+                        failPendingVpnStart(
+                            plan,
+                            error.message ?: resources.getString(R.string.start_failed),
+                        )
                     }
                 }
             },
             onFailure = { error ->
-                reportUiError(error.message ?: resources.getString(R.string.start_failed))
+                failPendingVpnStart(
+                    plan,
+                    error.message ?: resources.getString(R.string.start_failed),
+                )
             },
         )
     }
@@ -820,7 +874,7 @@ internal fun TcptunScreen(
     suspend fun commitProfileMutationLocked(
         transform: (ProfilesState) -> ProfilesState,
         validate: suspend (ProfilesState, ProfilesState) -> Unit = { _, _ -> },
-    ): Pair<ProfilesState, ProfilesState> {
+    ): Pair<ProfilesState, ProfileStoreSnapshot> {
         val generation = profileReloadGeneration.incrementAndGet()
         return withContext(NonCancellable) {
             repeat(MaxProfileMutationAttempts) {
@@ -833,7 +887,7 @@ internal fun TcptunScreen(
                     ProfileStore.saveIfCurrent(context, snapshot, next).getOrThrow()
                 }
                 if (saved != null) {
-                    if (generation == profileReloadGeneration.get()) storedState = saved
+                    if (generation == profileReloadGeneration.get()) storedState = saved.state
                     TcptunState.notifyProfileStateChanged()
                     return@withContext snapshot.state to saved
                 }
@@ -847,13 +901,48 @@ internal fun TcptunScreen(
     ): ProfilesState? {
         return try {
             profileMutationMutex.withLock {
-                commitProfileMutationLocked(transform).second
+                commitProfileMutationLocked(transform).second.state
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
             reportUiError(error.message ?: resources.getString(R.string.profile_save_failed))
             null
+        }
+    }
+
+    suspend fun rollbackCommittedProfileMutation(
+        committed: ProfileStoreSnapshot,
+        previous: ProfilesState,
+    ): Boolean {
+        val generation = profileReloadGeneration.incrementAndGet()
+        return withContext(NonCancellable) {
+            repeat(MaxProfileMutationAttempts) {
+                val snapshot = withContext(Dispatchers.IO) { ProfileStore.snapshot(context) }
+                val currentState = snapshot.requireAuthoritativeState()
+                val rollback = rollbackProfileStateIfStillCommitted(
+                    current = currentState,
+                    currentRevision = snapshot.mutationRevision,
+                    committed = committed.state,
+                    committedRevision = committed.mutationRevision,
+                    previous = previous,
+                ) ?: run {
+                    TcptunState.appendLog(
+                        "profile rollback skipped because a newer profile state is already stored",
+                    )
+                    return@withContext false
+                }
+                val restored = withContext(Dispatchers.IO) {
+                    ProfileStore.saveIfCurrent(context, snapshot, rollback).getOrThrow()
+                }
+                if (restored != null) {
+                    if (generation == profileReloadGeneration.get()) storedState = restored.state
+                    TcptunState.notifyProfileStateChanged()
+                    TcptunState.appendLog("profile state rolled back after VPN command dispatch failed")
+                    return@withContext true
+                }
+            }
+            throw IllegalStateException("profile state changed repeatedly while rolling back")
         }
     }
 
@@ -985,7 +1074,10 @@ internal fun TcptunScreen(
             runRecoverableCatching { notificationLauncher.launch(PostNotificationsPermission) }
                 .onFailure { error ->
                     pendingNotificationConfig = null
-                    reportUiError(error.message ?: resources.getString(R.string.start_failed))
+                    failPendingVpnStart(
+                        plan,
+                        error.message ?: resources.getString(R.string.start_failed),
+                    )
                 }
             return
         }
@@ -997,12 +1089,18 @@ internal fun TcptunScreen(
                     pendingConfig = plan
                     runRecoverableCatching { vpnLauncher.launch(prepare) }.onFailure { error ->
                         pendingConfig = null
-                        reportUiError(error.message ?: resources.getString(R.string.start_failed))
+                        failPendingVpnStart(
+                            plan,
+                            error.message ?: resources.getString(R.string.start_failed),
+                        )
                     }
                 }
             },
             onFailure = { error ->
-                reportUiError(error.message ?: resources.getString(R.string.start_failed))
+                failPendingVpnStart(
+                    plan,
+                    error.message ?: resources.getString(R.string.start_failed),
+                )
             },
         )
     }
@@ -1013,12 +1111,12 @@ internal fun TcptunScreen(
     ): Boolean {
         return try {
             var pendingInteractiveStart: ProfileRunPlan? = null
-            profileMutationMutex.withLock {
+            val mutationApplied = profileMutationMutex.withLock {
                 withContext(NonCancellable) {
                     var applyRuntime = false
                     var intendedOutboundUpdate = false
                     var plan: ProfileRunPlan? = null
-                    commitProfileMutationLocked(
+                    val (previousState, committedSnapshot) = commitProfileMutationLocked(
                         transform = transform,
                         validate = { current, nextState ->
                             applyRuntime = shouldApplyRuntime(current)
@@ -1029,17 +1127,46 @@ internal fun TcptunScreen(
                             } else {
                                 withContext(Dispatchers.Default) { nextState.runPlan() }
                             }
+                            plan?.let { candidatePlan ->
+                                // Profile activation and route commits use the same lock order.
+                                // Validate the exact generated Binder payload before activeIds
+                                // can become authoritative, including first start from Stopped.
+                                ProcessRouteRuleMutationMutex.withLock {
+                                    withContext(Dispatchers.IO) {
+                                        TcptunVpnService.preflightStartPayload(
+                                            context = context,
+                                            sourcePlan = candidatePlan,
+                                            managedRouteRules = RouteRuleStore
+                                                .loadAuthoritative(context)
+                                                .getOrThrow(),
+                                        )
+                                    }
+                                }
+                            }
                         },
                     )
                     if (!applyRuntime) return@withContext true
                     val committedPlan = plan
                     if (committedPlan == null) {
-                        stopVpn(context.applicationContext)
+                        if (!stopVpn(context.applicationContext)) {
+                            rollbackCommittedProfileMutation(committedSnapshot, previousState)
+                            return@withContext false
+                        }
                     } else {
                         TcptunState.clearTcping()
                         if (intendedOutboundUpdate) {
                             if (TcptunState.status == "Running") {
-                                updateVpnOutbounds(context.applicationContext, committedPlan)
+                                // Dispatch before releasing the mutation mutex. A later mutation may
+                                // use this committed state as its rollback baseline only after the
+                                // service has accepted the corresponding command.
+                                val dispatched = updateVpnOutbounds(
+                                    context = context.applicationContext,
+                                    plan = committedPlan,
+                                )
+                                if (!dispatched) {
+                                    rollbackCommittedProfileMutation(committedSnapshot, previousState)
+                                    return@withContext false
+                                }
                             } else {
                                 TcptunState.appendLog(
                                     "profile runtime update skipped: VPN state changed to ${TcptunState.status}",
@@ -1052,6 +1179,7 @@ internal fun TcptunScreen(
                     true
                 }
             }
+            if (!mutationApplied) return false
             pendingInteractiveStart?.let(::launchPlan)
             true
         } catch (cancelled: CancellationException) {
@@ -1212,6 +1340,13 @@ internal fun TcptunScreen(
     }
 
     val editing = editingProfile
+    val showingMainList = !showQrScanner &&
+        !showIpInformation &&
+        !showDiagnostics &&
+        !showSettings &&
+        !showFlowAnalysis &&
+        !showRouteManagement &&
+        editing == null
     if (showQrScanner) {
         QrScannerPage(
             onBack = ::closeQrScanner,
@@ -1397,6 +1532,19 @@ internal fun TcptunScreen(
                 }
             },
         )
+    }
+
+    // Sub-pages replace the main Scaffold, so keep the process-wide error host
+    // visible there as an overlay as well.
+    if (!showingMainList) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            AutoDismissSnackbarHost(snackbarHostState)
+        }
     }
 
     if (showLogs) {
@@ -2578,7 +2726,7 @@ private fun SettingsPage(onBack: () -> Unit) {
                         OutlinedTextField(
                             value = settings.socksUsername,
                             onValueChange = { value ->
-                                updateSettingsDraft(settings.copy(socksUsername = value.take(255)))
+                                updateSettingsDraft(settings.copy(socksUsername = truncateSocksCredential(value)))
                             },
                             label = { FieldChromeText(stringResource(R.string.socks_username)) },
                             singleLine = true,
@@ -2588,7 +2736,7 @@ private fun SettingsPage(onBack: () -> Unit) {
                         OutlinedTextField(
                             value = settings.socksPassword,
                             onValueChange = { value ->
-                                updateSettingsDraft(settings.copy(socksPassword = value.take(255)))
+                                updateSettingsDraft(settings.copy(socksPassword = truncateSocksCredential(value)))
                             },
                             label = { FieldChromeText(stringResource(R.string.socks_password)) },
                             singleLine = true,
@@ -2933,7 +3081,7 @@ private fun RouteManagementPage(onBack: () -> Unit) {
     var rulesBeforeDrag by remember { mutableStateOf<List<ManagedRouteRule>?>(null) }
     var reorderScrollJob by remember { mutableStateOf<Job?>(null) }
     val reorderScope = rememberCoroutineScope()
-    val routeMutationMutex = remember { Mutex() }
+    val routeMutationMutex = ProcessRouteRuleMutationMutex
     val reorderScrollStep = with(LocalDensity.current) { 24.dp.toPx() }
     val routeSaving = routeSaveCount > 0
     val routeInteractionEnabled = !routeSaving && !routeLeaveRequested
@@ -2969,20 +3117,77 @@ private fun RouteManagementPage(onBack: () -> Unit) {
         routeSaveCount += 1
         return try {
             withContext(NonCancellable) {
-                routeMutationMutex.withLock {
-                    val next = transform(rules)
-                    val persisted = withContext(Dispatchers.IO) {
-                        RouteRuleStore.save(context, next).getOrThrow()
-                        RouteRuleStore.load(context)
+                val (persisted, currentProfiles) = ProcessProfileMutationMutex.withLock {
+                    routeMutationMutex.withLock {
+                        withContext(Dispatchers.IO) {
+                            // A previous page instance may finish saving after an
+                            // Activity recreation. Always transform the latest
+                            // committed snapshot while holding both process locks.
+                            val currentRules = RouteRuleStore.loadAuthoritative(context).getOrThrow()
+                            val next = transform(currentRules)
+                            val profileSnapshot = ProfileStore.snapshot(context)
+                            val authoritativeProfiles = profileSnapshot.requireAuthoritativeState()
+                            val possiblePlans = buildList {
+                                if (authoritativeProfiles.activeIds.isNotEmpty()) {
+                                    add(authoritativeProfiles.runPlan())
+                                }
+                                authoritativeProfiles.profiles
+                                    .firstOrNull { it.rawConfigJson.isBlank() }
+                                    ?.let { profile ->
+                                        // A structured run plan contains every structured
+                                        // profile so future hot membership updates remain possible.
+                                        add(
+                                            authoritativeProfiles
+                                                .copy(activeIds = setOf(profile.id))
+                                                .runPlan(),
+                                        )
+                                    }
+                                authoritativeProfiles.profiles
+                                    .filter { it.rawConfigJson.isNotBlank() }
+                                    .forEach { profile ->
+                                        add(
+                                            authoritativeProfiles
+                                                .copy(activeIds = setOf(profile.id))
+                                                .runPlan(),
+                                        )
+                                    }
+                            }.distinct()
+                            val currentRouteSize = estimatedEnabledRouteRuntimePayloadLength(currentRules)
+                            val nextRouteSize = estimatedEnabledRouteRuntimePayloadLength(next)
+                            possiblePlans.forEach { possiblePlan ->
+                                val candidateFailure = runCatching {
+                                    TcptunVpnService.preflightStartPayload(
+                                        context = context,
+                                        sourcePlan = possiblePlan,
+                                        managedRouteRules = next,
+                                    )
+                                }.exceptionOrNull() ?: return@forEach
+                                val currentConfigurationFits = runCatching {
+                                    TcptunVpnService.preflightStartPayload(
+                                        context = context,
+                                        sourcePlan = possiblePlan,
+                                        managedRouteRules = currentRules,
+                                    )
+                                }.isSuccess
+                                // Do not let an unrelated already-oversized imported profile
+                                // prevent the user from deleting or shrinking route data.
+                                if (currentConfigurationFits || nextRouteSize > currentRouteSize) {
+                                    throw candidateFailure
+                                }
+                            }
+                            RouteRuleStore.save(context, next).getOrThrow()
+                            RouteRuleStore.loadAuthoritative(context).getOrThrow() to authoritativeProfiles
+                        }
                     }
-                    rules = persisted
-                    dirty = true
-                    error = ""
-                    // Keep the running service synchronized even if the Activity is recreated
-                    // before this page can execute its normal leave path.
-                    applyRuntimeSettings(context, forceRestart = true)
-                    true
                 }
+                rules = persisted
+                profileState = currentProfiles
+                dirty = true
+                error = ""
+                // Keep the running service synchronized even if the Activity is recreated
+                // before this page can execute its normal leave path.
+                applyRuntimeSettings(context, forceRestart = true)
+                true
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -3598,6 +3803,8 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
     var validating by remember(initial.id) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val invalidProfileMessage = stringResource(R.string.invalid_profile_link)
+
+    BackHandler(onBack = onBack)
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -4501,7 +4708,6 @@ private fun needsNotificationPermission(context: Context): Boolean {
 }
 
 private fun startVpn(context: Context, plan: ProfileRunPlan) {
-    VpnPlanUpdateReadyBaseline.set(null)
     TcptunState.setStatus("Starting")
     TcptunState.setConnectionsReady(false)
     TcptunState.appendLog("start requested")
@@ -4510,14 +4716,56 @@ private fun startVpn(context: Context, plan: ProfileRunPlan) {
         plan = plan,
         updateOnly = false,
         onDispatchFailure = { message ->
-            if (!TcptunState.errorIfStatus("Starting", message)) reportUiError(message)
+            TcptunState.errorIfStatus("Starting", message)
+            reportUiError(message)
+            try {
+                rollbackInitialStartAfterDispatchFailure(context.applicationContext, plan)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                if (error.isFatalProcessError()) throw error
+                TcptunState.appendLog(
+                    "failed VPN start rollback failed: ${failureDescription(error)}",
+                )
+            }
         },
     )
 }
 
-private fun stopVpn(context: Context) {
+/**
+ * A foreground-service dispatch can fail after UI state was committed (for
+ * example process/background restrictions). Roll back only when the exact
+ * plan is still authoritative; a newer profile mutation always wins.
+ */
+private suspend fun rollbackInitialStartAfterDispatchFailure(
+    context: Context,
+    plan: ProfileRunPlan,
+): Boolean = withContext(NonCancellable) {
+    ProcessProfileMutationMutex.withLock {
+        repeat(MaxProfileMutationAttempts) {
+            val snapshot = withContext(Dispatchers.IO) { ProfileStore.snapshot(context) }
+            val current = snapshot.requireAuthoritativeState()
+            if (!shouldRollbackFailedInitialStart(current, plan)) return@withLock false
+            val restored = withContext(Dispatchers.IO) {
+                ProfileStore.saveIfCurrent(
+                    context = context,
+                    expected = snapshot,
+                    next = current.copy(activeIds = emptySet()),
+                ).getOrThrow()
+            }
+            if (restored != null) {
+                TcptunState.notifyProfileStateChanged()
+                TcptunState.appendLog("active profiles rolled back after VPN start dispatch failed")
+                return@withLock true
+            }
+        }
+        throw IllegalStateException("profile state changed repeatedly while rolling back failed VPN start")
+    }
+}
+
+private fun stopVpn(context: Context): Boolean {
     val previous = TcptunState.state.value
-    VpnPlanUpdateReadyBaseline.set(null)
+    var dispatched = true
     VpnPlanCommandGeneration.incrementAndGet()
     VpnPlanCommandJob.getAndSet(null)?.cancel()
     TcptunState.setStatus("Stopping")
@@ -4526,6 +4774,7 @@ private fun stopVpn(context: Context) {
     runRecoverableCatching {
         context.startService(TcptunVpnService.stopIntent(context))
     }.onFailure { err ->
+        dispatched = false
         val message = err.message ?: context.getString(R.string.stop_failed)
         reportUiError(message)
         TcptunState.restoreCommandStateIfStatus(
@@ -4535,24 +4784,32 @@ private fun stopVpn(context: Context) {
             restoredLastError = previous.lastError,
         )
     }
+    return dispatched
 }
 
-private fun updateVpnOutbounds(context: Context, plan: ProfileRunPlan) {
+private suspend fun updateVpnOutbounds(
+    context: Context,
+    plan: ProfileRunPlan,
+): Boolean {
     // Disable TCPing until StartOutbound/StopOutbound finishes for every changed link.
     val previousReady = TcptunState.state.value.connectionsReady
-    VpnPlanUpdateReadyBaseline.compareAndSet(null, previousReady)
     TcptunState.markConnectionsBusy("connection update requested")
-    enqueueVpnPlanCommand(
-        context = context,
-        plan = plan,
-        updateOnly = true,
-        onDispatchSuccess = { VpnPlanUpdateReadyBaseline.set(null) },
-        onDispatchFailure = { message ->
-            reportUiError(message)
-            val baseline = VpnPlanUpdateReadyBaseline.getAndSet(null) ?: previousReady
-            TcptunState.restoreConnectionsReadyIfStatus("Running", baseline)
-        },
-    )
+    return try {
+        val appContext = context.applicationContext ?: context
+        val intent = withContext(Dispatchers.IO) {
+            TcptunVpnService.updateOutboundsIntent(appContext, plan)
+        }
+        appContext.startService(intent)
+        true
+    } catch (cancelled: CancellationException) {
+        TcptunState.restoreConnectionsReadyIfStatus("Running", previousReady)
+        throw cancelled
+    } catch (error: Throwable) {
+        if (error.isFatalProcessError()) throw error
+        reportUiError(error.message ?: context.getString(R.string.start_failed))
+        TcptunState.restoreConnectionsReadyIfStatus("Running", previousReady)
+        false
+    }
 }
 
 private fun enqueueVpnPlanCommand(
@@ -4560,7 +4817,7 @@ private fun enqueueVpnPlanCommand(
     plan: ProfileRunPlan,
     updateOnly: Boolean,
     onDispatchSuccess: () -> Unit = {},
-    onDispatchFailure: (String) -> Unit,
+    onDispatchFailure: suspend (String) -> Unit,
 ) {
     val appContext = context.applicationContext ?: context
     val generation = VpnPlanCommandGeneration.incrementAndGet()
@@ -4583,15 +4840,17 @@ private fun enqueueVpnPlanCommand(
             return@launch
         }
         if (generation != VpnPlanCommandGeneration.get()) return@launch
-        runRecoverableCatching {
+        try {
             if (!updateOnly && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 ContextCompat.startForegroundService(appContext, intent)
             } else {
                 appContext.startService(intent)
             }
-        }.onSuccess {
             if (generation == VpnPlanCommandGeneration.get()) onDispatchSuccess()
-        }.onFailure { error ->
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            if (error.isFatalProcessError()) throw error
             if (generation == VpnPlanCommandGeneration.get()) {
                 onDispatchFailure(error.message ?: appContext.getString(R.string.start_failed))
             }
@@ -4634,6 +4893,22 @@ internal fun nextActiveProfileIds(
     val profileIsRunning = profileId in activeIds && isVpnActiveStatus(vpnStatus)
     return if (profileIsRunning) activeIds - profileId else activeIds + profileId
 }
+
+internal fun rollbackProfileStateIfStillCommitted(
+    current: ProfilesState,
+    currentRevision: Long,
+    committed: ProfilesState,
+    committedRevision: Long,
+    previous: ProfilesState,
+): ProfilesState? = previous.takeIf {
+    currentRevision == committedRevision && current == committed
+}
+
+internal fun shouldRollbackFailedInitialStart(
+    current: ProfilesState,
+    failedPlan: ProfileRunPlan,
+): Boolean = current.activeIds.isNotEmpty() &&
+    runRecoverableCatching { current.runPlan() == failedPlan }.getOrDefault(false)
 
 internal fun canStartTcping(
     status: String,
