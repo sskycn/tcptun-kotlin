@@ -103,7 +103,15 @@ class VpnServiceLifecycleTest {
                 Socket().use { socket ->
                     socket.connect(InetSocketAddress(InetAddress.getByName("127.0.0.1"), socksPort), 2_000)
                     socket.soTimeout = 5_000
-                    assertSocks5Connect(socket, directTarget, 80)
+                    try {
+                        assertSocks5Connect(socket, directTarget, 80)
+                    } catch (error: Throwable) {
+                        throw AssertionError(
+                            "SOCKS direct connect failed; status=${TcptunState.status}, " +
+                                "bridge=${TcptunState.diagnostics}, logs=${TcptunState.logs.takeLast(40)}",
+                            error,
+                        )
+                    }
                 }
                 context.startService(TcptunVpnService.stopIntent(context))
                 waitUntil("VPN reaches Stopped promptly", timeoutMillis = 5_000) {
