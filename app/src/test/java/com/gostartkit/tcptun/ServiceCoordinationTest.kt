@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.FutureTask
 
 class ServiceCoordinationTest {
     @Test
@@ -59,5 +60,23 @@ class ServiceCoordinationTest {
         assertNull(gate.claim(first))
         assertTrue(gate.claim(second) == true)
         assertFalse(gate.claim(second) ?: true)
+    }
+
+    @Test
+    fun latestTaskSlotCancelsSupersededAndOwnedTasks() {
+        val slot = LatestTaskSlot()
+        val first = FutureTask<Unit> {}
+        val second = FutureTask<Unit> {}
+
+        slot.replace(first)
+        slot.replace(second)
+
+        assertTrue(first.isCancelled)
+        assertFalse(second.isCancelled)
+
+        slot.cancel()
+        assertTrue(second.isCancelled)
+        // Component teardown can be repeated without double-cancelling ownership.
+        slot.cancel()
     }
 }

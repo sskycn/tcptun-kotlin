@@ -17,6 +17,12 @@ internal object BridgeHealthPolicy {
     /** One-shot retry used to confirm a failure before restarting the bridge. */
     const val FAILURE_CONFIRM_INTERVAL_MS = 15_000L
 
+    /** Let Android finish a handover before rebuilding sockets on the selected network. */
+    const val NETWORK_HANDOVER_SETTLE_MS = 1_500L
+
+    private const val BRIDGE_RECOVERY_INITIAL_DELAY_MS = 1_000L
+    private const val BRIDGE_RECOVERY_MAX_DELAY_MS = 30_000L
+
     /**
      * After VPN start / bridge restart, wait before the first member health
      * probe so underlying routing and tunnel dials can settle. Probing too
@@ -83,6 +89,23 @@ internal object BridgeHealthPolicy {
         confirmingFailure -> FAILURE_CONFIRM_INTERVAL_MS
         else -> null
     }
+
+    /** Exponential restart retry with a bounded delay; attempts continue while VPN is desired. */
+    fun bridgeRecoveryDelayMs(attempt: Int): Long {
+        require(attempt > 0) { "bridge recovery attempt must be positive" }
+        var delay = BRIDGE_RECOVERY_INITIAL_DELAY_MS
+        repeat((attempt - 1).coerceAtMost(30)) {
+            if (delay >= BRIDGE_RECOVERY_MAX_DELAY_MS) return BRIDGE_RECOVERY_MAX_DELAY_MS
+            delay = (delay * 2).coerceAtMost(BRIDGE_RECOVERY_MAX_DELAY_MS)
+        }
+        return delay
+    }
+
+    fun shouldRestartForNetworkHandover(
+        initialSelection: Boolean,
+        networkAvailable: Boolean,
+        vpnRunning: Boolean,
+    ): Boolean = !initialSelection && networkAvailable && vpnRunning
 
     fun isStructuralRuntimeChange(previous: RuntimeSettings, next: RuntimeSettings): Boolean {
         return previous.mtu != next.mtu ||

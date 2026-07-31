@@ -1,5 +1,7 @@
 package com.tcptun.client
 
+import java.util.concurrent.Future
+
 internal data class RankedSelectionClaim<K>(
     val value: K?,
     val initial: Boolean,
@@ -65,4 +67,27 @@ internal class RuntimeSettingsApplyGate {
 
     @Synchronized
     fun isLatest(requestGeneration: Int): Boolean = requestGeneration == generation
+}
+
+/**
+ * Owns the latest deferred task and cancels the task it supersedes.
+ *
+ * Keeping this ownership explicit prevents debounce work from outliving the
+ * Android component that scheduled it.
+ */
+internal class LatestTaskSlot {
+    private var current: Future<*>? = null
+
+    @Synchronized
+    fun replace(next: Future<*>) {
+        if (current === next) return
+        current?.cancel(false)
+        current = next
+    }
+
+    @Synchronized
+    fun cancel() {
+        current?.cancel(false)
+        current = null
+    }
 }

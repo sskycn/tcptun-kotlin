@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToLong
 
 data class TcptunDiagnostics(
@@ -92,7 +93,36 @@ data class TcpingProgress(
         get() {
             val successes = results.mapNotNull(TcpingLinkResult::elapsedMs)
             return successes.takeIf { it.isNotEmpty() }?.average()?.roundToLong()
-        }
+    }
+}
+
+internal class UiVisibilityTracker {
+    private var ownerCount = 0
+
+    val isVisible: Boolean
+        @Synchronized get() = ownerCount > 0
+
+    @Synchronized
+    fun acquire(): UiVisibilityLease {
+        ownerCount += 1
+        return UiVisibilityLease(::release)
+    }
+
+    @Synchronized
+    private fun release() {
+        check(ownerCount > 0) { "UI visibility lease released without an owner" }
+        ownerCount -= 1
+    }
+}
+
+internal class UiVisibilityLease(
+    private val release: () -> Unit,
+) : AutoCloseable {
+    private val closed = AtomicBoolean()
+
+    override fun close() {
+        if (closed.compareAndSet(false, true)) release()
+    }
 }
 
 internal data class BridgeStatusEvent(
@@ -157,14 +187,12 @@ object TcptunState {
     private var flowSessionId = -1L
     private var flowSequence = -1L
     private var tcpingRequestId = 0L
-    @Volatile private var uiVisible = false
+    private val uiVisibility = UiVisibilityTracker()
 
     val isUiVisible: Boolean
-        get() = uiVisible
+        get() = uiVisibility.isVisible
 
-    fun setUiVisible(visible: Boolean) {
-        uiVisible = visible
-    }
+    internal fun acquireUiVisibility(): UiVisibilityLease = uiVisibility.acquire()
 
     @Synchronized
     fun beginBridgeSession(): Long {
@@ -442,7 +470,7 @@ object TcptunState {
         if (clean.isEmpty()) return
         // Keep in-app log history for later inspection; avoid logcat I/O while hanging
         // in the background with the UI closed.
-        if (uiVisible) {
+        if (isUiVisible) {
             Log.i(LOG_TAG, clean)
         }
         val current = _state.value

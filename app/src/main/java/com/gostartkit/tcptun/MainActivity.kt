@@ -205,6 +205,18 @@ private val QrCardShape = RoundedCornerShape(20.dp)
 private val ListContentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
 private val ListItemSpacing = 8.dp
 
+@Composable
+private fun FieldChromeText(text: String) {
+    // Labels, placeholders, and supporting copy must not change a field's
+    // measured height when translations or runtime values are longer.
+    Text(
+        text = text,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
 private fun AppConfig.boundedForEditor(): AppConfig = copy(
     name = name.take(MaxProfileNameInputLength),
     serverHost = serverHost.take(MaxProfileHostInputLength),
@@ -615,6 +627,7 @@ internal suspend fun refreshRunningDiagnostics() {
 class MainActivity : ComponentActivity() {
     private var profileIntentSequence = 0L
     private var pendingProfileUri by mutableStateOf<PendingProfileUri?>(null)
+    private var uiVisibilityLease: UiVisibilityLease? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         setTheme(R.style.Theme_TcpTun)
@@ -642,15 +655,23 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        TcptunState.setUiVisible(true)
+        if (uiVisibilityLease == null) {
+            uiVisibilityLease = TcptunState.acquireUiVisibility()
+        }
         if (TcptunState.status == "Running") {
             TcptunVpnService.requestUiVisibleHealthCheck()
         }
     }
 
     override fun onStop() {
-        TcptunState.setUiVisible(false)
+        releaseUiVisibility()
         super.onStop()
+    }
+
+    override fun onDestroy() {
+        // Defensive for non-standard framework/test teardown that skips onStop.
+        releaseUiVisibility()
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -668,6 +689,11 @@ class MainActivity : ComponentActivity() {
     private fun handleProfileIntent(intent: Intent?) {
         val value = profileUriFromIntent(intent) ?: return
         pendingProfileUri = PendingProfileUri(++profileIntentSequence, value)
+    }
+
+    private fun releaseUiVisibility() {
+        uiVisibilityLease?.close()
+        uiVisibilityLease = null
     }
 }
 
@@ -2507,14 +2533,14 @@ private fun SettingsPage(onBack: () -> Unit) {
                                     updateSettingsDraft(settings.copy(socksPort = port))
                                 }
                             },
-                            label = { Text(stringResource(R.string.socks_port)) },
+                            label = { FieldChromeText(stringResource(R.string.socks_port)) },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             enabled = !savingSettings,
                             isError = socksPort == null || socksPort !in 1..65535,
                             supportingText = {
                                 if (socksPort == null || socksPort !in 1..65535) {
-                                    Text(stringResource(R.string.socks_port_error))
+                                    FieldChromeText(stringResource(R.string.socks_port_error))
                                 }
                             },
                             modifier = Modifier.fillMaxWidth(),
@@ -2543,7 +2569,7 @@ private fun SettingsPage(onBack: () -> Unit) {
                             onValueChange = { value ->
                                 updateSettingsDraft(settings.copy(socksUsername = value.take(255)))
                             },
-                            label = { Text(stringResource(R.string.socks_username)) },
+                            label = { FieldChromeText(stringResource(R.string.socks_username)) },
                             singleLine = true,
                             enabled = !savingSettings,
                             modifier = Modifier.fillMaxWidth(),
@@ -2553,7 +2579,7 @@ private fun SettingsPage(onBack: () -> Unit) {
                             onValueChange = { value ->
                                 updateSettingsDraft(settings.copy(socksPassword = value.take(255)))
                             },
-                            label = { Text(stringResource(R.string.socks_password)) },
+                            label = { FieldChromeText(stringResource(R.string.socks_password)) },
                             singleLine = true,
                             enabled = !savingSettings,
                             visualTransformation = PasswordVisualTransformation(),
@@ -3451,7 +3477,7 @@ private fun ManagedRouteRuleDialog(
                         invalid = false
                     },
                     label = {
-                        Text(
+                        FieldChromeText(
                             stringResource(
                                 if (type == ManagedRouteRuleType.App) R.string.route_app_package
                                 else R.string.route_rule_value,
@@ -3459,7 +3485,7 @@ private fun ManagedRouteRuleDialog(
                         )
                     },
                     supportingText = {
-                        Text(
+                        FieldChromeText(
                             if (invalid) stringResource(R.string.invalid_route_rule)
                             else routeRuleExample(type),
                         )
@@ -3629,7 +3655,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                             onValueChange = {
                                 config = config.copy(name = it.take(MaxProfileNameInputLength))
                             },
-                            label = { Text(stringResource(R.string.name)) },
+                            label = { FieldChromeText(stringResource(R.string.name)) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
@@ -3689,7 +3715,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                             OutlinedTextField(
                                 value = config.rawConfigJson,
                                 onValueChange = { config = config.copy(rawConfigJson = it.take(MaxProfileImportLength)) },
-                                label = { Text(stringResource(R.string.full_config_json)) },
+                                label = { FieldChromeText(stringResource(R.string.full_config_json)) },
                                 textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                                 minLines = 18,
                                 modifier = Modifier.fillMaxWidth(),
@@ -3710,7 +3736,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                     onValueChange = {
                                         config = config.copy(serverHost = it.take(MaxProfileHostInputLength))
                                     },
-                                    label = { Text(stringResource(R.string.server_address)) },
+                                    label = { FieldChromeText(stringResource(R.string.server_address)) },
                                     singleLine = true,
                                     modifier = Modifier.weight(1f),
                                 )
@@ -3719,7 +3745,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                     onValueChange = {
                                         config = config.copy(serverPort = it.filter(Char::isDigit).take(5))
                                     },
-                                    label = { Text(stringResource(R.string.port)) },
+                                    label = { FieldChromeText(stringResource(R.string.port)) },
                                     singleLine = true,
                                     modifier = Modifier.weight(0.52f),
                                 )
@@ -3745,7 +3771,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                             OutlinedTextField(
                                 value = config.token,
                                 onValueChange = { config = config.copy(token = it.take(MaxProfileUriLength)) },
-                                label = { Text(stringResource(R.string.field_token)) },
+                                label = { FieldChromeText(stringResource(R.string.field_token)) },
                                 visualTransformation = PasswordVisualTransformation(),
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
@@ -3756,14 +3782,14 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                     onValueChange = {
                                         config = config.copy(sni = it.take(MaxProfileHostInputLength))
                                     },
-                                    label = { Text(stringResource(R.string.field_sni)) },
+                                    label = { FieldChromeText(stringResource(R.string.field_sni)) },
                                     singleLine = true,
                                     modifier = Modifier.weight(1f),
                                 )
                                 OutlinedTextField(
                                     value = config.path,
                                     onValueChange = { config = config.copy(path = it.take(MaxProfileUriLength)) },
-                                    label = { Text(stringResource(R.string.field_path)) },
+                                    label = { FieldChromeText(stringResource(R.string.field_path)) },
                                     singleLine = true,
                                     modifier = Modifier.weight(1f),
                                 )
@@ -3832,7 +3858,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                 onValueChange = {
                                     config = config.copy(flow = it.take(MaxProfileChoiceInputLength))
                                 },
-                                label = { Text(stringResource(R.string.field_flow)) },
+                                label = { FieldChromeText(stringResource(R.string.field_flow)) },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
                             )
@@ -3842,7 +3868,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                     onValueChange = {
                                         config = config.copy(realityPublicKey = it.take(MaxRealityKeyInputLength))
                                     },
-                                    label = { Text(stringResource(R.string.field_reality_public_key)) },
+                                    label = { FieldChromeText(stringResource(R.string.field_reality_public_key)) },
                                     singleLine = true,
                                     modifier = Modifier.fillMaxWidth(),
                                 )
@@ -3854,7 +3880,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                                 realityFingerprint = it.take(MaxProfileChoiceInputLength),
                                             )
                                         },
-                                        label = { Text(stringResource(R.string.field_fingerprint)) },
+                                        label = { FieldChromeText(stringResource(R.string.field_fingerprint)) },
                                         singleLine = true,
                                         modifier = Modifier.weight(1f),
                                     )
@@ -3865,7 +3891,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                                 realityShortId = it.take(MaxProfileChoiceInputLength),
                                             )
                                         },
-                                        label = { Text(stringResource(R.string.field_short_id)) },
+                                        label = { FieldChromeText(stringResource(R.string.field_short_id)) },
                                         singleLine = true,
                                         modifier = Modifier.weight(1f),
                                     )
@@ -3877,7 +3903,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                     onValueChange = {
                                         config = config.copy(realitySpiderX = it.take(MaxProfileUriLength))
                                     },
-                                    label = { Text(stringResource(R.string.field_spider_x)) },
+                                    label = { FieldChromeText(stringResource(R.string.field_spider_x)) },
                                     singleLine = true,
                                     modifier = Modifier.fillMaxWidth(),
                                 )
@@ -3952,9 +3978,13 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                                     ?: 0,
                                             )
                                         },
-                                        label = { Text(stringResource(R.string.field_mux_max_sessions)) },
+                                        label = {
+                                            FieldChromeText(stringResource(R.string.field_mux_max_sessions))
+                                        },
                                         supportingText = {
-                                            Text(stringResource(R.string.field_mux_max_sessions_hint))
+                                            FieldChromeText(
+                                                stringResource(R.string.field_mux_max_sessions_hint),
+                                            )
                                         },
                                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                         isError = config.muxMaxSessions !in 0..32,
@@ -3975,9 +4005,11 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                                     ?: 0,
                                             )
                                         },
-                                        label = { Text(stringResource(R.string.field_mux_warm_spares)) },
+                                        label = {
+                                            FieldChromeText(stringResource(R.string.field_mux_warm_spares))
+                                        },
                                         supportingText = {
-                                            Text(
+                                            FieldChromeText(
                                                 stringResource(
                                                     R.string.field_mux_warm_spares_hint,
                                                     effectiveMaxSessions - 1,
@@ -4004,9 +4036,17 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                                 ?: 0,
                                         )
                                     },
-                                    label = { Text(stringResource(R.string.field_mux_max_streams_per_session)) },
+                                    label = {
+                                        FieldChromeText(
+                                            stringResource(R.string.field_mux_max_streams_per_session),
+                                        )
+                                    },
                                     supportingText = {
-                                        Text(stringResource(R.string.field_mux_max_streams_per_session_hint))
+                                        FieldChromeText(
+                                            stringResource(
+                                                R.string.field_mux_max_streams_per_session_hint,
+                                            ),
+                                        )
                                     },
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     isError = config.muxMaxStreamsPerSession !in 0..4096,
@@ -4062,9 +4102,13 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                                     ?: 0,
                                             )
                                         },
-                                        label = { Text(stringResource(R.string.field_mux_resume_timeout)) },
+                                        label = {
+                                            FieldChromeText(stringResource(R.string.field_mux_resume_timeout))
+                                        },
                                         supportingText = {
-                                            Text(stringResource(R.string.field_mux_resume_timeout_hint))
+                                            FieldChromeText(
+                                                stringResource(R.string.field_mux_resume_timeout_hint),
+                                            )
                                         },
                                         singleLine = true,
                                         modifier = Modifier.weight(1f),
@@ -4083,9 +4127,13 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                                     ?: 0,
                                             )
                                         },
-                                        label = { Text(stringResource(R.string.field_mux_resume_buffer)) },
+                                        label = {
+                                            FieldChromeText(stringResource(R.string.field_mux_resume_buffer))
+                                        },
                                         supportingText = {
-                                            Text(stringResource(R.string.field_mux_resume_buffer_hint))
+                                            FieldChromeText(
+                                                stringResource(R.string.field_mux_resume_buffer_hint),
+                                            )
                                         },
                                         singleLine = true,
                                         modifier = Modifier.weight(1f),
@@ -4146,7 +4194,8 @@ private fun ChoiceRow(
             onValueChange = {},
             readOnly = true,
             enabled = enabled,
-            label = { Text(title) },
+            singleLine = true,
+            label = { FieldChromeText(title) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier
                 .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, true)

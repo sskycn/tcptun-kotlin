@@ -206,6 +206,15 @@ thread after `onDestroy()`, a replacement service waits a bounded interval for
 the old instance to release both its Go resources and original TUN before it may
 establish another VPN or start another Engine.
 
+Underlying-network handovers are settled briefly before rebuilding the bridge,
+and the temporary no-network selection is not treated as a replacement network.
+If a rebuild still fails during the handover, the service keeps the desired
+profile state and foreground ownership, then retries with exponential backoff
+capped at 30 seconds. A successful start resets the backoff; an explicit stop,
+a newer start command, or service destruction cancels the pending recovery.
+Removing the app from Recents does not stop the VPN service; the service
+reasserts its existing foreground notification without rebuilding the tunnel.
+
 `SetAppIdentityProvider` uses the source and destination tuple reported directly
 by the native TUN inbound on Android 10 and newer. The provider resolves that
 TCP tuple with `ConnectivityManager.getConnectionOwnerUid`, maps the UID to

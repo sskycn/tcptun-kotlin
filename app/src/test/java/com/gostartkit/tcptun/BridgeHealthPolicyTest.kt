@@ -8,6 +8,41 @@ import org.junit.Test
 
 class BridgeHealthPolicyTest {
     @Test
+    fun bridgeRecoveryBackoffIsExponentialAndCapped() {
+        assertEquals(1_000L, BridgeHealthPolicy.bridgeRecoveryDelayMs(1))
+        assertEquals(2_000L, BridgeHealthPolicy.bridgeRecoveryDelayMs(2))
+        assertEquals(4_000L, BridgeHealthPolicy.bridgeRecoveryDelayMs(3))
+        assertEquals(16_000L, BridgeHealthPolicy.bridgeRecoveryDelayMs(5))
+        assertEquals(30_000L, BridgeHealthPolicy.bridgeRecoveryDelayMs(6))
+        assertEquals(30_000L, BridgeHealthPolicy.bridgeRecoveryDelayMs(Int.MAX_VALUE))
+    }
+
+    @Test
+    fun networkHandoverWaitsForAReplacementNetworkBeforeRestarting() {
+        assertFalse(
+            BridgeHealthPolicy.shouldRestartForNetworkHandover(
+                initialSelection = true,
+                networkAvailable = true,
+                vpnRunning = true,
+            ),
+        )
+        assertFalse(
+            BridgeHealthPolicy.shouldRestartForNetworkHandover(
+                initialSelection = false,
+                networkAvailable = false,
+                vpnRunning = true,
+            ),
+        )
+        assertTrue(
+            BridgeHealthPolicy.shouldRestartForNetworkHandover(
+                initialSelection = false,
+                networkAvailable = true,
+                vpnRunning = true,
+            ),
+        )
+    }
+
+    @Test
     fun localProxyProbeOnlyWhileUiVisible() {
         assertTrue(BridgeHealthPolicy.shouldProbeLocalProxy(uiVisible = true))
         assertFalse(BridgeHealthPolicy.shouldProbeLocalProxy(uiVisible = false))
