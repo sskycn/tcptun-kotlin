@@ -212,6 +212,12 @@
     <string name="field_spider_x">SpiderX</string>
     <string name="field_tls">TLS</string>
     <string name="field_tls_insecure">TLS insecure</string>
+    <string name="field_ech_client_hello">Protect application TLS ClientHello with ECH</string>
+    <string name="field_ech_public_name">ECH public name</string>
+    <string name="field_ech_public_key">ECH public key</string>
+    <string name="field_ech_ports">ECH target ports</string>
+    <string name="field_ech_ports_hint">Comma-separated · empty uses core default 443 · up to 32</string>
+    <string name="ech_client_hello_note">Requires matching ECH private-key configuration on the server. Only native + raw + security none + TCP carrier is supported; subsequent data gets no additional tunnel encryption.</string>
     <string name="field_mux">Mux</string>
     <string name="field_carrier_mode">Carrier mode</string>
     <string name="field_carrier_udp_mode">Carrier UDP mode</string>

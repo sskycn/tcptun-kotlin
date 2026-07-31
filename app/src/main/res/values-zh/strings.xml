@@ -211,6 +211,12 @@
     <string name="field_spider_x">SpiderX</string>
     <string name="field_tls">TLS</string>
     <string name="field_tls_insecure">TLS insecure</string>
+    <string name="field_ech_client_hello">使用 ECH 保护应用 TLS ClientHello</string>
+    <string name="field_ech_public_name">ECH 公开域名</string>
+    <string name="field_ech_public_key">ECH 公钥</string>
+    <string name="field_ech_ports">ECH 目标端口</string>
+    <string name="field_ech_ports_hint">逗号分隔 · 留空使用核心默认 443 · 最多 32 个</string>
+    <string name="ech_client_hello_note">服务端必须配置匹配的 ECH 私钥；仅支持 native + raw + 无安全层 + TCP 承载，后续数据不会获得额外的隧道加密。</string>
     <string name="field_mux">Mux</string>
     <string name="field_carrier_mode">承载模式</string>
     <string name="field_carrier_udp_mode">承载 UDP 模式</string>

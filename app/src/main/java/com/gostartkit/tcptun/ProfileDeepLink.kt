@@ -113,7 +113,11 @@ internal fun profileConnectionIdentity(config: AppConfig): String? {
             "json:" + canonicalJsonValue(JSONObject(config.rawConfigJson))
         }.getOrNull()
     }
-    return ProfileUriCodec.encode(config.copy(id = "", name = ""))?.let { "uri:$it" }
+    val normalized = config.copy(id = "", name = "")
+    return ProfileUriCodec.encode(normalized)?.let { "uri:$it" }
+        ?: normalized.takeIf { it.hasEchClientHelloSettings() }
+            ?.toJson()
+            ?.let { "app:" + canonicalJsonValue(it) }
 }
 
 private fun canonicalJsonValue(value: Any?): String {

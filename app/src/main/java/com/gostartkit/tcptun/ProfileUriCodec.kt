@@ -38,6 +38,7 @@ object ProfileUriCodec {
     fun encode(config: AppConfig): String? {
         return runRecoverableCatching {
             if (config.rawConfigJson.isNotBlank()) return@runRecoverableCatching null
+            if (config.hasEchClientHelloSettings()) return@runRecoverableCatching null
             val validationConfig = if (config.name.isBlank()) config.copy(name = "profile") else config
             if (validationConfig.validate() != null) return@runRecoverableCatching null
             val encoded = when (config.protocol) {
@@ -62,7 +63,13 @@ object ProfileUriCodec {
      * field. Returns null when T3 cannot represent the profile.
      */
     fun encodeForQr(config: AppConfig): String? {
-        if (config.rawConfigJson.isNotBlank() || config.hasResumableMuxSettings()) return null
+        if (
+            config.rawConfigJson.isNotBlank() ||
+            config.hasResumableMuxSettings() ||
+            config.hasEchClientHelloSettings()
+        ) {
+            return null
+        }
         return runRecoverableCatching {
             // Normalize first so re-showing QR for legacy T2-imported profiles
             // with polluted raw paths (path="/") does not throw from the Go codec.

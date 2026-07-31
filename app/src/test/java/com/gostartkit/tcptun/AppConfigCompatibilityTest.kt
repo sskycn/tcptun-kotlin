@@ -153,6 +153,43 @@ class AppConfigCompatibilityTest {
         )
     }
 
+    @Test
+    fun validatesNativeEchClientHelloProtection() {
+        val profile = AppConfig(
+            name = "ech",
+            serverHost = "edge.example.com",
+            serverPort = "9443",
+            protocol = "native",
+            transport = "raw",
+            token = "secret",
+            echEnabled = true,
+            echPublicName = "public.example",
+            echPublicKey = "gzFwIcNk5Ez3GIzKErsb8_BLzAvzRyxZlmno-tkYeSY",
+            echPorts = "443, 8443",
+            mux = true,
+            carrierMode = "tcp",
+        )
+
+        assertNull(profile.validate())
+        assertEquals(listOf(443, 8443), parseEchPorts(profile.echPorts))
+        assertEquals(
+            "ECH requires native protocol",
+            profile.copy(protocol = "vless").validate(),
+        )
+        assertEquals(
+            "ECH requires security none",
+            profile.copy(tls = true).validate(),
+        )
+        assertEquals(
+            "ECH requires TCP carrier mode",
+            profile.copy(carrierMode = "quic").validate(),
+        )
+        assertEquals(
+            "ECH ports must not contain duplicates",
+            profile.copy(echPorts = "443,443").validate(),
+        )
+    }
+
     private fun resumableRealityProfile() = AppConfig(
         name = "resumable",
         serverHost = "edge.example.com",

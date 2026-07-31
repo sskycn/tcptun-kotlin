@@ -14,6 +14,7 @@ internal val LocalProxyProtocols = listOf(DefaultLocalProxyProtocol, "mixed")
 internal val LogLevels = listOf("debug", DefaultLogLevel, "warn", "error", "off")
 internal val AndroidTunNetworks = listOf("tcp", "udp")
 internal const val MaxProfileIdLength = 256
+internal const val DefaultEchPorts = "443"
 
 /** Inbound tags matched by managed route rules. TUN always; local mixed/SOCKS when enabled. */
 internal fun managedRouteInboundTags(routeLocalProxyTraffic: Boolean): JSONArray =
@@ -99,6 +100,24 @@ internal fun effectiveLogLevel(verbose: Boolean, configuredLevel: String?): Stri
     return if (verbose) "debug" else normalizeLogLevel(configuredLevel.orEmpty())
 }
 
+internal fun parseEchPorts(value: String): List<Int> {
+    val tokens = value.trim()
+        .takeIf(String::isNotBlank)
+        ?.split(Regex("[,\\s]+"))
+        ?.filter(String::isNotBlank)
+        .orEmpty()
+    require(tokens.size <= 32) { "ECH ports must contain at most 32 values" }
+    val ports = tokens.map { token ->
+        token.toIntOrNull()?.takeIf { it in 1..65535 }
+            ?: throw IllegalArgumentException("ECH ports must be numbers between 1 and 65535")
+    }
+    require(ports.distinct().size == ports.size) { "ECH ports must not contain duplicates" }
+    return ports
+}
+
+internal fun AppConfig.hasEchClientHelloSettings(): Boolean =
+    echEnabled || echPublicName.isNotBlank() || echPublicKey.isNotBlank() || echPorts.isNotBlank()
+
 data class AppConfig(
     val id: String = UUID.randomUUID().toString(),
     val name: String = "proxy",
@@ -117,6 +136,10 @@ data class AppConfig(
     val realityShortId: String = "",
     val realityFingerprint: String = "",
     val realitySpiderX: String = "",
+    val echEnabled: Boolean = false,
+    val echPublicName: String = "",
+    val echPublicKey: String = "",
+    val echPorts: String = "",
     val mux: Boolean = true,
     val carrierMode: String = "",
     val carrierUdpMode: String = "",
@@ -166,6 +189,11 @@ data class AppConfig(
             if (sni.isBlank()) return "$normalizedSecurity requires SNI"
             if (realityPublicKey.isBlank()) return "$normalizedSecurity requires a public key"
         }
+        val echFieldsConfigured =
+            echPublicName.isNotBlank() || echPublicKey.isNotBlank() || echPorts.isNotBlank()
+        if (!echEnabled && echFieldsConfigured) {
+            return "ECH must be enabled when ClientHello protection fields are configured"
+        }
         val normalizedCarrierMode = carrierMode.trim().lowercase()
         if (normalizedCarrierMode !in CarrierModes) return "unsupported carrier mode: $carrierMode"
         val normalizedCarrierUdpMode = carrierUdpMode.trim().lowercase()
@@ -195,6 +223,20 @@ data class AppConfig(
             if (normalizedCarrierMode != "auto") {
                 return "mux resume requires automatic carrier mode"
             }
+        }
+        if (echEnabled) {
+            if (protocol != "native") return "ECH requires native protocol"
+            if (transport != "raw") return "ECH requires raw transport"
+            if (tls || normalizedSecurity.isNotBlank()) return "ECH requires security none"
+            if (normalizedCarrierMode !in setOf("", "tcp")) return "ECH requires TCP carrier mode"
+            if (muxResume) return "ECH does not support resumable mux"
+            if (!isValidEchPublicName(echPublicName)) {
+                return "ECH public name must be a valid DNS name"
+            }
+            if (echPublicKey.isBlank()) return "ECH public key is required"
+            runRecoverableCatching { parseEchPorts(echPorts) }
+                .exceptionOrNull()
+                ?.let { return it.message ?: "invalid ECH ports" }
         }
         if (muxResumeTimeoutMillis !in 0..300_000) {
             return "mux resume timeout must be between 100 and 300000 milliseconds when set"
@@ -278,6 +320,9 @@ data class AppConfig(
             realityShortId,
             realityFingerprint,
             realitySpiderX,
+            echPublicName,
+            echPublicKey,
+            echPorts,
             carrierMode,
             carrierUdpMode,
             upstreamProtocol,
@@ -329,6 +374,21 @@ data class AppConfig(
                     .put("type", transport)
                     .put("path", normalizedPath()),
             )
+        if (echEnabled) {
+            proxy.put(
+                "client_hello",
+                JSONObject()
+                    .put("type", "ech")
+                    .put("public_name", echPublicName.trim())
+                    .put("public_key", echPublicKey.trim())
+                    .apply {
+                        val ports = parseEchPorts(echPorts)
+                        if (ports.isNotEmpty()) {
+                            put("ports", JSONArray().apply { ports.forEach(::put) })
+                        }
+                    },
+            )
+        }
         val normalizedCarrierMode = carrierMode.trim().lowercase()
         val normalizedCarrierUdpMode = carrierUdpMode.trim().lowercase()
         if (
@@ -399,6 +459,8 @@ data class AppConfig(
                     .put("server_name", sni.trim())
                     .put("insecure", tlsInsecure),
             )
+        } else if (echEnabled) {
+            proxy.put("security", JSONObject().put("type", "none"))
         }
 
         val outbounds = JSONArray()
@@ -809,6 +871,20 @@ data class AppConfig(
         return if (trimmed.startsWith("/")) trimmed else "/$trimmed"
     }
 
+    private fun isValidEchPublicName(value: String): Boolean {
+        val name = value.trim().lowercase().removeSuffix(".")
+        if (name.isBlank() || name.length > 253 || ':' in name || '/' in name || '*' in name) return false
+        if (name.split('.').all { it.toIntOrNull() != null }) return false
+        fun Char.isAsciiLetterOrDigit(): Boolean =
+            this in 'a'..'z' || this in '0'..'9'
+        return name.split('.').all { label ->
+            label.length in 1..63 &&
+                label.first().isAsciiLetterOrDigit() &&
+                label.last().isAsciiLetterOrDigit() &&
+                label.all { it.isAsciiLetterOrDigit() || it == '-' }
+        }
+    }
+
     companion object {
         val Protocols = listOf("native", "vless", "vmess", "trojan")
         val Transports = listOf("raw", "ws", "h2", "h3")
@@ -863,6 +939,10 @@ data class AppConfig(
                 realityShortId = obj.optString("realityShortId"),
                 realityFingerprint = obj.optString("realityFingerprint"),
                 realitySpiderX = obj.optString("realitySpiderX"),
+                echEnabled = obj.optBoolean("echEnabled", false),
+                echPublicName = obj.optString("echPublicName"),
+                echPublicKey = obj.optString("echPublicKey"),
+                echPorts = obj.optString("echPorts"),
                 mux = mux,
                 carrierMode = migrated.carrierMode,
                 carrierUdpMode = migrated.carrierUdpMode,
@@ -909,6 +989,7 @@ data class AppConfig(
     fun label(): String {
         if (rawConfigJson.isNotBlank()) return "TCPTUN / JSON"
         val security = when {
+            echEnabled -> "ech"
             tunnelSecurity.isNotBlank() -> tunnelSecurity
             sni.isNotBlank() && tls -> "tls"
             sni.isNotBlank() -> "reality"
@@ -964,6 +1045,10 @@ data class AppConfig(
             .put("realityShortId", realityShortId)
             .put("realityFingerprint", realityFingerprint)
             .put("realitySpiderX", realitySpiderX)
+            .put("echEnabled", echEnabled)
+            .put("echPublicName", echPublicName)
+            .put("echPublicKey", echPublicKey)
+            .put("echPorts", echPorts)
             .put("mux", mux)
             .put("carrierMode", carrierMode)
             .put("carrierUdpMode", carrierUdpMode)

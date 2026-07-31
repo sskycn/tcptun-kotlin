@@ -197,6 +197,7 @@ private const val MaxProfileNameInputLength = 512
 private const val MaxProfileHostInputLength = 2_048
 private const val MaxProfileChoiceInputLength = 256
 private const val MaxRealityKeyInputLength = 4_096
+private const val MaxEchKeyInputLength = 4_096
 
 private val CardShapeCompact = RoundedCornerShape(12.dp)
 private val MenuShape = RoundedCornerShape(12.dp)
@@ -232,6 +233,9 @@ private fun AppConfig.boundedForEditor(): AppConfig = copy(
     realityShortId = realityShortId.take(MaxProfileChoiceInputLength),
     realityFingerprint = realityFingerprint.take(MaxProfileChoiceInputLength),
     realitySpiderX = realitySpiderX.take(MaxProfileUriLength),
+    echPublicName = echPublicName.take(MaxProfileHostInputLength),
+    echPublicKey = echPublicKey.take(MaxEchKeyInputLength),
+    echPorts = echPorts.take(MaxProfileChoiceInputLength),
     carrierMode = carrierMode.take(MaxProfileChoiceInputLength),
     carrierUdpMode = carrierUdpMode.take(MaxProfileChoiceInputLength),
     upstreamProtocol = upstreamProtocol.take(MaxProfileChoiceInputLength),
@@ -242,6 +246,13 @@ private fun AppConfig.withoutResumableMux(): AppConfig = copy(
     muxResume = false,
     muxResumeTimeoutMillis = 0,
     muxResumeBufferSize = 0,
+)
+
+private fun AppConfig.withoutEch(): AppConfig = copy(
+    echEnabled = false,
+    echPublicName = "",
+    echPublicKey = "",
+    echPorts = "",
 )
 
 private fun reportUiError(message: String) {
@@ -3764,7 +3775,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                     carrierUdpMode = if (it == "native") config.carrierUdpMode else "",
                                 )
                                 if (it != "native") {
-                                    config = config.withoutResumableMux().copy(
+                                    config = config.withoutResumableMux().withoutEch().copy(
                                         carrierInitialStreamReceiveWindow = 0,
                                         carrierMaxStreamReceiveWindow = 0,
                                         carrierInitialConnectionReceiveWindow = 0,
@@ -3779,7 +3790,9 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                 enabled = !isReality,
                             ) {
                                 config = config.copy(transport = it)
-                                if (it != "raw") config = config.withoutResumableMux()
+                                if (it != "raw") {
+                                    config = config.withoutResumableMux().withoutEch()
+                                }
                             }
                             OutlinedTextField(
                                 value = config.token,
@@ -3820,7 +3833,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                         carrierUdpMode = config.carrierUdpMode.takeIf {
                                             config.carrierMode == "quic"
                                         }.orEmpty(),
-                                    ).withoutResumableMux()
+                                    ).withoutResumableMux().withoutEch()
                                     "reality" -> config.copy(
                                         transport = "raw",
                                         tunnelSecurity = "reality",
@@ -3833,7 +3846,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                         } else {
                                             "tcp"
                                         },
-                                    )
+                                    ).withoutEch()
                                     else -> config.copy(
                                         tunnelSecurity = "",
                                         tls = false,
@@ -3907,6 +3920,86 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                     config = config.copy(tlsInsecure = it)
                                 }
                             }
+                            val canEnableEch =
+                                config.protocol == "native" &&
+                                    config.transport == "raw" &&
+                                    selectedSecurity == "none" &&
+                                    config.carrierMode.ifBlank { "tcp" } == "tcp" &&
+                                    !config.muxResume
+                            ToggleRow(
+                                stringResource(R.string.field_ech_client_hello),
+                                config.echEnabled,
+                                enabled = canEnableEch || config.echEnabled,
+                            ) { enabled ->
+                                config = if (enabled) {
+                                    config.withoutResumableMux().copy(
+                                        protocol = "native",
+                                        transport = "raw",
+                                        tunnelSecurity = "",
+                                        tls = false,
+                                        tlsInsecure = false,
+                                        carrierMode = "tcp",
+                                        carrierUdpMode = "",
+                                        echEnabled = true,
+                                        echPorts = config.echPorts.ifBlank { DefaultEchPorts },
+                                    )
+                                } else {
+                                    config.withoutEch()
+                                }
+                            }
+                            if (config.echEnabled) {
+                                Text(
+                                    stringResource(R.string.ech_client_hello_note),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                OutlinedTextField(
+                                    value = config.echPublicName,
+                                    onValueChange = {
+                                        config = config.copy(
+                                            echPublicName = it.take(MaxProfileHostInputLength),
+                                        )
+                                    },
+                                    label = {
+                                        FieldChromeText(stringResource(R.string.field_ech_public_name))
+                                    },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                OutlinedTextField(
+                                    value = config.echPublicKey,
+                                    onValueChange = {
+                                        config = config.copy(
+                                            echPublicKey = it.take(MaxEchKeyInputLength),
+                                        )
+                                    },
+                                    label = {
+                                        FieldChromeText(stringResource(R.string.field_ech_public_key))
+                                    },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                OutlinedTextField(
+                                    value = config.echPorts,
+                                    onValueChange = {
+                                        config = config.copy(
+                                            echPorts = it
+                                                .filter { char ->
+                                                    char.isDigit() || char == ',' || char.isWhitespace()
+                                                }
+                                                .take(MaxProfileChoiceInputLength),
+                                        )
+                                    },
+                                    label = {
+                                        FieldChromeText(stringResource(R.string.field_ech_ports))
+                                    },
+                                    supportingText = {
+                                        FieldChromeText(stringResource(R.string.field_ech_ports_hint))
+                                    },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
                             ToggleRow(
                                 stringResource(R.string.field_mux),
                                 config.mux,
@@ -3941,7 +4034,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                         realityFingerprint = config.realityFingerprint.ifBlank { "chrome" },
                                         mux = true,
                                         carrierMode = "auto",
-                                    )
+                                    ).withoutEch()
                                     "quic" -> config.copy(
                                         protocol = "native",
                                         transport = "raw",
@@ -3954,7 +4047,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                         } else {
                                             config.realityFingerprint
                                         },
-                                    ).withoutResumableMux()
+                                    ).withoutResumableMux().withoutEch()
                                     else -> config.copy(
                                         carrierMode = "tcp",
                                         carrierUdpMode = "",
@@ -4086,7 +4179,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                         mux = true,
                                         carrierMode = "auto",
                                         muxResume = true,
-                                    )
+                                    ).withoutEch()
                                 } else {
                                     config.withoutResumableMux()
                                 }

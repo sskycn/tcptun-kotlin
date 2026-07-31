@@ -73,8 +73,8 @@ func (e *Engine) StatusJSON() string
 
 The diagnostics page shows `CoreVersion` and `CoreBuildID`, so installed builds
 can be matched to the exact tcptun-go revision. CI and release builds currently
-pin `79e9ab45d1e550a47b9cc3ff83cc09eec93ad44b`
-(`tcptun-go` v0.2.4-3-g79e9ab4).
+pin `7d0ef7f95af9e268d98c268a4bfe8c5f0895c3b4`
+(`tcptun-go` v0.2.4-6-g7d0ef7f).
 
 Optional telemetry must be opted into with `RegisterEvent`. The app registers:
 
@@ -422,7 +422,7 @@ native://TOKEN@203.0.113.10:443?v=1&type=raw&security=reality&sni=example.com&fp
 - Independently started local profiles with add, edit, delete, and share actions; active structured profiles form one dynamically weighted, session-affine pool.
 - URI sharing and compact `T3:` QR import/export for native, VLESS, VMess, and Trojan profiles. REALITY uses `security=reality`; `carrier_mode=tcp|auto|quic` selects the physical carrier independently. T3 preserves carrier selection, QUIC UDP mode, and receive-window overrides; import remains compatible with legacy `T2:` payloads and the removed `reality-tcp` / `reality-quic` forms. Versioned payloads use tcptun-go's `EncodeProfile` / `DecodeProfile` bridge API and a dedicated profile DTO; Android only renders and scans the QR image.
 - Protocol and transport selection UI.
-- Optional token, SNI, path, TLS, TLS insecure, REALITY short ID, carrier mode, mux limits, and upstream protocol UI. Native REALITY supports independent `tcp`, `auto`, and `quic` carrier selection; QUIC and automatic selection require mux.
+- Optional token, SNI, path, TLS, TLS insecure, REALITY short ID, ECH ClientHello protection, carrier mode, mux limits, and upstream protocol UI. Native REALITY supports independent `tcp`, `auto`, and `quic` carrier selection; QUIC and automatic selection require mux. ECH uses native + raw + security none + TCP carrier and requires a matching server private key. Because tcptun-go's URI and T2/T3 formats deliberately cannot represent ECH, ECH profiles run and persist locally but do not expose URI/QR sharing.
 - IPv4/IPv6 default routes send all VPN traffic into tcptun-go; explicit rules run first and unmatched traffic uses the balanced active-profile pool.
 - Status display: `Stopped`, `Starting`, `Running`, `Error`.
 - Recent log display.
@@ -435,6 +435,7 @@ native://TOKEN@203.0.113.10:443?v=1&type=raw&security=reality&sni=example.com&fp
 - Android 10+ per-app outbound routing for TCP and UDP flows.
 - Android 10+ single-app successful destination analysis through `SetFlowAnalysisApp` and `FlowCallback`.
 - Import, edit, persist, share, and run complete strict tcptun-go JSON profiles.
+- Full JSON profiles preserve the new server-only native TLS passthrough fallback fields without exposing them in the client endpoint editor.
 
 ## Not yet supported
 

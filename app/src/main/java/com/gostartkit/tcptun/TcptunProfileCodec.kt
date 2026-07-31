@@ -8,6 +8,9 @@ internal object TcptunProfileCodec {
         require(!profile.muxResume && profile.muxResumeTimeoutMillis == 0 && profile.muxResumeBufferSize == 0) {
             "T3 cannot represent resumable mux settings"
         }
+        require(!profile.hasEchClientHelloSettings()) {
+            "T3 cannot represent ECH ClientHello protection"
+        }
         val encoded = invoke("encodeProfile", profile.toBridgeProfileJson().toString())
             .takeIf(String::isNotBlank)
             ?: throw IllegalStateException("androidbridge.EncodeProfile returned an empty payload")

@@ -36,7 +36,7 @@ class AndroidBridgeContractTest {
     @Test
     fun currentBridgeReportsVersionedCoreIdentity() {
         assertEquals("v0.2.4", Androidbridge.coreVersion())
-        assertTrue(Regex("[0-9a-f]{12}(-dirty)?").matches(Androidbridge.coreBuildID()))
+        assertTrue(Androidbridge.coreBuildID().startsWith("7d0ef7f95af9"))
     }
 
     @Test
@@ -164,6 +164,85 @@ class AndroidBridgeContractTest {
         assertEquals(4_194_304, mux.getInt("resume_buffer_size"))
         assertNull(ProfileUriCodec.encodeForQr(restored))
         Androidbridge.validateConfig(config.toString())
+    }
+
+    @Test
+    fun structuredEchProfileEmitsCurrentClientHelloSchema() {
+        val profile = AppConfig(
+            name = "ech",
+            serverHost = "edge.example.com",
+            serverPort = "9443",
+            protocol = "native",
+            transport = "raw",
+            token = "secret",
+            echEnabled = true,
+            echPublicName = "public.example",
+            echPublicKey = "gzFwIcNk5Ez3GIzKErsb8_BLzAvzRyxZlmno-tkYeSY",
+            echPorts = "443, 8443",
+            mux = true,
+            carrierMode = "tcp",
+        )
+
+        assertNull(profile.validate())
+        val restored = AppConfig.fromJson(profile.toJson())
+        val config = JSONObject(restored.toBridgeJson("127.0.0.1:1080"))
+        val proxy = config.getJSONArray("outbounds").getJSONObject(0)
+        val clientHello = proxy.getJSONObject("client_hello")
+
+        assertEquals("ech", clientHello.getString("type"))
+        assertEquals("public.example", clientHello.getString("public_name"))
+        assertEquals(profile.echPublicKey, clientHello.getString("public_key"))
+        assertEquals(443, clientHello.getJSONArray("ports").getInt(0))
+        assertEquals(8443, clientHello.getJSONArray("ports").getInt(1))
+        assertEquals("none", proxy.getJSONObject("security").getString("type"))
+        assertNull(ProfileUriCodec.encode(restored))
+        assertNull(ProfileUriCodec.encodeForQr(restored))
+        assertTrue(profileConnectionIdentity(restored) != null)
+        Androidbridge.validateConfig(config.toString())
+    }
+
+    @Test
+    fun fullJsonPreservesServerOnlyTlsPassthroughFallback() {
+        val raw = """
+            {
+              "inbounds": [{
+                "tag": "server",
+                "type": "native",
+                "address": ["127.0.0.1:19443"],
+                "network": ["tcp", "udp"],
+                "users": [{"id": "secret"}],
+                "transport": {"type": "raw"},
+                "security": {"type": "none"},
+                "carrier": {"mode": "tcp"},
+                "mux": {"enabled": true},
+                "fallback": {
+                  "type": "tls_passthrough",
+                  "dest": "127.0.0.1:20443",
+                  "server_names": ["www.example.com"],
+                  "handshake_timeout": "3s"
+                }
+              }],
+              "outbounds": [{"tag": "direct", "type": "direct"}],
+              "route": {"default_outbound": "direct", "rules": []},
+              "dns": {}
+            }
+        """.trimIndent()
+
+        val prepared = JSONObject(
+            AppConfig(name = "fallback", rawConfigJson = raw)
+                .toBridgeJson(localListenAddr = "127.0.0.1:1080"),
+        )
+        val inbounds = prepared.getJSONArray("inbounds")
+        val server = (0 until inbounds.length())
+            .map(inbounds::getJSONObject)
+            .first { it.getString("tag") == "server" }
+        val fallback = server.getJSONObject("fallback")
+
+        assertEquals("tls_passthrough", fallback.getString("type"))
+        assertEquals("127.0.0.1:20443", fallback.getString("dest"))
+        assertEquals("www.example.com", fallback.getJSONArray("server_names").getString(0))
+        assertEquals("3s", fallback.getString("handshake_timeout"))
+        Androidbridge.validateConfig(prepared.toString())
     }
 
     @Test
