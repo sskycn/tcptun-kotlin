@@ -462,7 +462,7 @@ object ProfileUriCodec {
             putIfNotBlank(params, "pbk", config.realityPublicKey)
             putIfNotBlank(params, "sid", config.realityShortId)
             putIfNotBlank(params, "fp", config.realityFingerprint)
-            putIfNotBlank(params, "spx", config.realitySpiderX.ifBlank { config.path })
+            putIfNotBlank(params, "spx", config.realitySpiderX)
         }
         params["type"] = typeFromTransport(config.transport)
         putIfNotBlank(params, "flow", config.flow)

@@ -268,7 +268,9 @@ class ProfileDeepLinkTest {
             assertEquals(profile.sni, decoded.sni)
             assertEquals(profile.transport, decoded.transport)
             assertEquals(profile.mux, decoded.mux)
-            assertEquals(profile.carrierMode, decoded.carrierMode)
+            // T3 omits the generated TCP carrier default for non-REALITY
+            // profiles, so compare the effective mode rather than its presence.
+            assertEquals(profile.carrierMode, decoded.carrierMode.ifBlank { "tcp" })
             assertEquals(profile.muxMaxSessions, decoded.muxMaxSessions)
             assertEquals(profile.muxMaxStreamsPerSession, decoded.muxMaxStreamsPerSession)
             assertEquals(profile.muxWarmSpare, decoded.muxWarmSpare)
