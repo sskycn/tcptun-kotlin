@@ -2,15 +2,25 @@ package com.tcptun.client
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.hardware.camera2.CaptureRequest
+import android.util.Log
+import android.util.Size as AndroidSize
+import android.view.MotionEvent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
+import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ExperimentalGetImage
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.SurfaceOrientedMeteringPointFactory
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
@@ -69,7 +79,10 @@ import com.google.mlkit.vision.barcode.ZoomSuggestionOptions
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
+import kotlin.math.ln
 import kotlin.math.min
 
 private enum class CameraPermissionState {
@@ -79,6 +92,7 @@ private enum class CameraPermissionState {
 }
 
 internal const val QrCameraReadyTestTag = "qr-camera-ready"
+private const val QR_SCANNER_LOG_TAG = "QrScanner"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -195,8 +209,14 @@ internal fun QrScannerPage(
                             camera = it
                             if (it == null) torchEnabled = false
                         },
-                        onCameraError = { cameraError = true },
-                        onScannerError = { scannerRuntimeError = true },
+                        onCameraError = { error ->
+                            Log.e(QR_SCANNER_LOG_TAG, "Unable to start QR camera", error)
+                            cameraError = true
+                        },
+                        onScannerError = { error ->
+                            Log.e(QR_SCANNER_LOG_TAG, "QR scanner processing failed", error)
+                            scannerRuntimeError = true
+                        },
                         onCodeDetected = { code, onComplete ->
                             onProfileScanned(code) { accepted ->
                                 invalidProfileCode = !accepted
@@ -404,21 +424,59 @@ private fun QrCameraPreview(
                 if (disposed) return@addListener
                 try {
                     val provider = providerFuture.get()
-                    val preview = Preview.Builder().build().also {
+                    val cameraSelector = selectQrCamera(provider)
+                    val previewBuilder = Preview.Builder()
+                    Camera2Interop.Extender(previewBuilder).setCaptureRequestOption(
+                        CaptureRequest.CONTROL_AF_MODE,
+                        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
+                    )
+                    val preview = previewBuilder.build().also {
                         it.surfaceProvider = previewView.surfaceProvider
                     }
-                    val analysis = ImageAnalysis.Builder()
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    val analysisResolution = ResolutionSelector.Builder()
+                        .setResolutionStrategy(
+                            ResolutionStrategy(
+                                AndroidSize(QR_ANALYSIS_WIDTH, QR_ANALYSIS_HEIGHT),
+                                ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
+                            ),
+                        )
                         .build()
-                    val boundCamera = provider.bindToLifecycle(
-                        lifecycleOwner,
-                        CameraSelector.DEFAULT_BACK_CAMERA,
-                        preview,
-                        analysis,
-                    )
+                    val preferredAnalysis = ImageAnalysis.Builder()
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                        .setResolutionSelector(analysisResolution)
+                        .build()
+                    val (boundCamera, analysis) = try {
+                        provider.bindToLifecycle(
+                            lifecycleOwner,
+                            cameraSelector,
+                            preview,
+                            preferredAnalysis,
+                        ) to preferredAnalysis
+                    } catch (preferredError: Throwable) {
+                        if (preferredError.isFatalProcessError()) throw preferredError
+                        runRecoverableCatching { provider.unbind(preview, preferredAnalysis) }
+                        val compatibleAnalysis = ImageAnalysis.Builder()
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                            .build()
+                        try {
+                            provider.bindToLifecycle(
+                                lifecycleOwner,
+                                cameraSelector,
+                                preview,
+                                compatibleAnalysis,
+                            ) to compatibleAnalysis
+                        } catch (compatibleError: Throwable) {
+                            if (compatibleError.isFatalProcessError()) throw compatibleError
+                            compatibleError.addSuppressed(preferredError)
+                            throw compatibleError
+                        }
+                    }
                     cameraProvider = provider
                     previewUseCase = preview
                     analysisUseCase = analysis
+                    requestInitialQrFocus(boundCamera)
                     val maxZoomRatio = boundCamera.cameraInfo.zoomState.value?.maxZoomRatio
                         ?.takeIf { it.isFinite() && it >= 1f }
                         ?: 1f
@@ -439,7 +497,13 @@ private fun QrCameraPreview(
                         .enableAllPotentialBarcodes()
                         .setZoomSuggestionOptions(zoomOptions)
                         .build()
-                    val scanner = BarcodeScanning.getClient(scannerOptions)
+                    val scanner = try {
+                        BarcodeScanning.getClient(scannerOptions)
+                    } catch (error: Throwable) {
+                        if (error.isFatalProcessError()) throw error
+                        if (!disposed) runRecoverableCatching { currentOnScannerError(error) }
+                        return@addListener
+                    }
                     barcodeScanner = scanner
                     val imageAnalyzer = MlKitQrAnalyzer(
                         scanner = scanner,
@@ -475,6 +539,25 @@ private fun QrCameraPreview(
                     )
                     analysis.setAnalyzer(analysisExecutor, imageAnalyzer)
                     analyzer = imageAnalyzer
+                    previewView.setOnTouchListener { view, event ->
+                        if (event.action != MotionEvent.ACTION_UP || disposed) {
+                            return@setOnTouchListener true
+                        }
+                        val point = previewView.meteringPointFactory.createPoint(event.x, event.y)
+                        val action = FocusMeteringAction.Builder(
+                            point,
+                            FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE,
+                        )
+                            .setAutoCancelDuration(QR_FOCUS_HOLD_SECONDS, TimeUnit.SECONDS)
+                            .build()
+                        if (boundCamera.cameraInfo.isFocusMeteringSupported(action)) {
+                            runRecoverableCatching {
+                                boundCamera.cameraControl.startFocusAndMetering(action)
+                            }
+                        }
+                        view.performClick()
+                        true
+                    }
                     if (!disposed) runRecoverableCatching { currentOnCameraReady(boundCamera) }
                 } catch (error: Throwable) {
                     if (error.isFatalProcessError()) throw error
@@ -492,6 +575,7 @@ private fun QrCameraPreview(
             runRecoverableCatching { analyzer?.close() }
             runRecoverableCatching { analysisUseCase?.clearAnalyzer() }
             runRecoverableCatching { barcodeScanner?.close() }
+            runRecoverableCatching { previewView.setOnTouchListener(null) }
             cameraProvider?.let { provider ->
                 previewUseCase?.let { runRecoverableCatching { provider.unbind(it) } }
                 analysisUseCase?.let { runRecoverableCatching { provider.unbind(it) } }
@@ -500,6 +584,95 @@ private fun QrCameraPreview(
             runRecoverableCatching { currentOnCameraReady(null) }
         }
     }
+}
+
+private const val QR_ANALYSIS_WIDTH = 1280
+private const val QR_ANALYSIS_HEIGHT = 720
+private const val QR_FOCUS_HOLD_SECONDS = 3L
+private const val QR_INITIAL_FOCUS_HOLD_SECONDS = 2L
+
+private fun requestInitialQrFocus(camera: Camera) {
+    val action = FocusMeteringAction.Builder(
+        SurfaceOrientedMeteringPointFactory(1f, 1f).createPoint(0.5f, 0.5f),
+        FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE,
+    )
+        .setAutoCancelDuration(QR_INITIAL_FOCUS_HOLD_SECONDS, TimeUnit.SECONDS)
+        .build()
+    if (runRecoverableCatching { camera.cameraInfo.isFocusMeteringSupported(action) }.getOrDefault(false)) {
+        runRecoverableCatching { camera.cameraControl.startFocusAndMetering(action) }
+    }
+}
+
+private fun selectQrCamera(provider: ProcessCameraProvider): CameraSelector {
+    val backCameras = runRecoverableCatching {
+        CameraSelector.Builder()
+            .requireLensFacing(CameraSelector.LENS_FACING_BACK)
+            .build()
+            .filter(provider.availableCameraInfos)
+    }.getOrDefault(emptyList())
+    if (backCameras.isEmpty()) throw IllegalStateException("No back camera is available for QR scanning")
+
+    val defaultCamera = runRecoverableCatching {
+        provider.getCameraInfo(CameraSelector.DEFAULT_BACK_CAMERA)
+    }.getOrNull()
+    val focusAction = FocusMeteringAction.Builder(
+        SurfaceOrientedMeteringPointFactory(1f, 1f).createPoint(0.5f, 0.5f),
+        FocusMeteringAction.FLAG_AF,
+    ).build()
+    return backCameras
+        .map { cameraInfo ->
+            QrCameraCandidate(
+                cameraInfo = cameraInfo,
+                suitability = QrCameraSuitability(
+                    supportsAutoFocus = runRecoverableCatching {
+                        cameraInfo.isFocusMeteringSupported(focusAction)
+                    }.getOrDefault(false),
+                    intrinsicZoomRatio = runRecoverableCatching {
+                        cameraInfo.intrinsicZoomRatio
+                    }.getOrDefault(1f),
+                    isSystemDefault = cameraInfo == defaultCamera,
+                    isLogicalCamera = runRecoverableCatching {
+                        cameraInfo.isLogicalMultiCameraSupported
+                    }.getOrDefault(false),
+                    hasFlash = runRecoverableCatching { cameraInfo.hasFlashUnit() }.getOrDefault(false),
+                ),
+            )
+        }
+        .maxWithOrNull { left, right ->
+            compareQrCameraSuitability(left.suitability, right.suitability)
+        }
+        ?.cameraInfo
+        ?.cameraSelector
+        ?: throw IllegalStateException("No suitable back camera is available for QR scanning")
+}
+
+private data class QrCameraCandidate(
+    val cameraInfo: CameraInfo,
+    val suitability: QrCameraSuitability,
+)
+
+internal data class QrCameraSuitability(
+    val supportsAutoFocus: Boolean,
+    val intrinsicZoomRatio: Float,
+    val isSystemDefault: Boolean,
+    val isLogicalCamera: Boolean,
+    val hasFlash: Boolean,
+)
+
+internal fun compareQrCameraSuitability(left: QrCameraSuitability, right: QrCameraSuitability): Int {
+    compareValues(left.supportsAutoFocus, right.supportsAutoFocus).takeIf { it != 0 }?.let { return it }
+    compareValues(
+        qrCameraZoomDeviation(right.intrinsicZoomRatio),
+        qrCameraZoomDeviation(left.intrinsicZoomRatio),
+    ).takeIf { it != 0 }?.let { return it }
+    compareValues(left.isSystemDefault, right.isSystemDefault).takeIf { it != 0 }?.let { return it }
+    compareValues(left.isLogicalCamera, right.isLogicalCamera).takeIf { it != 0 }?.let { return it }
+    return compareValues(left.hasFlash, right.hasFlash)
+}
+
+private fun qrCameraZoomDeviation(ratio: Float): Float {
+    if (!ratio.isFinite() || ratio <= 0f) return Float.MAX_VALUE
+    return abs(ln(ratio))
 }
 
 internal fun safeCameraZoomRatio(suggested: Float, minimum: Float, maximum: Float): Float? {

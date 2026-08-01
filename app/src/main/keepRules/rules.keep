@@ -2,3 +2,10 @@
 # Keep both its class names and method names aligned with tcptun-go.
 -keep class androidbridge.** { *; }
 -keep interface androidbridge.** { *; }
+
+# ML Kit discovers these component registrars from AndroidManifest metadata.
+# R8 cannot infer that the metadata keys are class names, so release builds must
+# retain the classes and their original names.
+-keep class com.google.mlkit.vision.barcode.internal.BarcodeRegistrar { *; }
+-keep class com.google.mlkit.vision.common.internal.VisionCommonRegistrar { *; }
+-keep class com.google.mlkit.common.internal.CommonComponentRegistrar { *; }
