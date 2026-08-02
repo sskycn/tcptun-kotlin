@@ -130,8 +130,10 @@
     <string name="socks_listen_all">监听所有网卡</string>
     <string name="route_local_proxy_traffic">本地代理走路由规则</string>
     <string name="route_local_proxy_traffic_note">默认关闭。开启后，mixed/SOCKS 监听流量与 VPN（TUN）流量共用同一套托管路由规则。修改后需重启 VPN 生效。</string>
+    <string name="default_outbound">默认出口（route.default_outbound）</string>
+    <string name="default_outbound_note">未命中路由规则时使用。可选择动态连接池、某个配置连接或直连；指定连接必须处于运行状态，删除后自动回退动态池。完整 JSON 配置仍使用其自身的 default_outbound。</string>
     <string name="route_management">路由管理</string>
-    <string name="route_management_note">规则优先从上到下匹配 VPN（TUN）流量。在设置中开启「本地代理走路由规则」后，mixed/SOCKS 也会按相同规则分流；未命中流量使用活动连接动态池。离开页面时应用变更。</string>
+    <string name="route_management_note">规则优先从上到下匹配 VPN（TUN）流量。在设置中开启「本地代理走路由规则」后，mixed/SOCKS 也会按相同规则分流；未命中流量使用配置的默认出口。离开页面时应用变更。</string>
     <string name="route_rules_count">已启用 %1$d 条规则</string>
     <string name="empty_route_rules">还没有路由规则</string>
     <string name="add_route_rule">添加路由规则</string>
@@ -168,7 +170,7 @@
     <string name="seconds_value">%1$d 秒</string>
     <string name="recent_restart_reason">最近重启原因</string>
     <string name="transparent_proxy_settings">透明代理参数</string>
-    <string name="runtime_settings_note">编辑时会先保存设置；日志级别会立即生效，修改 MTU、本地代理监听与认证或本地代理路由时会重启正在运行的 VPN。</string>
+    <string name="runtime_settings_note">编辑时会先保存设置；日志级别会立即生效，修改 MTU、本地代理监听与认证、本地代理路由或默认出口时会重启正在运行的 VPN。</string>
     <string name="native_tun_capabilities_note">原生 TUN 支持 TCP 和 UDP；DNS 默认在 Go 隧道内接管并启用 fake-IP。</string>
     <string name="vpn_traffic_mode">VPN 流量模式</string>
     <string name="tcp_udp">TCP + UDP</string>

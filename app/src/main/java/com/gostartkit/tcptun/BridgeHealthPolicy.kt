@@ -114,7 +114,8 @@ internal object BridgeHealthPolicy {
             previous.socksListenAll != next.socksListenAll ||
             previous.socksUsername != next.socksUsername ||
             previous.socksPassword != next.socksPassword ||
-            previous.routeLocalProxyTraffic != next.routeLocalProxyTraffic
+            previous.routeLocalProxyTraffic != next.routeLocalProxyTraffic ||
+            previous.defaultOutbound != next.defaultOutbound
     }
 
     fun requiresRuntimeRestart(

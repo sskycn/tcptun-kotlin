@@ -88,8 +88,9 @@ only through that instance.
 app builds a local mixed/SOCKS5 inbound, every configured structured profile as
 an equal tagged tunnel outbound, a dynamic `balance` pool, and a direct outbound.
 Ordered route rules are evaluated
-first and may select a specific configured profile by its stable tag; unmatched sessions enter the
-pool, whose effective weights follow active load, observed connection latency,
+first and may select a specific configured profile by its stable tag. The Settings page can select
+the dynamic pool, a specific structured profile, or direct as `route.default_outbound`; the pool
+remains the default. Its effective weights follow active load, observed connection latency,
 and failures while destination affinity keeps related sessions on one link.
 Event-driven checks call `ProbeOutboundHealth` for every active structured pool
 member when forced (VPN start, network change, core degraded/reconnect, pool
@@ -423,7 +424,7 @@ native://TOKEN@203.0.113.10:443?v=1&type=raw&security=reality&sni=example.com&fp
 - URI sharing and compact `T3:` QR import/export for native, VLESS, VMess, and Trojan profiles. REALITY uses `security=reality`; `carrier_mode=tcp|auto|quic` selects the physical carrier independently. T3 preserves carrier selection, QUIC UDP mode, and receive-window overrides; import remains compatible with legacy `T2:` payloads and the removed `reality-tcp` / `reality-quic` forms. Versioned payloads use tcptun-go's `EncodeProfile` / `DecodeProfile` bridge API and a dedicated profile DTO; Android only renders and scans the QR image.
 - Protocol and transport selection UI.
 - Optional token, SNI, path, TLS, TLS insecure, REALITY short ID, ECH ClientHello protection, carrier mode, mux limits, and upstream protocol UI. Native REALITY supports independent `tcp`, `auto`, and `quic` carrier selection; QUIC and automatic selection require mux. ECH uses native + raw + security none + TCP carrier and requires a matching server private key. Because tcptun-go's URI and T2/T3 formats deliberately cannot represent ECH, ECH profiles run and persist locally but do not expose URI/QR sharing.
-- IPv4/IPv6 default routes send all VPN traffic into tcptun-go; explicit rules run first and unmatched traffic uses the balanced active-profile pool.
+- IPv4/IPv6 default routes send all VPN traffic into tcptun-go; explicit rules run first and unmatched traffic uses the default outbound selected in Settings.
 - Status display: `Stopped`, `Starting`, `Running`, `Error`.
 - Recent log display.
 - Native tcptun-go TUN forwarding.

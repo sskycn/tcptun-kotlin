@@ -189,6 +189,8 @@ data class RuntimeSettings(
     val socksPassword: String = "",
     /** When true, managed route rules also match mixed/SOCKS local proxy traffic. Default off. */
     val routeLocalProxyTraffic: Boolean = false,
+    /** Empty selects the dynamic pool; __direct__ selects direct; any other value is a profile ID. */
+    val defaultOutbound: String = DefaultOutboundDynamicPool,
     val flowAnalysisApp: String = "",
 )
 
@@ -330,6 +332,7 @@ class TcptunVpnService : VpnService() {
     @Volatile private var activeLocalProxyProtocol = DefaultLocalProxyProtocol
     @Volatile private var activeSocksListenAll = false
     @Volatile private var activeRouteLocalProxyTraffic = false
+    @Volatile private var activeDefaultOutbound = DefaultOutboundDynamicPool
     @Volatile private var activeFlowAnalysisApp = ""
     @Volatile private var activeLogLevel = DefaultLogLevel
     @Volatile private var powerSavingMode = true
@@ -1915,6 +1918,7 @@ class TcptunVpnService : VpnService() {
             activeLocalProxyProtocol = DefaultLocalProxyProtocol
             activeSocksListenAll = false
             activeRouteLocalProxyTraffic = false
+            activeDefaultOutbound = DefaultOutboundDynamicPool
             activeFlowAnalysisApp = ""
             activeLogLevel = DefaultLogLevel
             powerSavingMode = true
@@ -2189,6 +2193,7 @@ class TcptunVpnService : VpnService() {
         activeLocalProxyProtocol = settings.localProxyProtocol
         activeSocksListenAll = settings.socksListenAll
         activeRouteLocalProxyTraffic = settings.routeLocalProxyTraffic
+        activeDefaultOutbound = settings.defaultOutbound
         activeFlowAnalysisApp = settings.flowAnalysisApp
         activeLogLevel = settings.logLevel
         powerSavingMode = settings.powerSavingMode
@@ -2205,6 +2210,7 @@ class TcptunVpnService : VpnService() {
             socksUsername = activeSocksUsername,
             socksPassword = activeSocksPassword,
             routeLocalProxyTraffic = activeRouteLocalProxyTraffic,
+            defaultOutbound = activeDefaultOutbound,
         )
     }
 
@@ -3870,6 +3876,7 @@ class TcptunVpnService : VpnService() {
         private const val EXTRA_RUNTIME_SOCKS_USERNAME = "runtimeSocksUsername"
         private const val EXTRA_RUNTIME_SOCKS_PASSWORD = "runtimeSocksPassword"
         private const val EXTRA_RUNTIME_ROUTE_LOCAL_PROXY_TRAFFIC = "runtimeRouteLocalProxyTraffic"
+        private const val EXTRA_RUNTIME_DEFAULT_OUTBOUND = "runtimeDefaultOutbound"
         private const val EXTRA_RUNTIME_FLOW_ANALYSIS_APP = "runtimeFlowAnalysisApp"
         private const val RUNTIME_SETTINGS_INTENT_VERSION = 1
         const val LOCAL_SOCKS_HOST = "127.0.0.1"
@@ -3920,6 +3927,7 @@ class TcptunVpnService : VpnService() {
         private const val KEY_RUNTIME_SOCKS_USERNAME = "runtimeSocksUsername"
         private const val KEY_RUNTIME_SOCKS_PASSWORD = "runtimeSocksPassword"
         private const val KEY_RUNTIME_ROUTE_LOCAL_PROXY_TRAFFIC = "runtimeRouteLocalProxyTraffic"
+        private const val KEY_RUNTIME_DEFAULT_OUTBOUND = "runtimeDefaultOutbound"
         private const val KEY_RUNTIME_FLOW_ANALYSIS_APP = "runtimeFlowAnalysisApp"
         private val forceNextUpstreamProbe = AtomicBoolean(false)
         private val forceNextMemberHealthProbe = AtomicBoolean(false)
@@ -3993,12 +4001,14 @@ class TcptunVpnService : VpnService() {
                 socks5Password = runtimeSettings.socksPassword,
                 managedRouteRules = managedRouteRules,
                 routeLocalProxyTraffic = runtimeSettings.routeLocalProxyTraffic,
+                defaultOutbound = runtimeSettings.defaultOutbound,
             )
             val planJson = plan.toJson().toString()
             val settingsPayloadLength = runtimeSettings.socksUsername.length +
                 runtimeSettings.socksPassword.length +
                 runtimeSettings.localProxyProtocol.length +
                 runtimeSettings.logLevel.length +
+                runtimeSettings.defaultOutbound.length +
                 runtimeSettings.flowAnalysisApp.length
             require(isVpnCommandPayloadWithinLimit(configJson.length, planJson.length, settingsPayloadLength)) {
                 "VPN configuration is too large to send to the service"
@@ -4017,6 +4027,7 @@ class TcptunVpnService : VpnService() {
             putExtra(EXTRA_RUNTIME_SOCKS_USERNAME, settings.socksUsername)
             putExtra(EXTRA_RUNTIME_SOCKS_PASSWORD, settings.socksPassword)
             putExtra(EXTRA_RUNTIME_ROUTE_LOCAL_PROXY_TRAFFIC, settings.routeLocalProxyTraffic)
+            putExtra(EXTRA_RUNTIME_DEFAULT_OUTBOUND, settings.defaultOutbound)
             putExtra(EXTRA_RUNTIME_FLOW_ANALYSIS_APP, settings.flowAnalysisApp)
         }
 
@@ -4048,6 +4059,9 @@ class TcptunVpnService : VpnService() {
                 routeLocalProxyTraffic = intent.getBooleanExtra(
                     EXTRA_RUNTIME_ROUTE_LOCAL_PROXY_TRAFFIC,
                     false,
+                ),
+                defaultOutbound = normalizeDefaultOutboundSelection(
+                    intent.getStringExtra(EXTRA_RUNTIME_DEFAULT_OUTBOUND).orEmpty(),
                 ),
                 flowAnalysisApp = normalizeFlowAnalysisApp(
                     intent.getStringExtra(EXTRA_RUNTIME_FLOW_ANALYSIS_APP).orEmpty(),
@@ -4211,6 +4225,11 @@ class TcptunVpnService : VpnService() {
                 routeLocalProxyTraffic = prefs.readOrDefault(KEY_RUNTIME_ROUTE_LOCAL_PROXY_TRAFFIC, false) {
                     getBoolean(KEY_RUNTIME_ROUTE_LOCAL_PROXY_TRAFFIC, false)
                 },
+                defaultOutbound = normalizeDefaultOutboundSelection(
+                    prefs.readOrDefault(KEY_RUNTIME_DEFAULT_OUTBOUND, DefaultOutboundDynamicPool) {
+                        getString(KEY_RUNTIME_DEFAULT_OUTBOUND, DefaultOutboundDynamicPool).orEmpty()
+                    },
+                ),
                 flowAnalysisApp = normalizeFlowAnalysisApp(
                     prefs.readOrDefault(KEY_RUNTIME_FLOW_ANALYSIS_APP, "") {
                         getString(KEY_RUNTIME_FLOW_ANALYSIS_APP, "").orEmpty()
@@ -4225,6 +4244,7 @@ class TcptunVpnService : VpnService() {
             val normalizedSocksPort = settings.socksPort.coerceIn(1, 65535)
             val normalizedLocalProxyProtocol = normalizeLocalProxyProtocol(settings.localProxyProtocol)
             val normalizedRouteLocalProxyTraffic = settings.routeLocalProxyTraffic
+            val normalizedDefaultOutbound = normalizeDefaultOutboundSelection(settings.defaultOutbound)
             val normalizedFlowAnalysisApp = normalizeFlowAnalysisApp(settings.flowAnalysisApp)
             require(settings.socksUsername.length <= MAX_RUNTIME_CREDENTIAL_LENGTH) { "SOCKS username is too long" }
             require(settings.socksPassword.length <= MAX_RUNTIME_CREDENTIAL_LENGTH) { "SOCKS password is too long" }
@@ -4242,6 +4262,7 @@ class TcptunVpnService : VpnService() {
                 socksUsername = settings.socksUsername,
                 socksPassword = settings.socksPassword,
                 routeLocalProxyTraffic = normalizedRouteLocalProxyTraffic,
+                defaultOutbound = normalizedDefaultOutbound,
                 flowAnalysisApp = normalizedFlowAnalysisApp,
             )
             val appContext = context.applicationContext ?: context
@@ -4256,6 +4277,7 @@ class TcptunVpnService : VpnService() {
                 .putString(KEY_RUNTIME_SOCKS_USERNAME, settings.socksUsername)
                 .putString(KEY_RUNTIME_SOCKS_PASSWORD, settings.socksPassword)
                 .putBoolean(KEY_RUNTIME_ROUTE_LOCAL_PROXY_TRAFFIC, normalizedRouteLocalProxyTraffic)
+                .putString(KEY_RUNTIME_DEFAULT_OUTBOUND, normalizedDefaultOutbound)
                 .putString(KEY_RUNTIME_FLOW_ANALYSIS_APP, normalizedFlowAnalysisApp)
                 .commit()
             check(saved) { "runtime settings could not be persisted" }
@@ -4274,6 +4296,7 @@ class TcptunVpnService : VpnService() {
                     "log-level=$normalizedLogLevel " +
                     "power-saving=$normalizedPowerSavingMode " +
                     "route-local-proxy=$normalizedRouteLocalProxyTraffic " +
+                    "default-outbound=${normalizedDefaultOutbound.ifBlank { "profile-pool" }} " +
                     "flow-analysis=${normalizedFlowAnalysisApp.ifBlank { "disabled" }}",
             )
         }

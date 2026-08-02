@@ -156,6 +156,17 @@ class BridgeHealthPolicyTest {
     }
 
     @Test
+    fun structuralRuntimeChangeIncludesDefaultOutbound() {
+        val base = RuntimeSettings()
+        assertTrue(
+            BridgeHealthPolicy.isStructuralRuntimeChange(
+                base,
+                base.copy(defaultOutbound = DefaultOutboundDirect),
+            ),
+        )
+    }
+
+    @Test
     fun forcedRuntimeRestartRebuildsNonSettingsConfiguration() {
         val settings = RuntimeSettings()
         assertTrue(

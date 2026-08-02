@@ -721,6 +721,47 @@ class AndroidBridgeContractTest {
     }
 
     @Test
+    fun startIntentUsesPersistedDefaultOutbound() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val originalSettings = TcptunVpnService.readRuntimeSettings(context)
+        val profile = AppConfig(
+            id = "persisted-default-outbound",
+            name = "persisted default",
+            serverHost = "192.0.2.10",
+            token = "token",
+        )
+
+        try {
+            TcptunVpnService.writeRuntimeSettings(
+                context,
+                originalSettings.copy(defaultOutbound = DefaultOutboundDirect),
+            )
+            val direct = JSONObject(
+                TcptunVpnService.startIntent(context, profile)
+                    .getStringExtra(TcptunVpnService.EXTRA_CONFIG)
+                    .orEmpty(),
+            )
+            assertEquals("direct", direct.getJSONObject("route").getString("default_outbound"))
+
+            TcptunVpnService.writeRuntimeSettings(
+                context,
+                originalSettings.copy(defaultOutbound = profile.id),
+            )
+            val selected = JSONObject(
+                TcptunVpnService.startIntent(context, profile)
+                    .getStringExtra(TcptunVpnService.EXTRA_CONFIG)
+                    .orEmpty(),
+            )
+            assertEquals(
+                profileOutboundTag(profile.id),
+                selected.getJSONObject("route").getString("default_outbound"),
+            )
+        } finally {
+            TcptunVpnService.writeRuntimeSettings(context, originalSettings)
+        }
+    }
+
+    @Test
     fun generatedMultiProfileConfigRoutesToStableOutboundTags() {
         val primary = AppConfig(
             id = "00000000-0000-4000-8000-000000000001",
@@ -858,6 +899,77 @@ class AndroidBridgeContractTest {
         assertEquals("direct", outbounds.getJSONObject(1).getString("tag"))
         assertEquals("profile-pool", outbounds.getJSONObject(2).getString("tag"))
         assertEquals("profile-pool", config.getJSONObject("route").getString("default_outbound"))
+    }
+
+    @Test
+    fun generatedConfigAllowsDirectOrSpecificProfileAsDefaultOutbound() {
+        val first = AppConfig(
+            id = "default-outbound-a",
+            name = "first",
+            serverHost = "192.0.2.10",
+            token = "first-token",
+        )
+        val second = AppConfig(
+            id = "default-outbound-b",
+            name = "second",
+            serverHost = "192.0.2.20",
+            token = "second-token",
+        )
+        val plan = ProfileRunPlan(listOf(first, second))
+
+        val direct = JSONObject(
+            plan.toBridgeJson(
+                localListenAddr = "127.0.0.1:18093",
+                defaultOutbound = DefaultOutboundDirect,
+            ),
+        )
+        assertEquals("direct", direct.getJSONObject("route").getString("default_outbound"))
+
+        val selected = JSONObject(
+            plan.toBridgeJson(
+                localListenAddr = "127.0.0.1:18094",
+                defaultOutbound = second.id,
+            ),
+        )
+        assertEquals(
+            profileOutboundTag(second.id),
+            selected.getJSONObject("route").getString("default_outbound"),
+        )
+
+        val deleted = JSONObject(
+            plan.toBridgeJson(
+                localListenAddr = "127.0.0.1:18095",
+                defaultOutbound = "deleted-profile",
+            ),
+        )
+        assertEquals("profile-pool", deleted.getJSONObject("route").getString("default_outbound"))
+
+        Androidbridge.validateConfig(direct.toString())
+        Androidbridge.validateConfig(selected.toString())
+        Androidbridge.validateConfig(deleted.toString())
+    }
+
+    @Test
+    fun fullJsonProfileKeepsItsOwnDefaultOutboundSetting() {
+        val profile = AppConfig(
+            id = "raw-default-outbound",
+            rawConfigJson = """{
+                "outbounds":[
+                    {"tag":"raw-default","type":"blackhole"},
+                    {"tag":"direct","type":"direct"}
+                ],
+                "route":{"default_outbound":"raw-default"}
+            }""".trimIndent(),
+        )
+        val config = JSONObject(
+            ProfileRunPlan(listOf(profile)).toBridgeJson(
+                localListenAddr = "127.0.0.1:18096",
+                defaultOutbound = DefaultOutboundDirect,
+            ),
+        )
+
+        assertEquals("raw-default", config.getJSONObject("route").getString("default_outbound"))
+        Androidbridge.validateConfig(config.toString())
     }
 
     @Test

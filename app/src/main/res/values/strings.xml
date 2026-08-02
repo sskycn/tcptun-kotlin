@@ -131,8 +131,10 @@
     <string name="socks_listen_all">Listen on all interfaces</string>
     <string name="route_local_proxy_traffic">Route local proxy traffic</string>
     <string name="route_local_proxy_traffic_note">Off by default. When enabled, mixed/SOCKS listener traffic uses the same managed route rules as VPN (TUN) traffic. Requires a VPN restart when changed.</string>
+    <string name="default_outbound">Default outbound (route.default_outbound)</string>
+    <string name="default_outbound_note">Used when no route rule matches. Choose the dynamic pool, one configured connection, or direct. A selected connection must be running; deleted selections fall back to the pool. Complete JSON profiles keep their own default_outbound.</string>
     <string name="route_management">Route management</string>
-    <string name="route_management_note">Rules are evaluated first from top to bottom for VPN (TUN) traffic. Enable “Route local proxy traffic” in Settings to also apply them to mixed/SOCKS. Unmatched traffic uses the active dynamic pool. Changes apply when you leave this page.</string>
+    <string name="route_management_note">Rules are evaluated first from top to bottom for VPN (TUN) traffic. Enable “Route local proxy traffic” in Settings to also apply them to mixed/SOCKS. Unmatched traffic uses the configured default outbound. Changes apply when you leave this page.</string>
     <string name="route_rules_count">%1$d enabled rules</string>
     <string name="empty_route_rules">No route rules yet</string>
     <string name="add_route_rule">Add route rule</string>
@@ -169,7 +171,7 @@
     <string name="seconds_value">%1$ds</string>
     <string name="recent_restart_reason">Last restart reason</string>
     <string name="transparent_proxy_settings">Transparent proxy settings</string>
-    <string name="runtime_settings_note">Settings are saved while editing. Log level applies immediately; changes to MTU, local proxy bind/auth, or local proxy routing restart the running VPN.</string>
+    <string name="runtime_settings_note">Settings are saved while editing. Log level applies immediately; changes to MTU, local proxy bind/auth, local proxy routing, or the default outbound restart the running VPN.</string>
     <string name="native_tun_capabilities_note">Native TUN supports TCP and UDP. Go handles DNS inside the tunnel and enables fake-IP by default.</string>
     <string name="vpn_traffic_mode">VPN traffic mode</string>
     <string name="tcp_udp">TCP + UDP</string>

@@ -78,6 +78,18 @@ internal fun profileOutboundTag(profileId: String): String {
 }
 
 private const val BalancedOutboundTag = "profile-pool"
+internal const val DefaultOutboundDynamicPool = ""
+internal const val DefaultOutboundDirect = "__direct__"
+
+internal fun normalizeDefaultOutboundSelection(value: String): String {
+    val normalized = value.trim()
+    return when {
+        normalized.isBlank() -> DefaultOutboundDynamicPool
+        normalized == DefaultOutboundDirect -> DefaultOutboundDirect
+        normalized.length <= MaxProfileIdLength -> normalized
+        else -> DefaultOutboundDynamicPool
+    }
+}
 
 internal fun AppConfig.runtimeOutboundTag(): String {
     if (rawConfigJson.isBlank()) return profileOutboundTag(id)
@@ -114,6 +126,7 @@ internal fun ProfileRunPlan.toBridgeJson(
     socks5Password: String = "",
     managedRouteRules: List<ManagedRouteRule> = emptyList(),
     routeLocalProxyTraffic: Boolean = false,
+    defaultOutbound: String = DefaultOutboundDynamicPool,
 ): String {
     val plan = normalized()
     val rawProfile = plan.profiles.singleOrNull()?.takeIf { it.rawConfigJson.isNotBlank() }
@@ -178,6 +191,12 @@ internal fun ProfileRunPlan.toBridgeJson(
     require(activeRules.size <= MaxActiveManagedRouteRuleCount) {
         "at most $MaxActiveManagedRouteRuleCount managed route rules can be enabled"
     }
+    val normalizedDefaultOutbound = normalizeDefaultOutboundSelection(defaultOutbound)
+    val defaultOutboundTag = when {
+        normalizedDefaultOutbound == DefaultOutboundDirect -> "direct"
+        normalizedDefaultOutbound.isBlank() -> BalancedOutboundTag
+        else -> tags[normalizedDefaultOutbound] ?: BalancedOutboundTag
+    }
     val rules = JSONArray()
     if (activeRules.isNotEmpty()) {
         rules.put(
@@ -216,7 +235,7 @@ internal fun ProfileRunPlan.toBridgeJson(
         .put("log", JSONObject().put("level", resolvedLogLevel))
         .put("inbounds", JSONArray().put(inbound))
         .put("outbounds", outbounds)
-        .put("route", JSONObject().put("default_outbound", BalancedOutboundTag).put("rules", rules))
+        .put("route", JSONObject().put("default_outbound", defaultOutboundTag).put("rules", rules))
         .put("dns", defaultNativeTunDnsConfig())
         .toString()
 }

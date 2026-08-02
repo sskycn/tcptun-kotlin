@@ -2571,15 +2571,30 @@ private fun SettingsPage(onBack: () -> Unit) {
     var settingsDirty by remember { mutableStateOf(false) }
     var savingSettings by remember { mutableStateOf(false) }
     var settingsLoaded by remember { mutableStateOf(false) }
+    var profiles by remember { mutableStateOf<List<AppConfig>>(emptyList()) }
     val settingsScope = rememberCoroutineScope()
     val vpnState by TcptunState.state.collectAsStateWithLifecycle()
     val diagnostics = vpnState.diagnostics
     val mtuOptions = listOf("1280", "1360", "1400", "1500")
+    val defaultPoolLabel = stringResource(R.string.route_outbound_proxy)
+    val defaultDirectLabel = stringResource(R.string.route_outbound_direct)
+    val defaultOutboundChoices = listOf(DefaultOutboundDynamicPool to defaultPoolLabel) +
+        profiles.filter { it.rawConfigJson.isBlank() }.map { profile ->
+            profile.id to "${profile.name} · ${profile.maskedAddress()} · ${profile.id.take(8)}"
+        } +
+        (DefaultOutboundDirect to defaultDirectLabel)
+    val selectedDefaultOutboundLabel = defaultOutboundChoices
+        .firstOrNull { it.first == settings.defaultOutbound }
+        ?.second
+        ?: defaultPoolLabel
 
     LaunchedEffect(context) {
-        val loaded = withContext(Dispatchers.IO) { readUiRuntimeSettings(context) }
-        settings = loaded
-        socksPortText = loaded.socksPort.toString()
+        val (loadedSettings, loadedProfiles) = withContext(Dispatchers.IO) {
+            readUiRuntimeSettings(context) to ProfileStore.load(context).profiles
+        }
+        settings = loadedSettings
+        socksPortText = loadedSettings.socksPort.toString()
+        profiles = loadedProfiles
         settingsLoaded = true
     }
 
@@ -2643,8 +2658,12 @@ private fun SettingsPage(onBack: () -> Unit) {
         PullRefreshContainer(
             onRefresh = {
                 if (!settingsDirty) {
-                    settings = withContext(Dispatchers.IO) { readUiRuntimeSettings(context) }
+                    val (loadedSettings, loadedProfiles) = withContext(Dispatchers.IO) {
+                        readUiRuntimeSettings(context) to ProfileStore.load(context).profiles
+                    }
+                    settings = loadedSettings
                     socksPortText = settings.socksPort.toString()
+                    profiles = loadedProfiles
                 }
                 refreshRunningDiagnostics()
             },
@@ -2720,6 +2739,21 @@ private fun SettingsPage(onBack: () -> Unit) {
                         }
                         Text(
                             stringResource(R.string.route_local_proxy_traffic_note),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        ChoiceRow(
+                            stringResource(R.string.default_outbound),
+                            selectedDefaultOutboundLabel,
+                            defaultOutboundChoices.map { it.second },
+                            enabled = !savingSettings,
+                        ) { selected ->
+                            val choice = defaultOutboundChoices.firstOrNull { it.second == selected }
+                                ?: return@ChoiceRow
+                            updateSettingsDraft(settings.copy(defaultOutbound = choice.first))
+                        }
+                        Text(
+                            stringResource(R.string.default_outbound_note),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -2806,6 +2840,10 @@ private fun SettingsPage(onBack: () -> Unit) {
                         DiagnosticsLine(
                             stringResource(R.string.route_local_proxy_traffic),
                             if (settings.routeLocalProxyTraffic) stringResource(R.string.enabled) else stringResource(R.string.disabled),
+                        )
+                        DiagnosticsLine(
+                            stringResource(R.string.default_outbound),
+                            selectedDefaultOutboundLabel,
                         )
                         DiagnosticsLine(stringResource(R.string.vpn_traffic_mode), stringResource(R.string.tcp_udp))
                     }
