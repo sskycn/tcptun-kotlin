@@ -83,12 +83,7 @@ internal const val DefaultOutboundDirect = "__direct__"
 
 internal fun normalizeDefaultOutboundSelection(value: String): String {
     val normalized = value.trim()
-    return when {
-        normalized.isBlank() -> DefaultOutboundDynamicPool
-        normalized == DefaultOutboundDirect -> DefaultOutboundDirect
-        normalized.length <= MaxProfileIdLength -> normalized
-        else -> DefaultOutboundDynamicPool
-    }
+    return if (normalized == DefaultOutboundDirect) DefaultOutboundDirect else DefaultOutboundDynamicPool
 }
 
 internal fun AppConfig.runtimeOutboundTag(): String {

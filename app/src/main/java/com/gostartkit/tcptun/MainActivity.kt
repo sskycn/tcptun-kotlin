@@ -2572,30 +2572,25 @@ private fun SettingsPage(onBack: () -> Unit) {
     var settingsDirty by remember { mutableStateOf(false) }
     var savingSettings by remember { mutableStateOf(false) }
     var settingsLoaded by remember { mutableStateOf(false) }
-    var profiles by remember { mutableStateOf<List<AppConfig>>(emptyList()) }
     val settingsScope = rememberCoroutineScope()
     val vpnState by TcptunState.state.collectAsStateWithLifecycle()
     val diagnostics = vpnState.diagnostics
     val mtuOptions = listOf("1280", "1360", "1400", "1500")
     val defaultPoolLabel = stringResource(R.string.route_outbound_proxy)
     val defaultDirectLabel = stringResource(R.string.route_outbound_direct)
-    val defaultOutboundChoices = listOf(DefaultOutboundDynamicPool to defaultPoolLabel) +
-        profiles.filter { it.rawConfigJson.isBlank() }.map { profile ->
-            profile.id to "${profile.name} · ${profile.maskedAddress()} · ${profile.id.take(8)}"
-        } +
-        (DefaultOutboundDirect to defaultDirectLabel)
+    val defaultOutboundChoices = listOf(
+        DefaultOutboundDynamicPool to defaultPoolLabel,
+        DefaultOutboundDirect to defaultDirectLabel,
+    )
     val selectedDefaultOutboundLabel = defaultOutboundChoices
         .firstOrNull { it.first == settings.defaultOutbound }
         ?.second
         ?: defaultPoolLabel
 
     LaunchedEffect(context) {
-        val (loadedSettings, loadedProfiles) = withContext(Dispatchers.IO) {
-            readUiRuntimeSettings(context) to ProfileStore.load(context).profiles
-        }
+        val loadedSettings = withContext(Dispatchers.IO) { readUiRuntimeSettings(context) }
         settings = loadedSettings
         socksPortText = loadedSettings.socksPort.toString()
-        profiles = loadedProfiles
         settingsLoaded = true
     }
 
@@ -2659,12 +2654,9 @@ private fun SettingsPage(onBack: () -> Unit) {
         PullRefreshContainer(
             onRefresh = {
                 if (!settingsDirty) {
-                    val (loadedSettings, loadedProfiles) = withContext(Dispatchers.IO) {
-                        readUiRuntimeSettings(context) to ProfileStore.load(context).profiles
-                    }
+                    val loadedSettings = withContext(Dispatchers.IO) { readUiRuntimeSettings(context) }
                     settings = loadedSettings
                     socksPortText = settings.socksPort.toString()
-                    profiles = loadedProfiles
                 }
                 refreshRunningDiagnostics()
             },

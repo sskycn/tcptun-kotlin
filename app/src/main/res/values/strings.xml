@@ -138,7 +138,7 @@
     <string name="route_local_proxy_traffic">Route local proxy traffic</string>
     <string name="route_local_proxy_traffic_note">Off by default. When enabled, mixed/SOCKS listener traffic uses the same managed route rules as VPN (TUN) traffic. Requires a VPN restart when changed.</string>
     <string name="default_outbound">Default outbound (route.default_outbound)</string>
-    <string name="default_outbound_note">Used when no route rule matches. Choose the dynamic pool, one configured connection, or direct. A selected connection must be running; deleted selections fall back to the pool. Complete JSON profiles keep their own default_outbound.</string>
+    <string name="default_outbound_note">Used when no route rule matches. Choose the dynamic connection pool or direct. Complete JSON profiles keep their own default_outbound.</string>
     <string name="route_management">Route management</string>
     <string name="route_management_note">Rules are evaluated first from top to bottom for VPN (TUN) traffic. Enable “Route local proxy traffic” in Settings to also apply them to mixed/SOCKS. Unmatched traffic uses the configured default outbound. Changes apply when you leave this page.</string>
     <string name="route_rules_count">%1$d enabled rules</string>

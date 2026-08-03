@@ -33,6 +33,14 @@ class ProfileRunPlanTest {
     }
 
     @Test
+    fun defaultOutboundOnlyAcceptsDynamicPoolOrDirect() {
+        assertEquals(DefaultOutboundDynamicPool, normalizeDefaultOutboundSelection(""))
+        assertEquals(DefaultOutboundDirect, normalizeDefaultOutboundSelection("  $DefaultOutboundDirect  "))
+        assertEquals(DefaultOutboundDynamicPool, normalizeDefaultOutboundSelection("profile-id"))
+        assertEquals(DefaultOutboundDynamicPool, normalizeDefaultOutboundSelection("unknown"))
+    }
+
+    @Test
     fun normalizationRejectsProfileListsAboveTheRuntimeBalanceLimit() {
         val profiles = List(MaxRuntimeProfileCount + 1) { index ->
             validProfile("profile-$index", "192.0.2.10")

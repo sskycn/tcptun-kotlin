@@ -721,7 +721,7 @@ class AndroidBridgeContractTest {
     }
 
     @Test
-    fun startIntentUsesPersistedDefaultOutbound() {
+    fun startIntentUsesPersistedPoolOrDirectDefaultOutbound() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val originalSettings = TcptunVpnService.readRuntimeSettings(context)
         val profile = AppConfig(
@@ -747,14 +747,14 @@ class AndroidBridgeContractTest {
                 context,
                 originalSettings.copy(defaultOutbound = profile.id),
             )
-            val selected = JSONObject(
+            val selectedFallsBackToPool = JSONObject(
                 TcptunVpnService.startIntent(context, profile)
                     .getStringExtra(TcptunVpnService.EXTRA_CONFIG)
                     .orEmpty(),
             )
             assertEquals(
-                profileOutboundTag(profile.id),
-                selected.getJSONObject("route").getString("default_outbound"),
+                "profile-pool",
+                selectedFallsBackToPool.getJSONObject("route").getString("default_outbound"),
             )
         } finally {
             TcptunVpnService.writeRuntimeSettings(context, originalSettings)
@@ -902,7 +902,7 @@ class AndroidBridgeContractTest {
     }
 
     @Test
-    fun generatedConfigAllowsDirectOrSpecificProfileAsDefaultOutbound() {
+    fun generatedConfigAllowsDirectAndFallsBackFromSpecificProfileToPool() {
         val first = AppConfig(
             id = "default-outbound-a",
             name = "first",
@@ -932,7 +932,7 @@ class AndroidBridgeContractTest {
             ),
         )
         assertEquals(
-            profileOutboundTag(second.id),
+            "profile-pool",
             selected.getJSONObject("route").getString("default_outbound"),
         )
 

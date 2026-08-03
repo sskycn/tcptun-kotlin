@@ -137,7 +137,7 @@
     <string name="route_local_proxy_traffic">本地代理走路由规则</string>
     <string name="route_local_proxy_traffic_note">默认关闭。开启后，mixed/SOCKS 监听流量与 VPN（TUN）流量共用同一套托管路由规则。修改后需重启 VPN 生效。</string>
     <string name="default_outbound">默认出口（route.default_outbound）</string>
-    <string name="default_outbound_note">未命中路由规则时使用。可选择动态连接池、某个配置连接或直连；指定连接必须处于运行状态，删除后自动回退动态池。完整 JSON 配置仍使用其自身的 default_outbound。</string>
+    <string name="default_outbound_note">未命中路由规则时使用，只能选择动态连接池或直接连接。完整 JSON 配置仍使用其自身的 default_outbound。</string>
     <string name="route_management">路由管理</string>
     <string name="route_management_note">规则优先从上到下匹配 VPN（TUN）流量。在设置中开启「本地代理走路由规则」后，mixed/SOCKS 也会按相同规则分流；未命中流量使用配置的默认出口。离开页面时应用变更。</string>
     <string name="route_rules_count">已启用 %1$d 条规则</string>
