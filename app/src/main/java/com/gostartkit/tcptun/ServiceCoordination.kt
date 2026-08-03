@@ -69,6 +69,126 @@ internal class RuntimeSettingsApplyGate {
     fun isLatest(requestGeneration: Int): Boolean = requestGeneration == generation
 }
 
+internal data class BridgeRestartToken(
+    val requestGeneration: Long,
+    val lifecycleGeneration: Int,
+)
+
+internal data class BridgeRecoveryAttempt(
+    val number: Int,
+    val delayMillis: Long,
+)
+
+/**
+ * Owns restart generations, cooldown admission, healthy-snapshot cancellation,
+ * and failed-recovery backoff independently from Android task scheduling.
+ */
+internal class BridgeRecoveryCoordinator(
+    private val minRestartIntervalMillis: Long,
+    private val recoveryDelayMillis: (Int) -> Long,
+) {
+    private var restartGeneration = 0L
+    private var healthySnapshotMayCancel = false
+    private var lastRestartAtMillis = 0L
+    private var recoveryAttempt = 0
+
+    init {
+        require(minRestartIntervalMillis >= 0L) {
+            "minimum bridge restart interval must not be negative"
+        }
+    }
+
+    val recoveryPending: Boolean
+        @Synchronized get() = recoveryAttempt > 0
+
+    @Synchronized
+    fun requestRestart(
+        lifecycleGeneration: Int,
+        cancelIfHealthy: Boolean,
+    ): BridgeRestartToken {
+        recoveryAttempt = 0
+        healthySnapshotMayCancel = cancelIfHealthy
+        restartGeneration += 1L
+        return BridgeRestartToken(restartGeneration, lifecycleGeneration)
+    }
+
+    @Synchronized
+    fun cancelRestart() {
+        restartGeneration += 1L
+        healthySnapshotMayCancel = false
+    }
+
+    @Synchronized
+    fun isCurrent(token: BridgeRestartToken, currentLifecycleGeneration: Int): Boolean =
+        token.requestGeneration == restartGeneration &&
+            token.lifecycleGeneration == currentLifecycleGeneration
+
+    @Synchronized
+    fun claimRestart(token: BridgeRestartToken, currentLifecycleGeneration: Int): Boolean {
+        if (!isCurrent(token, currentLifecycleGeneration)) return false
+        healthySnapshotMayCancel = false
+        return true
+    }
+
+    @Synchronized
+    fun cancelRestartAfterHealthySnapshot(): Boolean {
+        if (!healthySnapshotMayCancel) return false
+        restartGeneration += 1L
+        healthySnapshotMayCancel = false
+        return true
+    }
+
+    @Synchronized
+    fun scheduleDelayMillis(
+        token: BridgeRestartToken,
+        currentLifecycleGeneration: Int,
+        nowMillis: Long,
+        settleDelayMillis: Long,
+    ): Long? {
+        if (!isCurrent(token, currentLifecycleGeneration)) return null
+        return maxOf(
+            remainingCooldownMillis(nowMillis),
+            settleDelayMillis.coerceAtLeast(0L),
+        )
+    }
+
+    /** Returns remaining cooldown, or records the admitted restart and returns zero. */
+    @Synchronized
+    fun beginRestart(nowMillis: Long): Long {
+        val remaining = remainingCooldownMillis(nowMillis)
+        if (remaining > 0L) return remaining
+        lastRestartAtMillis = nowMillis
+        return 0L
+    }
+
+    @Synchronized
+    fun remainingCooldownMillis(nowMillis: Long): Long =
+        (minRestartIntervalMillis - (nowMillis - lastRestartAtMillis)).coerceAtLeast(0L)
+
+    @Synchronized
+    fun resetRestartCooldown() {
+        lastRestartAtMillis = 0L
+    }
+
+    @Synchronized
+    fun nextRecoveryAttempt(): BridgeRecoveryAttempt {
+        recoveryAttempt = if (recoveryAttempt == Int.MAX_VALUE) {
+            Int.MAX_VALUE
+        } else {
+            recoveryAttempt + 1
+        }
+        return BridgeRecoveryAttempt(
+            number = recoveryAttempt,
+            delayMillis = recoveryDelayMillis(recoveryAttempt),
+        )
+    }
+
+    @Synchronized
+    fun resetRecovery() {
+        recoveryAttempt = 0
+    }
+}
+
 /**
  * Owns the latest deferred task and cancels the task it supersedes.
  *

@@ -63,6 +63,71 @@ class ServiceCoordinationTest {
     }
 
     @Test
+    fun bridgeRestartCoordinatorRejectsOlderRequestAndLifecycleGeneration() {
+        val coordinator = recoveryCoordinator()
+        val first = coordinator.requestRestart(lifecycleGeneration = 4, cancelIfHealthy = false)
+        val second = coordinator.requestRestart(lifecycleGeneration = 4, cancelIfHealthy = false)
+
+        assertFalse(coordinator.isCurrent(first, currentLifecycleGeneration = 4))
+        assertTrue(coordinator.isCurrent(second, currentLifecycleGeneration = 4))
+        assertFalse(coordinator.isCurrent(second, currentLifecycleGeneration = 5))
+        assertTrue(coordinator.claimRestart(second, currentLifecycleGeneration = 4))
+    }
+
+    @Test
+    fun healthySnapshotOnlyCancelsExplicitlyRecoverableRestart() {
+        val coordinator = recoveryCoordinator()
+        val mandatory = coordinator.requestRestart(lifecycleGeneration = 1, cancelIfHealthy = false)
+
+        assertFalse(coordinator.cancelRestartAfterHealthySnapshot())
+        assertTrue(coordinator.isCurrent(mandatory, currentLifecycleGeneration = 1))
+
+        val recoverable = coordinator.requestRestart(lifecycleGeneration = 1, cancelIfHealthy = true)
+        assertTrue(coordinator.cancelRestartAfterHealthySnapshot())
+        assertFalse(coordinator.isCurrent(recoverable, currentLifecycleGeneration = 1))
+        assertFalse(coordinator.cancelRestartAfterHealthySnapshot())
+    }
+
+    @Test
+    fun bridgeRestartDelayCombinesCooldownAndSettleWindow() {
+        val coordinator = recoveryCoordinator(minRestartIntervalMillis = 30_000L)
+        val first = coordinator.requestRestart(lifecycleGeneration = 2, cancelIfHealthy = false)
+        assertEquals(0L, coordinator.beginRestart(nowMillis = 100_000L))
+
+        val second = coordinator.requestRestart(lifecycleGeneration = 2, cancelIfHealthy = false)
+        assertEquals(
+            25_000L,
+            coordinator.scheduleDelayMillis(second, 2, nowMillis = 105_000L, settleDelayMillis = 1_000L),
+        )
+        assertEquals(
+            40_000L,
+            coordinator.scheduleDelayMillis(second, 2, nowMillis = 105_000L, settleDelayMillis = 40_000L),
+        )
+        assertFalse(coordinator.isCurrent(first, currentLifecycleGeneration = 2))
+        assertEquals(25_000L, coordinator.beginRestart(nowMillis = 105_000L))
+        assertEquals(0L, coordinator.beginRestart(nowMillis = 130_000L))
+    }
+
+    @Test
+    fun successfulRequestResetsRecoveryBackoffAndCancellationResetsRestart() {
+        val delays = mutableListOf<Int>()
+        val coordinator = BridgeRecoveryCoordinator(30_000L) { attempt ->
+            delays += attempt
+            attempt * 100L
+        }
+
+        assertEquals(BridgeRecoveryAttempt(1, 100L), coordinator.nextRecoveryAttempt())
+        assertEquals(BridgeRecoveryAttempt(2, 200L), coordinator.nextRecoveryAttempt())
+        assertTrue(coordinator.recoveryPending)
+
+        val token = coordinator.requestRestart(lifecycleGeneration = 7, cancelIfHealthy = false)
+        assertFalse(coordinator.recoveryPending)
+        coordinator.cancelRestart()
+        assertFalse(coordinator.isCurrent(token, currentLifecycleGeneration = 7))
+        assertEquals(listOf(1, 2), delays)
+    }
+
+    @Test
     fun latestTaskSlotCancelsSupersededAndOwnedTasks() {
         val slot = LatestTaskSlot()
         val first = FutureTask<Unit> {}
@@ -92,4 +157,11 @@ class ServiceCoordinationTest {
         selector.clear()
         assertEquals(values, selector.select(values, 99))
     }
+
+    private fun recoveryCoordinator(
+        minRestartIntervalMillis: Long = 30_000L,
+    ): BridgeRecoveryCoordinator = BridgeRecoveryCoordinator(
+        minRestartIntervalMillis = minRestartIntervalMillis,
+        recoveryDelayMillis = { attempt -> attempt * 1_000L },
+    )
 }

@@ -296,8 +296,10 @@ class TcptunVpnService : VpnService() {
     private val connectionUpdateTracker = ConnectionUpdateTracker()
     private val monitorGeneration = AtomicInteger()
     private val monitorWakeGeneration = AtomicInteger()
-    private val bridgeRestartRequestGeneration = AtomicInteger()
-    private val bridgeRecoveryAttempt = AtomicInteger()
+    private val bridgeRecoveryCoordinator = BridgeRecoveryCoordinator(
+        minRestartIntervalMillis = BRIDGE_RESTART_MIN_INTERVAL_MS,
+        recoveryDelayMillis = BridgeHealthPolicy::bridgeRecoveryDelayMs,
+    )
     private val destroyed = AtomicBoolean()
     private val initialized = AtomicBoolean()
     private val explicitStopRequested = AtomicBoolean()
@@ -325,7 +327,6 @@ class TcptunVpnService : VpnService() {
     private val underlyingNetworkSelection = RankedSelectionTracker<Network>()
     @Volatile private var stopping = false
     @Volatile private var bridgeRestarting = false
-    @Volatile private var lastBridgeRestartAtMs = 0L
     @Volatile private var tunMtu = DEFAULT_VPN_MTU
     @Volatile private var activeSocksPort = DEFAULT_SOCKS_PORT
     @Volatile private var activeSocksUsername = ""
@@ -343,7 +344,6 @@ class TcptunVpnService : VpnService() {
     private val runtimeSettingsApplyTask = LatestTaskSlot()
     private val bridgeRestartTask = LatestTaskSlot()
     private val bridgeRestartScheduleLock = Any()
-    private var bridgeRestartCanBeCancelledByHealthySnapshot = false
     private val bridgeRecoveryTask = LatestTaskSlot()
     private val bridgeTeardownRetryTask = LatestTaskSlot()
     private val bridgeTeardownRetryAttempt = AtomicInteger()
@@ -444,7 +444,7 @@ class TcptunVpnService : VpnService() {
                     bridgeResources.hasOwnedResources ||
                     runningPlan != null,
                 lifecycleWorkPending = lifecycleWorkInFlight.get() > 0,
-                bridgeRecoveryPending = bridgeRecoveryAttempt.get() > 0,
+                bridgeRecoveryPending = bridgeRecoveryCoordinator.recoveryPending,
                 teardownRetryPending = bridgeTeardownRetryAttempt.get() > 0,
                 terminalStopPending = explicitStopRequested.get(),
             )
@@ -637,7 +637,7 @@ class TcptunVpnService : VpnService() {
         synchronized(lifecycleCommandLock) {
             explicitStopRequested.set(false)
             bridgeRecoveryTask.cancel()
-            bridgeRecoveryAttempt.set(0)
+            bridgeRecoveryCoordinator.resetRecovery()
             val generation = lifecycleGeneration.incrementAndGet()
             val profileMutationRevision = ProfileStore.currentMutationRevision()
             executeLifecycleTask(
@@ -693,7 +693,7 @@ class TcptunVpnService : VpnService() {
             if (!commandOwner()) return
             stopping = false
             cancelPendingBridgeRestart()
-            lastBridgeRestartAtMs = 0L
+            bridgeRecoveryCoordinator.resetRestartCooldown()
             run {
                 if (!commandOwner()) return
                 val json = intent.getStringExtra(EXTRA_CONFIG)
@@ -873,7 +873,7 @@ class TcptunVpnService : VpnService() {
                     publishDesiredRunningPlan(this, desiredPlanJson)
                     TcptunState.setStatus("Running")
                     TcptunState.setConnectionsReady(true)
-                    bridgeRecoveryAttempt.set(0)
+                    bridgeRecoveryCoordinator.resetRecovery()
                     bridgeRecoveryTask.cancel()
                     // Publish Running and install its monitor as one ownership
                     // commit. A connection update may claim the next lifecycle
@@ -1711,7 +1711,7 @@ class TcptunVpnService : VpnService() {
                 IllegalStateException("tcptun stop requested"),
             )
             bridgeRecoveryTask.cancel()
-            bridgeRecoveryAttempt.set(0)
+            bridgeRecoveryCoordinator.resetRecovery()
             (generation to profileMutationRevision) to executeLifecycleTask(
                 taskName = "VPN stop",
                 onFailure = { error ->
@@ -1820,10 +1820,10 @@ class TcptunVpnService : VpnService() {
                     initialized.get() &&
                     !explicitStopRequested.get() &&
                     isActiveServiceOwner() &&
-                    (tun != null || bridgeResources.hasOwnedResources || bridgeRecoveryAttempt.get() > 0)
+                    (tun != null || bridgeResources.hasOwnedResources || bridgeRecoveryCoordinator.recoveryPending)
                 ) {
                     val notificationState = runningPlan?.let(::runningNotificationState)
-                        ?: if (bridgeRecoveryAttempt.get() > 0) "Reconnecting" else "Running"
+                        ?: if (bridgeRecoveryCoordinator.recoveryPending) "Reconnecting" else "Running"
                     startVpnForeground(notificationState)
                     TcptunState.appendLog("app task removed; VPN foreground service remains active")
                 }
@@ -2386,17 +2386,16 @@ class TcptunVpnService : VpnService() {
                 false
             } else {
                 val now = System.currentTimeMillis()
-                val elapsedMs = now - lastBridgeRestartAtMs
-                if (elapsedMs < BRIDGE_RESTART_MIN_INTERVAL_MS) {
+                val remainingCooldownMs = bridgeRecoveryCoordinator.beginRestart(now)
+                if (remainingCooldownMs > 0L) {
                     val waitSeconds = (
-                        (BRIDGE_RESTART_MIN_INTERVAL_MS - elapsedMs) / 1_000
+                        remainingCooldownMs / 1_000
                     ).coerceAtLeast(1)
                     TcptunState.appendLog(
                         "tcptun bridge restart skipped by cooldown: $reason; wait ${waitSeconds}s",
                     )
                     false
                 } else {
-                    lastBridgeRestartAtMs = now
                     bridgeRestarting = true
                     TcptunState.setConnectionsReady(false)
                     TcptunState.appendLog("restarting tcptun bridge transaction: $reason")
@@ -2505,9 +2504,8 @@ class TcptunVpnService : VpnService() {
 
     private fun cancelPendingBridgeRestart() {
         synchronized(bridgeRestartScheduleLock) {
-            bridgeRestartRequestGeneration.incrementAndGet()
+            bridgeRecoveryCoordinator.cancelRestart()
             bridgeRestartTask.cancel()
-            bridgeRestartCanBeCancelledByHealthySnapshot = false
         }
     }
 
@@ -2519,34 +2517,30 @@ class TcptunVpnService : VpnService() {
         synchronized(bridgeRestartScheduleLock) {
             if (stopping || destroyed.get()) return
             bridgeRecoveryTask.cancel()
-            bridgeRecoveryAttempt.set(0)
-            bridgeRestartCanBeCancelledByHealthySnapshot = cancelIfHealthy
-            val generation = bridgeRestartRequestGeneration.incrementAndGet()
-            val lifecycleSnapshot = lifecycleGeneration.get()
-            scheduleBridgeRestart(reason, generation, lifecycleSnapshot, settleDelayMs)
+            val token = bridgeRecoveryCoordinator.requestRestart(
+                lifecycleGeneration = lifecycleGeneration.get(),
+                cancelIfHealthy = cancelIfHealthy,
+            )
+            scheduleBridgeRestart(reason, token, settleDelayMs)
         }
     }
 
     private fun scheduleBridgeRestart(
         reason: String,
-        generation: Int,
-        lifecycleSnapshot: Int,
+        token: BridgeRestartToken,
         settleDelayMs: Long = 0L,
     ): Unit = synchronized(bridgeRestartScheduleLock) {
-        if (
-            generation != bridgeRestartRequestGeneration.get() ||
-            lifecycleSnapshot != lifecycleGeneration.get() ||
-            stopping || destroyed.get()
-        ) {
-            return@synchronized
-        }
-        val remainingCooldownMs = (
-            BRIDGE_RESTART_MIN_INTERVAL_MS - (System.currentTimeMillis() - lastBridgeRestartAtMs)
-        ).coerceAtLeast(0)
+        if (stopping || destroyed.get()) return@synchronized
+        val scheduleDelayMs = bridgeRecoveryCoordinator.scheduleDelayMillis(
+            token = token,
+            currentLifecycleGeneration = lifecycleGeneration.get(),
+            nowMillis = System.currentTimeMillis(),
+            settleDelayMillis = settleDelayMs,
+        ) ?: return@synchronized
         bridgeRestartTask.cancel()
         val future = scheduleCrashGuardedFuture(
             executor = lifecycleExecutor,
-            delay = maxOf(remainingCooldownMs, settleDelayMs.coerceAtLeast(0L)),
+            delay = scheduleDelayMs,
             unit = TimeUnit.MILLISECONDS,
             taskName = "tcptun bridge restart",
             onFailure = { error ->
@@ -2558,48 +2552,43 @@ class TcptunVpnService : VpnService() {
                 // installed in bridgeRestartTask before the body can continue.
                 synchronized(bridgeRestartScheduleLock) {
                     if (
-                        generation != bridgeRestartRequestGeneration.get() ||
-                        lifecycleSnapshot != lifecycleGeneration.get() ||
+                        !bridgeRecoveryCoordinator.isCurrent(token, lifecycleGeneration.get()) ||
                         stopping || destroyed.get()
                     ) return@restart
                 }
                 if (
-                    generation != bridgeRestartRequestGeneration.get() ||
-                    lifecycleSnapshot != lifecycleGeneration.get() ||
+                    !bridgeRecoveryCoordinator.isCurrent(token, lifecycleGeneration.get()) ||
                     stopping || destroyed.get() || tun == null
                 ) return@restart
-                val remainingMs = (
-                    BRIDGE_RESTART_MIN_INTERVAL_MS - (System.currentTimeMillis() - lastBridgeRestartAtMs)
-                ).coerceAtLeast(0)
+                val remainingMs = bridgeRecoveryCoordinator.remainingCooldownMillis(
+                    System.currentTimeMillis(),
+                )
                 if (remainingMs > 0) {
-                    scheduleBridgeRestart(reason, generation, lifecycleSnapshot)
+                    scheduleBridgeRestart(reason, token)
                     return@restart
                 }
                 synchronized(bridgeRestartScheduleLock) {
                     if (
-                        generation != bridgeRestartRequestGeneration.get() ||
-                        lifecycleSnapshot != lifecycleGeneration.get() ||
-                        stopping || destroyed.get()
+                        stopping || destroyed.get() ||
+                        !bridgeRecoveryCoordinator.claimRestart(token, lifecycleGeneration.get())
                     ) return@restart
-                    bridgeRestartCanBeCancelledByHealthySnapshot = false
                 }
                 restartBridge(
                     reason = reason,
                     claimOwner = {
-                        generation == bridgeRestartRequestGeneration.get() &&
-                            lifecycleSnapshot == lifecycleGeneration.get() &&
+                        bridgeRecoveryCoordinator.isCurrent(token, lifecycleGeneration.get()) &&
                             !stopping &&
                             !destroyed.get() &&
                             isActiveServiceOwner()
                     },
                     commandOwner = {
-                        lifecycleSnapshot == lifecycleGeneration.get() &&
+                        token.lifecycleGeneration == lifecycleGeneration.get() &&
                             !stopping &&
                             !destroyed.get() &&
                             isActiveServiceOwner()
                     },
                     globalCleanupOwner = {
-                        lifecycleSnapshot == lifecycleGeneration.get() &&
+                        token.lifecycleGeneration == lifecycleGeneration.get() &&
                             !destroyed.get() &&
                             isActiveServiceOwner()
                     },
@@ -2614,10 +2603,9 @@ class TcptunVpnService : VpnService() {
         lifecycleSnapshot: Int,
         failure: Throwable,
     ) {
-        val attempt = bridgeRecoveryAttempt.updateAndGet { current ->
-            if (current == Int.MAX_VALUE) Int.MAX_VALUE else current + 1
-        }
-        val delayMs = BridgeHealthPolicy.bridgeRecoveryDelayMs(attempt)
+        val recoveryAttempt = bridgeRecoveryCoordinator.nextRecoveryAttempt()
+        val attempt = recoveryAttempt.number
+        val delayMs = recoveryAttempt.delayMillis
         val failureText = failureDescription(failure)
         val owned = synchronized(lifecycleCommandLock) {
             if (
@@ -3178,10 +3166,10 @@ class TcptunVpnService : VpnService() {
 
     private fun cancelRecoverableBridgeRestartAfterHealthySnapshot(): Boolean =
         synchronized(bridgeRestartScheduleLock) {
-            if (!bridgeRestartCanBeCancelledByHealthySnapshot) return@synchronized false
-            bridgeRestartRequestGeneration.incrementAndGet()
+            if (!bridgeRecoveryCoordinator.cancelRestartAfterHealthySnapshot()) {
+                return@synchronized false
+            }
             bridgeRestartTask.cancel()
-            bridgeRestartCanBeCancelledByHealthySnapshot = false
             true
         }
 
