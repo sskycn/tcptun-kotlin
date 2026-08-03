@@ -355,7 +355,7 @@ class TcptunVpnService : VpnService() {
     private val bridgeRestartScheduleLock = Any()
     private val bridgeRecoveryTask = LatestTaskSlot()
     private val bridgeTeardownRetryTask = LatestTaskSlot()
-    private val bridgeTeardownRetryAttempt = AtomicInteger()
+    private val bridgeTeardownRetryCoordinator = BridgeTeardownRetryCoordinator()
     private val deferredServiceStopGate = DeferredServiceStopGate()
 
     override fun onCreate() {
@@ -454,7 +454,7 @@ class TcptunVpnService : VpnService() {
                     runningPlan != null,
                 lifecycleWorkPending = lifecycleWorkInFlight.get() > 0,
                 bridgeRecoveryPending = bridgeRecoveryCoordinator.recoveryPending,
-                teardownRetryPending = bridgeTeardownRetryAttempt.get() > 0,
+                teardownRetryPending = bridgeTeardownRetryCoordinator.pending,
                 terminalStopPending = explicitStopRequested.get(),
             )
         ) {
@@ -1939,7 +1939,7 @@ class TcptunVpnService : VpnService() {
             runningPlan = null
             val disposition = bridgeTeardownDisposition(bridgeResources.hasOwnedResources)
             if (disposition.resourcesReleased) {
-                bridgeTeardownRetryAttempt.set(0)
+                bridgeTeardownRetryCoordinator.reset()
                 bridgeTeardownRetryTask.cancel()
                 cleanupGlobalStep("reset VPN diagnostics") {
                     TcptunState.updateDiagnostics {
@@ -2021,23 +2021,17 @@ class TcptunVpnService : VpnService() {
         globalStateCommitLock: Any?,
     ) {
         if (destroyed.get() || !bridgeResources.hasOwnedResources) return
-        val attempt = bridgeTeardownRetryAttempt.incrementAndGet()
-        if (attempt > MAX_BRIDGE_TEARDOWN_RETRY_ATTEMPTS) {
+        val retry = bridgeTeardownRetryCoordinator.next()
+        if (!retry.shouldSchedule) {
             TcptunState.appendLog(
-                "tcptun cleanup remains incomplete after ${attempt - 1} retries; " +
+                "tcptun cleanup remains incomplete after ${retry.completedAttempts} retries; " +
                     "service retained for safe process teardown",
             )
             return
         }
-        val delayMs = when (attempt) {
-            1 -> 2_000L
-            2 -> 5_000L
-            3 -> 10_000L
-            else -> 30_000L
-        }
         val future = scheduleCrashGuardedFuture(
             executor = lifecycleExecutor,
-            delay = delayMs,
+            delay = checkNotNull(retry.delayMillis),
             unit = TimeUnit.MILLISECONDS,
             taskName = "tcptun teardown retry",
             onFailure = { error ->
@@ -2047,7 +2041,9 @@ class TcptunVpnService : VpnService() {
             },
         ) {
             if (destroyed.get() || !bridgeResources.hasOwnedResources) return@scheduleCrashGuardedFuture
-            TcptunState.appendLog("retrying tcptun cleanup ($attempt/$MAX_BRIDGE_TEARDOWN_RETRY_ATTEMPTS)")
+            TcptunState.appendLog(
+                "retrying tcptun cleanup (${retry.attempt}/${retry.maxAttempts})",
+            )
             stopVpn(
                 setStopped = setStopped,
                 clearSavedConfig = clearSavedConfig,
@@ -3794,7 +3790,6 @@ class TcptunVpnService : VpnService() {
         private const val BRIDGE_RESTART_MIN_INTERVAL_MS = 30_000L
         private const val BRIDGE_READY_TIMEOUT_MS = 15_000L
         private const val BRIDGE_STOP_SETTLE_TIMEOUT_MS = 5_000L
-        private const val MAX_BRIDGE_TEARDOWN_RETRY_ATTEMPTS = 6
         private const val OUTBOUND_STOP_TIMEOUT_MS = 15_000L
         private const val TCPING_OUTBOUND_TIMEOUT_MS = 3_000L
         private const val TCPING_OUTBOUND_TOTAL_TIMEOUT_MS = 20_000L
