@@ -142,7 +142,7 @@
     <string name="route_management_note">规则优先从上到下匹配 VPN（TUN）流量。在设置中开启「本地代理走路由规则」后，mixed/SOCKS 也会按相同规则分流；未命中流量使用配置的默认出口。离开页面时应用变更。</string>
     <string name="route_rules_count">已启用 %1$d 条规则</string>
     <string name="empty_route_rules">还没有路由规则</string>
-    <string name="empty_route_rules_note">请使用右下角路由操作按钮添加规则。</string>
+    <string name="empty_route_rules_note">请使用右上角路由操作按钮添加规则。</string>
     <string name="add_route_rule">添加路由规则</string>
     <string name="route_actions">路由操作</string>
     <string name="close_route_actions">关闭路由操作</string>

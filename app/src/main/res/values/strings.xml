@@ -143,7 +143,7 @@
     <string name="route_management_note">Rules are evaluated first from top to bottom for VPN (TUN) traffic. Enable “Route local proxy traffic” in Settings to also apply them to mixed/SOCKS. Unmatched traffic uses the configured default outbound. Changes apply when you leave this page.</string>
     <string name="route_rules_count">%1$d enabled rules</string>
     <string name="empty_route_rules">No route rules yet</string>
-    <string name="empty_route_rules_note">Use the route actions button to add a rule.</string>
+    <string name="empty_route_rules_note">Use the route actions button in the top-right corner to add a rule.</string>
     <string name="add_route_rule">Add route rule</string>
     <string name="route_actions">Route actions</string>
     <string name="close_route_actions">Close route actions</string>

@@ -3497,30 +3497,30 @@ private fun RouteManagementPage(onBack: () -> Unit) {
             AppTopBar(
                 title = stringResource(R.string.route_management),
                 onBack = ::leave,
-            )
-        },
-        floatingActionButton = {
-            RouteActionFabMenu(
-                expanded = routeActionsExpanded,
-                enabled = routeInteractionEnabled,
-                onToggle = {
-                    if (routeInteractionEnabled || routeActionsExpanded) {
-                        routeActionsExpanded = !routeActionsExpanded
-                    }
-                },
-                onAdd = {
-                    routeActionsExpanded = false
-                    editingRule = ManagedRouteRule()
-                },
-                onSmartMerge = {
-                    routeActionsExpanded = false
-                    notice = ""
-                    error = ""
-                    if (smartMergeResult.changed) {
-                        smartMergePreview = smartMergeResult
-                    } else {
-                        notice = resources.getString(R.string.smart_merge_no_changes)
-                    }
+                actions = {
+                    RouteActionTopBarMenu(
+                        expanded = routeActionsExpanded,
+                        enabled = routeInteractionEnabled,
+                        onToggle = {
+                            if (routeInteractionEnabled || routeActionsExpanded) {
+                                routeActionsExpanded = !routeActionsExpanded
+                            }
+                        },
+                        onAdd = {
+                            routeActionsExpanded = false
+                            editingRule = ManagedRouteRule()
+                        },
+                        onSmartMerge = {
+                            routeActionsExpanded = false
+                            notice = ""
+                            error = ""
+                            if (smartMergeResult.changed) {
+                                smartMergePreview = smartMergeResult
+                            } else {
+                                notice = resources.getString(R.string.smart_merge_no_changes)
+                            }
+                        },
+                    )
                 },
             )
         },
@@ -3704,32 +3704,19 @@ private fun RouteManagementPage(onBack: () -> Unit) {
 }
 
 @Composable
-private fun RouteActionFabMenu(
+private fun RouteActionTopBarMenu(
     expanded: Boolean,
     enabled: Boolean,
     onToggle: () -> Unit,
     onAdd: () -> Unit,
     onSmartMerge: () -> Unit,
 ) {
-    Column(
-        horizontalAlignment = Alignment.End,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        if (expanded) {
-            RouteActionFabItem(
-                label = stringResource(R.string.smart_merge_route_rules),
-                icon = Icons.Rounded.Hub,
-                enabled = enabled,
-                onClick = onSmartMerge,
-            )
-            RouteActionFabItem(
-                label = stringResource(R.string.add_route_rule),
-                icon = Icons.Rounded.Add,
-                enabled = enabled,
-                onClick = onAdd,
-            )
-        }
-        FloatingActionButton(onClick = onToggle) {
+    Box {
+        SmallFloatingActionButton(
+            onClick = onToggle,
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        ) {
             Icon(
                 Icons.Rounded.MoreVert,
                 contentDescription = stringResource(
@@ -3737,45 +3724,32 @@ private fun RouteActionFabMenu(
                 ),
             )
         }
-    }
-}
-
-@Composable
-private fun RouteActionFabItem(
-    label: String,
-    icon: ImageVector,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Surface(
-            shape = CardShapeCompact,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shadowElevation = 2.dp,
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { if (expanded) onToggle() },
         ) {
-            Text(
-                label,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                style = MaterialTheme.typography.labelLarge,
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.smart_merge_route_rules)) },
+                leadingIcon = {
+                    Icon(
+                        Icons.Rounded.Hub,
+                        contentDescription = stringResource(R.string.smart_merge_route_rules),
+                    )
+                },
+                enabled = enabled,
+                onClick = onSmartMerge,
             )
-        }
-        SmallFloatingActionButton(
-            onClick = { if (enabled) onClick() },
-            containerColor = if (enabled) {
-                MaterialTheme.colorScheme.secondaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceContainerHighest
-            },
-            contentColor = if (enabled) {
-                MaterialTheme.colorScheme.onSecondaryContainer
-            } else {
-                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-            },
-        ) {
-            Icon(icon, contentDescription = label)
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.add_route_rule)) },
+                leadingIcon = {
+                    Icon(
+                        Icons.Rounded.Add,
+                        contentDescription = stringResource(R.string.add_route_rule),
+                    )
+                },
+                enabled = enabled,
+                onClick = onAdd,
+            )
         }
     }
 }
