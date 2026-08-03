@@ -36,6 +36,15 @@ class FlowAnalysisUiTest {
         composeRule.onNodeWithText(activity.getString(R.string.flow_analysis_note)).assertIsDisplayed()
     }
 
+    @Test
+    fun flowAnalysisMovesRouteConversionIntoMoreMenu() {
+        val activity = composeRule.activity
+        openFlowAnalysis()
+
+        composeRule.onNodeWithContentDescription(activity.getString(R.string.more_options)).performClick()
+        composeRule.onNodeWithText(activity.getString(R.string.flow_analysis_create_rules)).assertIsDisplayed()
+    }
+
     private fun openFlowAnalysis() {
         val activity = composeRule.activity
         composeRule.onNodeWithContentDescription(activity.getString(R.string.more_options)).performClick()

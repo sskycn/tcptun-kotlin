@@ -3015,6 +3015,10 @@ private fun FlowAnalysisPage(onBack: () -> Unit) {
                     TextButton(onClick = TcptunState::clearFlowEvents, enabled = events.isNotEmpty()) {
                         Text(stringResource(R.string.clear))
                     }
+                    FlowAnalysisMoreMenu(
+                        enabled = routeRuleSuggestions.isNotEmpty() && !routeRuleSaving,
+                        onCreateRules = { showRouteRuleDialog = true },
+                    )
                 },
             )
         },
@@ -3058,15 +3062,6 @@ private fun FlowAnalysisPage(onBack: () -> Unit) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         DiagnosticsLine(stringResource(R.string.flow_analysis_events), events.size.toString())
-                        FilledTonalButton(
-                            onClick = { showRouteRuleDialog = true },
-                            enabled = routeRuleSuggestions.isNotEmpty() && !routeRuleSaving,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Icon(Icons.AutoMirrored.Rounded.AltRoute, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text(stringResource(R.string.flow_analysis_create_rules))
-                        }
                         if (routeRuleResult.isNotBlank()) {
                             Text(
                                 routeRuleResult,
@@ -3130,6 +3125,48 @@ private fun FlowAnalysisPage(onBack: () -> Unit) {
             },
             onConfirm = ::createRouteRules,
         )
+    }
+}
+
+@Composable
+private fun FlowAnalysisMoreMenu(
+    enabled: Boolean,
+    onCreateRules: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val colors = MaterialTheme.colorScheme
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(
+                Icons.Rounded.MoreVert,
+                contentDescription = stringResource(R.string.more_options),
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            shape = MenuShape,
+            containerColor = colors.surfaceContainer,
+        ) {
+            DropdownMenuItem(
+                enabled = enabled,
+                leadingIcon = {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.AltRoute,
+                        contentDescription = stringResource(R.string.flow_analysis_create_rules),
+                    )
+                },
+                text = { Text(stringResource(R.string.flow_analysis_create_rules)) },
+                onClick = {
+                    expanded = false
+                    onCreateRules()
+                },
+                colors = MenuDefaults.itemColors(
+                    textColor = colors.onSurface,
+                    leadingIconColor = colors.onSurfaceVariant,
+                ),
+            )
+        }
     }
 }
 
