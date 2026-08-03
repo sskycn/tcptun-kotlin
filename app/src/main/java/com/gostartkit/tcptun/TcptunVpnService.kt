@@ -263,6 +263,16 @@ class TcptunVpnService : VpnService() {
     private val bridge: TcptunBridge get() = bridgeDelegate.value
     private val bridgeLock = Any()
     private val bridgeResources = BridgeResourceStateMachine()
+    private val bridgeSessionControllerDelegate = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        BridgeSessionController(bridge, bridgeResources)
+    }
+    private val bridgeSessionController: BridgeSessionController
+        get() = bridgeSessionControllerDelegate.value
+    private val bridgeSessionStopControllerDelegate = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        BridgeSessionStopController(bridge, bridgeResources)
+    }
+    private val bridgeSessionStopController: BridgeSessionStopController
+        get() = bridgeSessionStopControllerDelegate.value
     private val tunOwner = ExclusiveResourceOwner<android.os.ParcelFileDescriptor>()
     private val teardownLock = Any()
     /** Shared with service ownership so old/new instances cannot publish across each other. */
@@ -2244,46 +2254,42 @@ class TcptunVpnService : VpnService() {
         )
         try {
             val sessionId = synchronized(bridgeLock) {
-                check(
-                    commandOwner() &&
-                        !stopping &&
-                        !destroyed.get() &&
-                        epoch == bridgeResources.activeEpoch,
-                ) { "tcptun start was cancelled" }
-                bridge.setLogCallback { line ->
-                    if (!destroyed.get()) TcptunState.appendLog(line)
-                }
-                bridge.setStatusCallback { eventJson ->
-                    if (!destroyed.get()) onBridgeStatusEvent(epoch, eventJson)
-                }
-                // Opt into active telemetry: live remote endpoints, reconnect, and
-                // connection-issue status events. Unregistered optional events still
-                // update StatusJSON but do not invoke the status callback.
-                TcptunBridgeEvents.DefaultRegistered.forEach { event ->
-                    try {
-                        bridge.registerEvent(event)
-                    } catch (error: Throwable) {
-                        if (error.isFatalProcessError()) throw error
-                        TcptunState.appendLog("register bridge event $event failed: ${failureDescription(error)}")
-                    }
-                }
-                bridge.setSocketProtector { fd -> !destroyed.get() && !stopping && protect(fd) }
-                bridge.setAppIdentityProvider { flow ->
-                    if (destroyed.get() || stopping) null else appIdentityProvider.identify(flow)
-                }
-                configureFlowAnalysis(activeFlowAnalysisApp, epoch)
-                TcptunState.applyBridgeStatusEvent(epoch, bridge.statusJson())
-                bridge.configure(configJson)
-                bridge.setLogLevel(activeLogLevel)
-                check(bridge.logLevel() == activeLogLevel) {
-                    "tcptun bridge did not apply log.level=$activeLogLevel"
-                }
-                bridgeResources.beginTunTransfer()
-                bridge.setTun(vpnTun.fd, mtu)
-                bridgeResources.beginStart()
-                val startedSessionId = bridge.start(disabledOutboundTags)
-                bridgeResources.sessionStarted(startedSessionId, configJson)
-                startedSessionId
+                bridgeSessionController.start(
+                    request = BridgeSessionStartRequest(
+                        configJson = configJson,
+                        disabledOutboundTags = disabledOutboundTags,
+                        tunFd = vpnTun.fd,
+                        mtu = mtu,
+                        logLevel = activeLogLevel,
+                    ),
+                    callbacks = BridgeSessionCallbacks(
+                        onLog = { line ->
+                            if (!destroyed.get()) TcptunState.appendLog(line)
+                        },
+                        onStatus = { eventJson ->
+                            if (!destroyed.get()) onBridgeStatusEvent(epoch, eventJson)
+                        },
+                        protectSocket = { fd -> !destroyed.get() && !stopping && protect(fd) },
+                        identifyApp = { flow ->
+                            if (destroyed.get() || stopping) null else appIdentityProvider.identify(flow)
+                        },
+                        configureFlowAnalysis = { configureFlowAnalysis(activeFlowAnalysisApp, epoch) },
+                        onInitialStatus = { statusJson ->
+                            TcptunState.applyBridgeStatusEvent(epoch, statusJson)
+                        },
+                        onOptionalEventRegistrationFailure = { event, error ->
+                            TcptunState.appendLog(
+                                "register bridge event $event failed: ${failureDescription(error)}",
+                            )
+                        },
+                    ),
+                    canStart = {
+                        commandOwner() &&
+                            !stopping &&
+                            !destroyed.get() &&
+                            epoch == bridgeResources.activeEpoch
+                    },
+                )
             }
             synchronized(lifecycleCommandLock) {
                 check(commandOwner() && epoch == bridgeResources.activeEpoch) {
@@ -2330,76 +2336,28 @@ class TcptunVpnService : VpnService() {
             return
         }
         synchronized(bridgeLock) {
-            val currentOwnership = bridgeResources.snapshot
-            val shouldStop = currentOwnership.nativeStopRequired
-            val shouldClearCallbacks = currentOwnership.callbacksRequireCleanup
-            if (!shouldStop && !shouldClearCallbacks) {
-                return@synchronized
-            }
-            var stopFailure: Throwable? = null
-            if (shouldStop) {
-                val sessionId = currentOwnership.sessionId.takeIf { it > 0L }
-                    ?: runRecoverableCatching { bridge.sessionId() }.getOrDefault(0L)
-                val result = stopAndAwaitBridgeSession(
-                    bridge = bridge,
-                    sessionId = sessionId,
-                    settleTimeoutMillis = BRIDGE_STOP_SETTLE_TIMEOUT_MS,
-                )
-                stopFailure = result.error
-                try {
-                    result.requireSettled()
-                } catch (error: Throwable) {
-                    // Keep callbacks and the stop obligation alive. onDestroy
-                    // will retry through Stop/Close; clearing Java proxies here
-                    // would violate tcptun-go's active-runtime ownership contract.
-                    TcptunState.appendLog(
-                        "tcptun engine is still stopping: ${failureDescription(result.error ?: IllegalStateException("unknown stop failure"))}",
-                    )
-                    throw error
-                }
-                bridgeResources.nativeStopped()
-                if (stopFailure != null) {
-                    TcptunState.appendLog(
-                        "tcptun engine stopped with error: ${failureDescription(stopFailure)}",
-                    )
-                }
-            } else {
-                bridgeResources.nativeStopped()
-            }
-            if (shouldClearCallbacks) {
-                TcptunBridgeEvents.DefaultRegistered.forEach { event ->
-                    cleanupStep("unregister bridge event $event") { bridge.unregisterEvent(event) }
-                }
-                val callbackFailure = clearBridgeCallbacks()
-                if (callbackFailure == null) {
-                    bridgeResources.callbacksReleased()
-                } else {
-                    throw IllegalStateException(
-                        "tcptun callbacks were not released cleanly",
-                        callbackFailure,
-                    )
-                }
-            }
+            bridgeSessionStopController.stop(
+                settleTimeoutMillis = BRIDGE_STOP_SETTLE_TIMEOUT_MS,
+                callbacks = BridgeSessionStopCallbacks(
+                    onNativeStillStopping = { error ->
+                        // Keep callbacks and the stop obligation alive. onDestroy
+                        // will retry through Stop/Close; clearing Java proxies here
+                        // would violate tcptun-go's active-runtime ownership contract.
+                        TcptunState.appendLog(
+                            "tcptun engine is still stopping: ${failureDescription(error)}",
+                        )
+                    },
+                    onNativeStoppedWithError = { error ->
+                        TcptunState.appendLog(
+                            "tcptun engine stopped with error: ${failureDescription(error)}",
+                        )
+                    },
+                    onCleanupFailure = { label, error ->
+                        TcptunState.appendLog("$label failed: ${failureDescription(error)}")
+                    },
+                ),
+            )
         }
-    }
-
-    private fun clearBridgeCallbacks(): Throwable? {
-        var failure: Throwable? = null
-        fun clear(label: String, action: () -> Unit) {
-            try {
-                action()
-            } catch (error: Throwable) {
-                if (error.isFatalProcessError()) throw error
-                TcptunState.appendLog("$label failed: ${failureDescription(error)}")
-                failure = failure?.apply { addSuppressed(error) } ?: error
-            }
-        }
-        clear("clear flow callback") { bridge.clearFlowCallback() }
-        clear("clear app identity callback") { bridge.clearAppIdentityProvider() }
-        clear("clear socket protector") { bridge.clearSocketProtector() }
-        clear("clear status callback") { bridge.clearStatusCallback() }
-        clear("clear log callback") { bridge.clearLogCallback() }
-        return failure
     }
 
     private fun configureFlowAnalysis(packageName: String, epoch: Long) {
