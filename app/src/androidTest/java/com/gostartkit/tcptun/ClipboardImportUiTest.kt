@@ -86,10 +86,10 @@ class ClipboardImportUiTest {
 
         val currentActivity = composeRule.activity
         composeRule.waitUntil(timeoutMillis = 5_000) {
-            composeRule.onAllNodesWithContentDescription(currentActivity.getString(R.string.actions))
+            composeRule.onAllNodesWithContentDescription(currentActivity.getString(R.string.more_options))
                 .fetchSemanticsNodes().isNotEmpty()
         }
-        composeRule.onNodeWithContentDescription(currentActivity.getString(R.string.actions)).performClick()
+        composeRule.onNodeWithContentDescription(currentActivity.getString(R.string.more_options)).performClick()
         composeRule.waitUntil(timeoutMillis = 5_000) {
             composeRule.onAllNodesWithText(currentActivity.getString(R.string.import_from_clipboard))
                 .fetchSemanticsNodes().isNotEmpty()

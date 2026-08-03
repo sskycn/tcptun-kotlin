@@ -90,7 +90,6 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -1388,22 +1387,18 @@ internal fun TcptunScreen(
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             topBar = {
-                TopBar(
-                    title = stringResource(R.string.profiles_title),
-                    onDiagnostics = { showDiagnostics = true },
-                    onRouteManagement = { showRouteManagement = true },
-                    onFlowAnalysis = { showFlowAnalysis = true },
-                    onSettings = { showSettings = true },
-                )
+            TopBar(
+                title = stringResource(R.string.profiles_title),
+                actionsEnabled = !isVpnTransitionStatus(vpnState.status),
+                onDiagnostics = { showDiagnostics = true },
+                onRouteManagement = { showRouteManagement = true },
+                onFlowAnalysis = { showFlowAnalysis = true },
+                onSettings = { showSettings = true },
+                onImport = ::importFromClipboard,
+                onScan = ::openQrScanner,
+            )
             },
             snackbarHost = { AutoDismissSnackbarHost(snackbarHostState) },
-            floatingActionButton = {
-                MainActionsFab(
-                    enabled = !isVpnTransitionStatus(vpnState.status),
-                    onImport = ::importFromClipboard,
-                    onScan = ::openQrScanner,
-                )
-            },
             bottomBar = {
                 val tcpingEnabled = canStartTcping(
                     status = vpnState.status,
@@ -1750,10 +1745,13 @@ private fun ConfirmProfileImportDialog(
 @Composable
 private fun TopBar(
     title: String,
+    actionsEnabled: Boolean,
     onDiagnostics: () -> Unit,
     onRouteManagement: () -> Unit,
     onFlowAnalysis: () -> Unit,
     onSettings: () -> Unit,
+    onImport: () -> Unit,
+    onScan: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
@@ -1784,6 +1782,36 @@ private fun TopBar(
                     shape = MenuShape,
                     containerColor = colors.surfaceContainer,
                 ) {
+                    DropdownMenuItem(
+                        enabled = actionsEnabled,
+                        leadingIcon = {
+                            Icon(Icons.Rounded.QrCodeScanner, contentDescription = null)
+                        },
+                        text = { Text(stringResource(R.string.scan_qr_code)) },
+                        onClick = {
+                            menuExpanded = false
+                            onScan()
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = colors.onSurface,
+                            leadingIconColor = colors.onSurfaceVariant,
+                        ),
+                    )
+                    DropdownMenuItem(
+                        enabled = actionsEnabled,
+                        leadingIcon = {
+                            Icon(Icons.Rounded.ContentPaste, contentDescription = null)
+                        },
+                        text = { Text(stringResource(R.string.import_from_clipboard)) },
+                        onClick = {
+                            menuExpanded = false
+                            onImport()
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = colors.onSurface,
+                            leadingIconColor = colors.onSurfaceVariant,
+                        ),
+                    )
                     DropdownMenuItem(
                         leadingIcon = {
                             Icon(Icons.Rounded.Speed, contentDescription = null)
@@ -1844,62 +1872,6 @@ private fun TopBar(
             }
         },
     )
-}
-
-@Composable
-private fun MainActionsFab(
-    enabled: Boolean,
-    onImport: () -> Unit,
-    onScan: () -> Unit,
-) {
-    var menuExpanded by remember { mutableStateOf(false) }
-    val colors = MaterialTheme.colorScheme
-
-    Box(contentAlignment = Alignment.BottomEnd) {
-        DropdownMenu(
-            expanded = menuExpanded,
-            onDismissRequest = { menuExpanded = false },
-            shape = MenuShape,
-            containerColor = colors.surfaceContainer,
-        ) {
-            DropdownMenuItem(
-                enabled = enabled,
-                leadingIcon = {
-                    Icon(Icons.Rounded.QrCodeScanner, contentDescription = null)
-                },
-                text = { Text(stringResource(R.string.scan_qr_code)) },
-                onClick = {
-                    menuExpanded = false
-                    onScan()
-                },
-                colors = MenuDefaults.itemColors(
-                    textColor = colors.onSurface,
-                    leadingIconColor = colors.onSurfaceVariant,
-                ),
-            )
-            DropdownMenuItem(
-                enabled = enabled,
-                leadingIcon = {
-                    Icon(Icons.Rounded.ContentPaste, contentDescription = null)
-                },
-                text = { Text(stringResource(R.string.import_from_clipboard)) },
-                onClick = {
-                    menuExpanded = false
-                    onImport()
-                },
-                colors = MenuDefaults.itemColors(
-                    textColor = colors.onSurface,
-                    leadingIconColor = colors.onSurfaceVariant,
-                ),
-            )
-        }
-        FloatingActionButton(onClick = { if (enabled) menuExpanded = true }) {
-            Icon(
-                Icons.Rounded.Add,
-                contentDescription = stringResource(R.string.actions),
-            )
-        }
-    }
 }
 
 private data class ProfilePresentation(

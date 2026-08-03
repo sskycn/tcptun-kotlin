@@ -49,10 +49,10 @@ class QrScannerLifecycleUiTest {
         val activity = composeRule.activity
         repeat(3) {
             composeRule.waitUntil(timeoutMillis = 5_000) {
-                composeRule.onAllNodesWithContentDescription(activity.getString(R.string.actions))
+                composeRule.onAllNodesWithContentDescription(activity.getString(R.string.more_options))
                     .fetchSemanticsNodes().isNotEmpty()
             }
-            composeRule.onNodeWithContentDescription(activity.getString(R.string.actions)).performClick()
+            composeRule.onNodeWithContentDescription(activity.getString(R.string.more_options)).performClick()
             composeRule.onNodeWithText(activity.getString(R.string.scan_qr_code)).performClick()
             composeRule.onNodeWithText(activity.getString(R.string.scan_profile_qr_code)).assertIsDisplayed()
             composeRule.waitUntil(timeoutMillis = 10_000) {
