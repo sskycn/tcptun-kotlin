@@ -300,6 +300,15 @@ class TcptunVpnService : VpnService() {
         minRestartIntervalMillis = BRIDGE_RESTART_MIN_INTERVAL_MS,
         recoveryDelayMillis = BridgeHealthPolicy::bridgeRecoveryDelayMs,
     )
+    private val bridgeHealthMonitor = BridgeHealthMonitorLoop(
+        failureLimit = HEALTH_FAILURE_LIMIT,
+        nextCheckDelayMillis = { confirmingFailure ->
+            BridgeHealthPolicy.nextCheckDelayMs(
+                powerSaving = powerSavingMode,
+                confirmingFailure = confirmingFailure,
+            )
+        },
+    )
     private val destroyed = AtomicBoolean()
     private val initialized = AtomicBoolean()
     private val explicitStopRequested = AtomicBoolean()
@@ -2968,66 +2977,46 @@ class TcptunVpnService : VpnService() {
             onFailure = { error ->
                 if (!destroyed.get()) TcptunState.appendLog(failureDescription(error))
             },
-        ) monitor@{
-            var bridgeFailures = 0
-            var handledWakeGeneration = initialHandledWakeGeneration
-            while (
-                generation == monitorGeneration.get() &&
-                sessionEpoch == bridgeResources.activeEpoch &&
-                !stopping &&
-                !Thread.currentThread().isInterrupted
-            ) {
-                try {
-                    val delayMs = BridgeHealthPolicy.nextCheckDelayMs(
-                        powerSaving = powerSavingMode,
-                        confirmingFailure = bridgeFailures > 0,
-                    )
-                    val intervalSeconds = delayMs?.div(1_000) ?: 0
-                    val eventDriven = delayMs == null
+        ) {
+            bridgeHealthMonitor.run(
+                initialWakeGeneration = initialHandledWakeGeneration,
+                isCurrent = {
+                    generation == monitorGeneration.get() &&
+                        sessionEpoch == bridgeResources.activeEpoch &&
+                        !stopping
+                },
+                canProbe = {
+                    generation == monitorGeneration.get() &&
+                        sessionEpoch == bridgeResources.activeEpoch &&
+                        tun != null &&
+                        !stopping
+                },
+                awaitEvent = ::awaitBridgeHealthEvent,
+                probeFailureReason = { vpnHealthFailure(generation, sessionEpoch)?.reason },
+                onSchedule = { schedule ->
                     val diagnostics = TcptunState.state.value.diagnostics
                     if (
-                        diagnostics.healthCheckEventDriven != eventDriven ||
-                        diagnostics.healthCheckIntervalSeconds != intervalSeconds
+                        diagnostics.healthCheckEventDriven != schedule.eventDriven ||
+                        diagnostics.healthCheckIntervalSeconds != schedule.intervalSeconds
                     ) {
                         TcptunState.updateDiagnosticsForBridgeEpoch(sessionEpoch) {
                             it.copy(
-                                healthCheckEventDriven = eventDriven,
-                                healthCheckIntervalSeconds = intervalSeconds,
+                                healthCheckEventDriven = schedule.eventDriven,
+                                healthCheckIntervalSeconds = schedule.intervalSeconds,
                             )
                         }
                     }
-                    // Preserve the last generation actually consumed. A wake that
-                    // arrives while the check runs is handled by the next iteration.
-                    handledWakeGeneration = awaitBridgeHealthEvent(
-                        handledWakeGeneration = handledWakeGeneration,
-                        timeoutMs = delayMs,
-                    )
-                    if (
-                        generation != monitorGeneration.get() ||
-                        sessionEpoch != bridgeResources.activeEpoch || tun == null || stopping
-                    ) continue
-                    val failure = vpnHealthFailure(generation, sessionEpoch)
-                    if (
-                        generation != monitorGeneration.get() ||
-                        sessionEpoch != bridgeResources.activeEpoch || stopping
-                    ) return@monitor
-                    if (failure == null) {
-                        bridgeFailures = 0
-                    } else {
-                        TcptunState.appendLog("VPN health check failed: ${failure.reason}")
-                        bridgeFailures += 1
-                        if (bridgeFailures >= HEALTH_FAILURE_LIMIT) {
-                            bridgeFailures = 0
-                            requestBridgeRestart(failure.reason, cancelIfHealthy = true)
-                        }
-                    }
-                } catch (_: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                } catch (error: Throwable) {
-                    if (error.isFatalProcessError()) throw error
+                },
+                onFailure = { reason ->
+                    TcptunState.appendLog("VPN health check failed: $reason")
+                },
+                onRestartRequired = { reason ->
+                    requestBridgeRestart(reason, cancelIfHealthy = true)
+                },
+                onRecoverableError = { error ->
                     TcptunState.appendLog("tcptun bridge monitor error: ${failureDescription(error)}")
-                }
-            }
+                },
+            )
         }
     }
 
