@@ -1,7 +1,6 @@
 <resources>
     <string name="app_name">TcpTun</string>
     <string name="profiles_title">Profiles</string>
-    <string name="actions">Actions</string>
     <string name="more_options">More options</string>
     <string name="import_from_clipboard">Import from clipboard</string>
     <string name="add_profile">Add profile</string>
@@ -209,9 +208,6 @@
     <string name="share_profile_failed">The profile could not be shared.</string>
     <string name="start_failed">Start failed</string>
     <string name="stop_failed">Stop failed</string>
-    <string name="status_starting">Starting</string>
-    <string name="status_running">Running</string>
-    <string name="status_stopping">Stopping</string>
     <string name="none">None</string>
     <string name="reachable">Reachable</string>
     <string name="not_reachable">Not reachable</string>
@@ -227,7 +223,6 @@
     <string name="field_fingerprint">Fingerprint</string>
     <string name="field_short_id">Short ID</string>
     <string name="field_spider_x">SpiderX</string>
-    <string name="field_tls">TLS</string>
     <string name="field_tls_insecure">TLS insecure</string>
     <string name="field_ech_client_hello">Protect application TLS ClientHello with ECH</string>
     <string name="field_ech_public_name">ECH public name</string>

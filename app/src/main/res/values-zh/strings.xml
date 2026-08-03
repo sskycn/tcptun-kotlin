@@ -1,7 +1,6 @@
 <resources>
     <string name="app_name">TcpTun</string>
     <string name="profiles_title">配置项</string>
-    <string name="actions">操作</string>
     <string name="more_options">更多选项</string>
     <string name="import_from_clipboard">从剪切板导入</string>
     <string name="add_profile">添加配置</string>
@@ -208,9 +207,6 @@
     <string name="share_profile_failed">无法分享该配置。</string>
     <string name="start_failed">启动失败</string>
     <string name="stop_failed">停止失败</string>
-    <string name="status_starting">启动中</string>
-    <string name="status_running">运行中</string>
-    <string name="status_stopping">停止中</string>
     <string name="none">无</string>
     <string name="reachable">可连接</string>
     <string name="not_reachable">不可连接</string>
@@ -226,7 +222,6 @@
     <string name="field_fingerprint">Fingerprint</string>
     <string name="field_short_id">Short ID</string>
     <string name="field_spider_x">SpiderX</string>
-    <string name="field_tls">TLS</string>
     <string name="field_tls_insecure">TLS insecure</string>
     <string name="field_ech_client_hello">使用 ECH 保护应用 TLS ClientHello</string>
     <string name="field_ech_public_name">ECH 公开域名</string>

@@ -75,15 +75,6 @@ internal fun executeCrashGuarded(
     }
 }
 
-internal fun scheduleCrashGuarded(
-    executor: ScheduledExecutorService,
-    delay: Long,
-    unit: TimeUnit,
-    taskName: String,
-    onFailure: (Throwable) -> Unit = {},
-    task: () -> Unit,
-): Boolean = scheduleCrashGuardedFuture(executor, delay, unit, taskName, onFailure, task) != null
-
 internal fun scheduleCrashGuardedFuture(
     executor: ScheduledExecutorService,
     delay: Long,
@@ -1792,11 +1783,6 @@ class TcptunVpnService : VpnService() {
         if (!bridgeResources.hasOwnedResources) {
             bridgeRuntimeLease.release(serviceInstanceId)
         }
-    }
-
-    private fun clearStoredActiveProfiles() {
-        ProfileStore.clearActive(this).getOrThrow()
-        TcptunState.notifyProfileStateChanged()
     }
 
     override fun onRevoke() {
@@ -3516,24 +3502,6 @@ class TcptunVpnService : VpnService() {
         }
     }
 
-    private fun updateBridgeDiagnostics() {
-        val sessionEpoch = bridgeResources.activeEpoch
-        // Prefer a one-shot StatusJSON reconcile over repeated status() polls.
-        val status = reconcileBridgeStatusFromJson()
-            ?: TcptunState.status.ifBlank { "Unknown" }
-        val uiVisible = TcptunState.isUiVisible
-        val previous = TcptunState.state.value.diagnostics
-        val localProxyReachable = if (uiVisible) canConnectLocalProxy() else previous.localProxyReachable
-        TcptunState.updateDiagnosticsForBridgeEpoch(sessionEpoch) {
-            it.copy(
-                bridgeStatus = status,
-                localProxyReachable = localProxyReachable,
-                localProxyAddress = activeLocalSocksConnectAddr(),
-                localProxyPort = activeSocksPort,
-            )
-        }
-    }
-
     private fun bridgeRuntimeSnapshot(): BridgeRuntimeSnapshot? {
         return runRecoverableCatching {
             val sessionEpoch = bridgeResources.activeEpoch
@@ -4312,18 +4280,6 @@ class TcptunVpnService : VpnService() {
 
         fun defaultLocalSocksConnectAddr(): String {
             return "$LOCAL_SOCKS_HOST:$DEFAULT_SOCKS_PORT"
-        }
-
-        private fun saveDesiredRunningPlan(context: Context, plan: ProfileRunPlan) {
-            val rawPlan = encodeDesiredRunningPlan(plan)
-            val appContext = context.applicationContext ?: context
-            val saved = appContext.getSharedPreferences(RUNTIME_PREFS, Context.MODE_PRIVATE)
-                .edit()
-                .putString(KEY_LAST_RUNNING_PLAN, rawPlan)
-                .putInt(KEY_RUNNING_CONFIG_VERSION, RUNNING_CONFIG_VERSION)
-                .putBoolean(KEY_DESIRED_RUNNING, true)
-                .commit()
-            check(saved) { "running profile plan could not be persisted" }
         }
 
         private fun encodeDesiredRunningPlan(plan: ProfileRunPlan): String {

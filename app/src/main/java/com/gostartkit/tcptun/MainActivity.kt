@@ -5304,16 +5304,6 @@ private fun isVpnTransitionStatus(status: String): Boolean {
     return status == "Starting" || status == "Stopping"
 }
 
-@Composable
-private fun vpnStatusLabel(status: String): String {
-    return when (status) {
-        "Starting" -> stringResource(R.string.status_starting)
-        "Running" -> stringResource(R.string.status_running)
-        "Stopping" -> stringResource(R.string.status_stopping)
-        else -> status
-    }
-}
-
 internal fun bridgeTimestampLabel(timestampMs: Long, noneLabel: String): String {
     if (timestampMs <= 0) return noneLabel
     return java.text.DateFormat.getDateTimeInstance(
