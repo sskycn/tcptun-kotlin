@@ -1,6 +1,7 @@
 package com.tcptun.client
 
 import org.json.JSONObject
+import java.net.InetAddress
 
 internal const val MAX_FLOW_ANALYSIS_EVENT_JSON_LENGTH = 64 * 1024
 private const val MAX_FLOW_ANALYSIS_FIELD_LENGTH = 4 * 1024
@@ -25,6 +26,176 @@ data class FlowAnalysisEvent(
     val displayDestination: String
         get() = domain.ifBlank { ip.ifBlank { destination } }
 }
+
+/**
+ * Turns the currently observed destinations into a small, deterministic set of
+ * managed route rules. Domain names are only widened when more than one
+ * distinct host shares the same registrable domain. Numeric IPs are grouped in
+ * the smallest common subnet, but never wider than /24 for IPv4 or /64 for
+ * IPv6 so unrelated networks are not accidentally captured.
+ */
+internal fun buildFlowRouteRuleSuggestions(
+    events: List<FlowAnalysisEvent>,
+    outbound: ManagedRouteOutbound,
+): List<ManagedRouteRule> {
+    val domainCandidates = events.mapNotNull(::validFlowDomain).toSortedSet()
+    val domainRules = domainCandidates
+        .groupBy(::registrableFlowDomain)
+        .toSortedMap()
+        .map { (registrableDomain, domains) ->
+            if (domains.distinct().size > 1) {
+                ManagedRouteRule(
+                    type = ManagedRouteRuleType.DomainSuffix,
+                    value = registrableDomain,
+                    outbound = outbound,
+                )
+            } else {
+                ManagedRouteRule(
+                    type = ManagedRouteRuleType.Domain,
+                    value = domains.single(),
+                    outbound = outbound,
+                )
+            }
+        }
+
+    val ipCandidates = events
+        .asSequence()
+        .filter { validFlowDomain(it) == null }
+        .mapNotNull(::flowEventIp)
+        .distinctBy { it.bytes.toList() }
+        .toList()
+    val ipRules = ipCandidates
+        .groupBy { candidate ->
+            val prefixBytes = if (candidate.bytes.size == 4) 3 else 8
+            candidate.bytes.take(prefixBytes)
+        }
+        .values
+        .map { subnetCandidates ->
+            val sorted = subnetCandidates.sortedWith { left, right -> compareIpBytes(left.bytes, right.bytes) }
+            if (sorted.size == 1) {
+                ManagedRouteRule(
+                    type = ManagedRouteRuleType.IP,
+                    value = sorted.single().canonical,
+                    outbound = outbound,
+                )
+            } else {
+                val prefix = commonPrefixLength(sorted.first().bytes, sorted.last().bytes)
+                val network = networkAddress(sorted.first().bytes, prefix)
+                ManagedRouteRule(
+                    type = ManagedRouteRuleType.IPCidr,
+                    value = "${canonicalIp(network)}/$prefix",
+                    outbound = outbound,
+                )
+            }
+        }
+        .sortedWith(compareBy({ it.type.ordinal }, { it.value }))
+
+    return domainRules + ipRules
+}
+
+/** Generated rules take priority while an identical stored matcher keeps its stable id. */
+internal fun mergeFlowRouteRuleSuggestions(
+    existing: List<ManagedRouteRule>,
+    suggestions: List<ManagedRouteRule>,
+): List<ManagedRouteRule> {
+    val normalizedExisting = existing.map(ManagedRouteRule::normalized)
+    val existingByMatcher = normalizedExisting.associateBy(::routeMatcherKey)
+    val normalizedSuggestions = suggestions
+        .map(ManagedRouteRule::normalized)
+        .distinctBy(::routeMatcherKey)
+        .map { suggestion ->
+            existingByMatcher[routeMatcherKey(suggestion)]
+                ?.let { stored -> suggestion.copy(id = stored.id) }
+                ?: suggestion
+        }
+    val generatedMatchers = normalizedSuggestions.mapTo(mutableSetOf(), ::routeMatcherKey)
+    return normalizedSuggestions + normalizedExisting.filterNot { routeMatcherKey(it) in generatedMatchers }
+}
+
+private data class FlowIpCandidate(
+    val canonical: String,
+    val bytes: ByteArray,
+)
+
+private fun routeMatcherKey(rule: ManagedRouteRule): Pair<ManagedRouteRuleType, String> =
+    rule.type to rule.normalized().value
+
+private fun validFlowDomain(event: FlowAnalysisEvent): String? {
+    val normalized = event.domain.trim().trimEnd('.').lowercase()
+    if (ManagedRouteRule(type = ManagedRouteRuleType.IP, value = normalized).isValid()) return null
+    return normalized.takeIf {
+        ManagedRouteRule(type = ManagedRouteRuleType.Domain, value = it).isValid()
+    }
+}
+
+private fun flowEventIp(event: FlowAnalysisEvent): FlowIpCandidate? {
+    val raw = event.ip.ifBlank { destinationHost(event.destination) }.trim().removeSurrounding("[", "]")
+    if (!ManagedRouteRule(type = ManagedRouteRuleType.IP, value = raw).isValid()) return null
+    val bytes = if (':' in raw) {
+        runRecoverableCatching { InetAddress.getByName(raw).address }.getOrNull()
+    } else {
+        raw.split('.').map { it.toInt().toByte() }.toByteArray()
+    } ?: return null
+    return FlowIpCandidate(canonicalIp(bytes), bytes)
+}
+
+private fun destinationHost(destination: String): String = when {
+    destination.startsWith('[') && "]" in destination -> destination.substring(1, destination.indexOf(']'))
+    destination.count { it == ':' } == 1 -> destination.substringBeforeLast(':')
+    else -> destination
+}
+
+private val KnownTwoLabelPublicSuffixes = setOf(
+    "ac.jp", "ac.nz", "ac.uk", "appspot.com", "asn.au", "co.jp", "co.kr", "co.nz", "co.uk",
+    "com.au", "com.br", "com.cn", "com.hk", "com.mx", "com.sg", "com.tw", "cloudfront.net",
+    "edu.au", "edu.cn", "firm.in", "gen.in", "github.io", "go.jp", "gov.au", "gov.cn", "gov.uk",
+    "ind.in", "lg.jp", "me.uk", "net.au", "net.br", "net.cn", "net.in", "net.nz", "ne.jp",
+    "nic.in", "or.jp", "org.au", "org.br", "org.cn", "org.in", "org.nz", "org.uk", "pages.dev",
+    "res.in", "sch.uk", "vercel.app",
+)
+
+private fun registrableFlowDomain(domain: String): String {
+    val labels = domain.split('.')
+    if (labels.size <= 2) return domain
+    val lastTwo = labels.takeLast(2).joinToString(".")
+    return if (lastTwo in KnownTwoLabelPublicSuffixes && labels.size >= 3) {
+        labels.takeLast(3).joinToString(".")
+    } else {
+        lastTwo
+    }
+}
+
+private fun compareIpBytes(left: ByteArray, right: ByteArray): Int {
+    left.indices.forEach { index ->
+        val difference = (left[index].toInt() and 0xff) - (right[index].toInt() and 0xff)
+        if (difference != 0) return difference
+    }
+    return 0
+}
+
+private fun commonPrefixLength(first: ByteArray, last: ByteArray): Int {
+    var prefix = 0
+    first.indices.forEach { index ->
+        val difference = (first[index].toInt() xor last[index].toInt()) and 0xff
+        if (difference == 0) {
+            prefix += 8
+        } else {
+            return prefix + Integer.numberOfLeadingZeros(difference) - 24
+        }
+    }
+    return prefix
+}
+
+private fun networkAddress(address: ByteArray, prefix: Int): ByteArray = address.copyOf().also { network ->
+    network.indices.forEach { index ->
+        val remainingBits = (prefix - index * 8).coerceIn(0, 8)
+        val mask = if (remainingBits == 0) 0 else (0xff shl (8 - remainingBits)) and 0xff
+        network[index] = ((network[index].toInt() and 0xff) and mask).toByte()
+    }
+}
+
+private fun canonicalIp(address: ByteArray): String =
+    requireNotNull(InetAddress.getByAddress(address).hostAddress) { "numeric IP has no host address" }
 
 internal fun parseFlowAnalysisEvent(eventJson: String): FlowAnalysisEvent? {
     if (eventJson.length > MAX_FLOW_ANALYSIS_EVENT_JSON_LENGTH) return null

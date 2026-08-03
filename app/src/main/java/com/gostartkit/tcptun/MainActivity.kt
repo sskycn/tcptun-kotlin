@@ -2854,14 +2854,79 @@ private fun SettingsPage(onBack: () -> Unit) {
     }
 }
 
+private suspend fun mutateManagedRouteRules(
+    context: Context,
+    transform: (List<ManagedRouteRule>) -> List<ManagedRouteRule>,
+): Pair<List<ManagedRouteRule>, ProfilesState> = ProcessProfileMutationMutex.withLock {
+    ProcessRouteRuleMutationMutex.withLock {
+        withContext(Dispatchers.IO) {
+            // Always transform the latest committed snapshot. This also makes
+            // flow-analysis conversion safe while route management is open in
+            // another Activity instance.
+            val currentRules = RouteRuleStore.loadAuthoritative(context).getOrThrow()
+            val next = transform(currentRules)
+            val profileSnapshot = ProfileStore.snapshot(context)
+            val authoritativeProfiles = profileSnapshot.requireAuthoritativeState()
+            val possiblePlans = buildList {
+                if (authoritativeProfiles.activeIds.isNotEmpty()) {
+                    add(authoritativeProfiles.runPlan())
+                }
+                authoritativeProfiles.profiles
+                    .firstOrNull { it.rawConfigJson.isBlank() }
+                    ?.let { profile ->
+                        // A structured run plan contains every structured
+                        // profile so future hot membership updates remain possible.
+                        add(authoritativeProfiles.copy(activeIds = setOf(profile.id)).runPlan())
+                    }
+                authoritativeProfiles.profiles
+                    .filter { it.rawConfigJson.isNotBlank() }
+                    .forEach { profile ->
+                        add(authoritativeProfiles.copy(activeIds = setOf(profile.id)).runPlan())
+                    }
+            }.distinct()
+            val currentRouteSize = estimatedEnabledRouteRuntimePayloadLength(currentRules)
+            val nextRouteSize = estimatedEnabledRouteRuntimePayloadLength(next)
+            possiblePlans.forEach { possiblePlan ->
+                val candidateFailure = runCatching {
+                    TcptunVpnService.preflightStartPayload(
+                        context = context,
+                        sourcePlan = possiblePlan,
+                        managedRouteRules = next,
+                    )
+                }.exceptionOrNull() ?: return@forEach
+                val currentConfigurationFits = runCatching {
+                    TcptunVpnService.preflightStartPayload(
+                        context = context,
+                        sourcePlan = possiblePlan,
+                        managedRouteRules = currentRules,
+                    )
+                }.isSuccess
+                // Do not let an unrelated already-oversized imported profile
+                // prevent the user from deleting or shrinking route data.
+                if (currentConfigurationFits || nextRouteSize > currentRouteSize) {
+                    throw candidateFailure
+                }
+            }
+            RouteRuleStore.save(context, next).getOrThrow()
+            RouteRuleStore.loadAuthoritative(context).getOrThrow() to authoritativeProfiles
+        }
+    }
+}
+
 @Composable
 private fun FlowAnalysisPage(onBack: () -> Unit) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val startFailedMessage = stringResource(R.string.start_failed)
     val runtimeState by TcptunState.state.collectAsStateWithLifecycle()
     var settings by remember { mutableStateOf(RuntimeSettings()) }
     var installedApps by remember { mutableStateOf<List<InstalledRouteApp>>(emptyList()) }
     var selectionSaving by remember { mutableStateOf(false) }
+    var routeRuleSaving by remember { mutableStateOf(false) }
+    var showRouteRuleDialog by remember { mutableStateOf(false) }
+    var routeRuleOutbound by remember { mutableStateOf(ManagedRouteOutbound.Proxy) }
+    var routeRuleResult by remember { mutableStateOf("") }
+    var routeRuleError by remember { mutableStateOf("") }
     var flowLeaveRequested by remember { mutableStateOf(false) }
     var pageLoaded by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -2872,6 +2937,9 @@ private fun FlowAnalysisPage(onBack: () -> Unit) {
     val selectedAppLabel = installedApps.firstOrNull { it.packageName == selectedPackage }?.displayName
         ?: selectedPackage.ifBlank { flowAnalysisDisabled }
     val events = runtimeState.flowEvents.asReversed()
+    val routeRuleSuggestions = remember(events, routeRuleOutbound) {
+        buildFlowRouteRuleSuggestions(events, routeRuleOutbound)
+    }
 
     fun selectFlowApp(selected: String) {
         if (selectionSaving || flowLeaveRequested) return
@@ -2893,7 +2961,7 @@ private fun FlowAnalysisPage(onBack: () -> Unit) {
                             settings = persisted
                             selectionSaving = false
                             applyFlowAnalysisSettings(context)
-                            if (flowLeaveRequested) {
+                            if (flowLeaveRequested && !routeRuleSaving) {
                                 flowLeaveRequested = false
                                 onBack()
                             }
@@ -2910,10 +2978,42 @@ private fun FlowAnalysisPage(onBack: () -> Unit) {
     }
 
     fun leaveFlowAnalysis() {
-        if (selectionSaving) {
+        if (selectionSaving || routeRuleSaving) {
             flowLeaveRequested = true
         } else {
             onBack()
+        }
+    }
+
+    fun createRouteRules() {
+        val suggestions = routeRuleSuggestions
+        if (routeRuleSaving || suggestions.isEmpty()) return
+        routeRuleSaving = true
+        routeRuleError = ""
+        scope.launch {
+            try {
+                withContext(NonCancellable) {
+                    mutateManagedRouteRules(context) { existing ->
+                        mergeFlowRouteRuleSuggestions(existing, suggestions)
+                    }
+                    applyRuntimeSettings(context, forceRestart = true)
+                    routeRuleResult = resources.getString(
+                        R.string.flow_analysis_rules_created,
+                        suggestions.size,
+                    )
+                    showRouteRuleDialog = false
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                routeRuleError = failure.message ?: startFailedMessage
+            } finally {
+                routeRuleSaving = false
+                if (flowLeaveRequested && !selectionSaving) {
+                    flowLeaveRequested = false
+                    onBack()
+                }
+            }
         }
     }
 
@@ -2993,6 +3093,29 @@ private fun FlowAnalysisPage(onBack: () -> Unit) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         DiagnosticsLine(stringResource(R.string.flow_analysis_events), events.size.toString())
+                        FilledTonalButton(
+                            onClick = { showRouteRuleDialog = true },
+                            enabled = routeRuleSuggestions.isNotEmpty() && !routeRuleSaving,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(Icons.AutoMirrored.Rounded.AltRoute, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(R.string.flow_analysis_create_rules))
+                        }
+                        if (routeRuleResult.isNotBlank()) {
+                            Text(
+                                routeRuleResult,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        if (routeRuleError.isNotBlank()) {
+                            Text(
+                                routeRuleError,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                         if (runtimeState.flowDroppedEvents > 0) {
                             Text(
                                 stringResource(R.string.flow_analysis_dropped, runtimeState.flowDroppedEvents),
@@ -3022,6 +3145,26 @@ private fun FlowAnalysisPage(onBack: () -> Unit) {
             }
         }
         }
+    }
+
+    if (showRouteRuleDialog) {
+        FlowRouteRuleDialog(
+            suggestions = routeRuleSuggestions,
+            outbound = routeRuleOutbound,
+            saving = routeRuleSaving,
+            error = routeRuleError,
+            onOutboundChange = {
+                routeRuleOutbound = it
+                routeRuleError = ""
+            },
+            onDismiss = {
+                if (!routeRuleSaving) {
+                    showRouteRuleDialog = false
+                    routeRuleError = ""
+                }
+            },
+            onConfirm = ::createRouteRules,
+        )
     }
 }
 
@@ -3098,6 +3241,86 @@ private fun FlowAnalysisEventCard(event: FlowAnalysisEvent) {
     }
 }
 
+@Composable
+private fun FlowRouteRuleDialog(
+    suggestions: List<ManagedRouteRule>,
+    outbound: ManagedRouteOutbound,
+    saving: Boolean,
+    error: String,
+    onOutboundChange: (ManagedRouteOutbound) -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val proxyLabel = stringResource(R.string.route_outbound_proxy)
+    val directLabel = stringResource(R.string.route_outbound_direct)
+    val choices = listOf(proxyLabel, directLabel)
+    val selected = if (outbound == ManagedRouteOutbound.Proxy) proxyLabel else directLabel
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.AutoMirrored.Rounded.AltRoute, contentDescription = null) },
+        title = { Text(stringResource(R.string.flow_analysis_create_rules)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    stringResource(R.string.flow_analysis_rules_note, suggestions.size),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                ChoiceRow(
+                    title = stringResource(R.string.route_rule_outbound),
+                    value = selected,
+                    options = choices,
+                    enabled = !saving,
+                ) { choice ->
+                    onOutboundChange(
+                        if (choice == directLabel) ManagedRouteOutbound.Direct else ManagedRouteOutbound.Proxy,
+                    )
+                }
+                Text(
+                    stringResource(R.string.flow_analysis_rules_preview),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                suggestions.take(8).forEach { rule ->
+                    Text(
+                        "${routeRuleTypeLabel(rule.type)} · ${rule.value}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (suggestions.size > 8) {
+                    Text(
+                        stringResource(R.string.flow_analysis_rules_more, suggestions.size - 8),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (error.isNotBlank()) {
+                    Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                enabled = suggestions.isNotEmpty() && !saving,
+            ) {
+                if (saving) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(stringResource(R.string.flow_analysis_confirm_rules, suggestions.size))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !saving) {
+                Text(stringResource(R.string.cancel))
+            }
+        },
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RouteManagementPage(onBack: () -> Unit) {
@@ -3155,69 +3378,7 @@ private fun RouteManagementPage(onBack: () -> Unit) {
         routeSaveCount += 1
         return try {
             withContext(NonCancellable) {
-                val (persisted, currentProfiles) = ProcessProfileMutationMutex.withLock {
-                    routeMutationMutex.withLock {
-                        withContext(Dispatchers.IO) {
-                            // A previous page instance may finish saving after an
-                            // Activity recreation. Always transform the latest
-                            // committed snapshot while holding both process locks.
-                            val currentRules = RouteRuleStore.loadAuthoritative(context).getOrThrow()
-                            val next = transform(currentRules)
-                            val profileSnapshot = ProfileStore.snapshot(context)
-                            val authoritativeProfiles = profileSnapshot.requireAuthoritativeState()
-                            val possiblePlans = buildList {
-                                if (authoritativeProfiles.activeIds.isNotEmpty()) {
-                                    add(authoritativeProfiles.runPlan())
-                                }
-                                authoritativeProfiles.profiles
-                                    .firstOrNull { it.rawConfigJson.isBlank() }
-                                    ?.let { profile ->
-                                        // A structured run plan contains every structured
-                                        // profile so future hot membership updates remain possible.
-                                        add(
-                                            authoritativeProfiles
-                                                .copy(activeIds = setOf(profile.id))
-                                                .runPlan(),
-                                        )
-                                    }
-                                authoritativeProfiles.profiles
-                                    .filter { it.rawConfigJson.isNotBlank() }
-                                    .forEach { profile ->
-                                        add(
-                                            authoritativeProfiles
-                                                .copy(activeIds = setOf(profile.id))
-                                                .runPlan(),
-                                        )
-                                    }
-                            }.distinct()
-                            val currentRouteSize = estimatedEnabledRouteRuntimePayloadLength(currentRules)
-                            val nextRouteSize = estimatedEnabledRouteRuntimePayloadLength(next)
-                            possiblePlans.forEach { possiblePlan ->
-                                val candidateFailure = runCatching {
-                                    TcptunVpnService.preflightStartPayload(
-                                        context = context,
-                                        sourcePlan = possiblePlan,
-                                        managedRouteRules = next,
-                                    )
-                                }.exceptionOrNull() ?: return@forEach
-                                val currentConfigurationFits = runCatching {
-                                    TcptunVpnService.preflightStartPayload(
-                                        context = context,
-                                        sourcePlan = possiblePlan,
-                                        managedRouteRules = currentRules,
-                                    )
-                                }.isSuccess
-                                // Do not let an unrelated already-oversized imported profile
-                                // prevent the user from deleting or shrinking route data.
-                                if (currentConfigurationFits || nextRouteSize > currentRouteSize) {
-                                    throw candidateFailure
-                                }
-                            }
-                            RouteRuleStore.save(context, next).getOrThrow()
-                            RouteRuleStore.loadAuthoritative(context).getOrThrow() to authoritativeProfiles
-                        }
-                    }
-                }
+                val (persisted, currentProfiles) = mutateManagedRouteRules(context, transform)
                 rules = persisted
                 profileState = currentProfiles
                 dirty = true

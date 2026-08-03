@@ -75,6 +75,12 @@
     <string name="flow_analysis_event_summary">%1$s · %2$s · port %3$d · %4$s</string>
     <string name="flow_analysis_original_ip">Original IP: %1$s</string>
     <string name="flow_analysis_route">Route: %1$s</string>
+    <string name="flow_analysis_create_rules">Create route rules</string>
+    <string name="flow_analysis_rules_note">%1$d rules will be created from recent destinations. Sibling subdomains and nearby IPs are merged conservatively. Generated rules take priority; matching existing rules are updated.</string>
+    <string name="flow_analysis_rules_preview">Rule preview</string>
+    <string name="flow_analysis_rules_more">and %1$d more</string>
+    <string name="flow_analysis_confirm_rules">Create %1$d rules</string>
+    <string name="flow_analysis_rules_created">Created or updated %1$d route rules.</string>
     <string name="ip_information">IP information</string>
     <string name="view_ip_information">View all IP information</string>
     <string name="ip_mixed_listener">Mixed listener</string>

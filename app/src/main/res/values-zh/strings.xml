@@ -74,6 +74,12 @@
     <string name="flow_analysis_event_summary">%1$s · %2$s · 端口 %3$d · %4$s</string>
     <string name="flow_analysis_original_ip">原始 IP：%1$s</string>
     <string name="flow_analysis_route">路由：%1$s</string>
+    <string name="flow_analysis_create_rules">一键转为路由规则</string>
+    <string name="flow_analysis_rules_note">将最近目标智能归并为 %1$d 条规则：同一主域名下的多个子域名合并，临近 IP 合并为尽量小的网段。生成规则会优先匹配；已有同类规则会更新。</string>
+    <string name="flow_analysis_rules_preview">规则预览</string>
+    <string name="flow_analysis_rules_more">另有 %1$d 条</string>
+    <string name="flow_analysis_confirm_rules">创建 %1$d 条规则</string>
+    <string name="flow_analysis_rules_created">已创建或更新 %1$d 条路由规则。</string>
     <string name="ip_information">IP 信息</string>
     <string name="view_ip_information">查看全部 IP 信息</string>
     <string name="ip_mixed_listener">Mixed 监听</string>
