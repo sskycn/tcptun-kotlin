@@ -111,6 +111,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -176,6 +177,7 @@ import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 private const val SnackbarAutoDismissMillis = 6_000L
+private const val MaxUiErrorLength = 4_096
 private const val SavedProfileIntentSequence = "profileIntentSequence"
 private const val SavedPendingProfileUri = "pendingProfileUri"
 /** Brief wait after requesting a monitor refresh so pulled UI can show updated values. */
@@ -273,10 +275,13 @@ private fun AppConfig.withoutEch(): AppConfig = copy(
 )
 
 private fun reportUiError(message: String) {
-    val displayMessage = message.trim().ifBlank { "Unknown error" }
+    val displayMessage = safeUiErrorMessage(message, "Unknown error")
     TcptunState.appendLog("UI error: $displayMessage")
     UiErrorMessages.trySend(displayMessage)
 }
+
+private fun safeUiErrorMessage(message: String, fallback: String): String =
+    redactSensitiveText(message.take(MaxUiErrorLength)).trim().ifBlank { fallback }
 
 internal data class LocalIpInfo(
     val underlyingInterface: String = "",
@@ -758,7 +763,7 @@ internal fun TcptunScreen(
     var scannerImportJob by remember { mutableStateOf<Job?>(null) }
     var showLogs by remember { mutableStateOf(false) }
     var profileQrCode by remember { mutableStateOf<AppConfig?>(null) }
-    var tcpingTargetIndex by remember { mutableStateOf(0) }
+    var tcpingTargetIndex by remember { mutableIntStateOf(0) }
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(snackbarHostState) {
         for (message in UiErrorMessages) {
@@ -770,7 +775,7 @@ internal fun TcptunScreen(
     val profileReloadGeneration = remember { AtomicInteger() }
     val profileListState = rememberLazyListState()
     var draggedProfileId by remember { mutableStateOf<String?>(null) }
-    var draggedProfileOffset by remember { mutableStateOf(0f) }
+    var draggedProfileOffset by remember { mutableFloatStateOf(0f) }
     var profilesBeforeDrag by remember { mutableStateOf<List<AppConfig>?>(null) }
     var profileReorderScrollJob by remember { mutableStateOf<Job?>(null) }
     val profileReorderScrollStep = with(LocalDensity.current) { 24.dp.toPx() }
@@ -2971,7 +2976,7 @@ private fun FlowAnalysisPage(onBack: () -> Unit) {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                routeRuleError = failure.message ?: startFailedMessage
+                routeRuleError = safeUiErrorMessage(failure.message.orEmpty(), startFailedMessage)
             } finally {
                 routeRuleSaving = false
                 if (flowLeaveRequested && !selectionSaving) {
@@ -3344,7 +3349,7 @@ private fun RouteManagementPage(onBack: () -> Unit) {
     var routeLeaveRequested by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     var draggedRuleId by remember { mutableStateOf<String?>(null) }
-    var draggedRuleOffset by remember { mutableStateOf(0f) }
+    var draggedRuleOffset by remember { mutableFloatStateOf(0f) }
     var rulesBeforeDrag by remember { mutableStateOf<List<ManagedRouteRule>?>(null) }
     var reorderScrollJob by remember { mutableStateOf<Job?>(null) }
     val reorderScope = rememberCoroutineScope()
@@ -3398,7 +3403,7 @@ private fun RouteManagementPage(onBack: () -> Unit) {
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            error = failure.message.orEmpty()
+            error = redactSensitiveText(failure.message.orEmpty().take(MaxUiErrorLength)).trim()
             false
         } finally {
             routeSaveCount = (routeSaveCount - 1).coerceAtLeast(0)
@@ -4219,7 +4224,7 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                         } catch (cancelled: CancellationException) {
                             throw cancelled
                         } catch (failure: Exception) {
-                            val message = failure.message?.takeIf(String::isNotBlank) ?: invalidProfileMessage
+                            val message = safeUiErrorMessage(failure.message.orEmpty(), invalidProfileMessage)
                             formError = message
                             reportUiError(message)
                         } finally {
@@ -4297,8 +4302,10 @@ private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (App
                                     } catch (cancelled: CancellationException) {
                                         throw cancelled
                                     } catch (failure: Exception) {
-                                        val message = failure.message?.takeIf(String::isNotBlank)
-                                            ?: invalidProfileMessage
+                                        val message = safeUiErrorMessage(
+                                            failure.message.orEmpty(),
+                                            invalidProfileMessage,
+                                        )
                                         useFullConfig = false
                                         formError = message
                                         reportUiError(message)

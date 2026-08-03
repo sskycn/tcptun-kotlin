@@ -322,7 +322,7 @@ object TcptunState {
         _state.value = current.copy(
             status = restoredStatus,
             connectionsReady = restoredConnectionsReady,
-            lastError = restoredLastError,
+            lastError = redactSensitiveText(restoredLastError.take(MAX_STATUS_FIELD_LENGTH)),
             diagnostics = current.diagnostics.copy(vpnStatus = restoredStatus),
         )
         return true
@@ -354,7 +354,9 @@ object TcptunState {
 
     @Synchronized
     fun error(message: String) {
-        val safeMessage = message.take(MAX_STATUS_FIELD_LENGTH).trim().ifBlank { "Unknown error" }
+        val safeMessage = redactSensitiveText(message.take(MAX_STATUS_FIELD_LENGTH))
+            .trim()
+            .ifBlank { "Unknown error" }
         val current = _state.value
         _state.value = current.copy(
             status = "Error",
@@ -370,7 +372,7 @@ object TcptunState {
     @Synchronized
     fun updateDiagnostics(update: (TcptunDiagnostics) -> TcptunDiagnostics) {
         val current = _state.value
-        _state.value = current.copy(diagnostics = update(current.diagnostics))
+        _state.value = current.copy(diagnostics = sanitizeDiagnostics(update(current.diagnostics)))
     }
 
     @Synchronized
@@ -380,7 +382,7 @@ object TcptunState {
     ): Boolean {
         if (epoch <= 0L || epoch != bridgeEpoch) return false
         val current = _state.value
-        _state.value = current.copy(diagnostics = update(current.diagnostics))
+        _state.value = current.copy(diagnostics = sanitizeDiagnostics(update(current.diagnostics)))
         return true
     }
 
@@ -411,10 +413,12 @@ object TcptunState {
         bridgeSessionId = safeSessionId
         bridgeSequence = safeSequence
         val current = _state.value
-        val updatedDiagnostics = update(current.diagnostics).copy(
-            bridgeStatus = bridgeStatus,
-            bridgeSessionId = safeSessionId,
-            bridgeSequence = safeSequence,
+        val updatedDiagnostics = sanitizeDiagnostics(
+            update(current.diagnostics).copy(
+                bridgeStatus = bridgeStatus,
+                bridgeSessionId = safeSessionId,
+                bridgeSequence = safeSequence,
+            ),
         )
         _state.value = current.copy(
             lastError = bridgeDisplayError(
@@ -461,7 +465,7 @@ object TcptunState {
                 muxSessions = json.optInt("mux_sessions", 0).coerceAtLeast(0),
                 muxStreams = json.optInt("mux_streams", 0).coerceAtLeast(0),
                 recoverable = json.optBoolean("recoverable", false),
-                lastError = json.optStatusString("last_error"),
+                lastError = redactSensitiveText(json.optStatusString("last_error")),
                 timestampMs = json.optLong("timestamp_ms", 0),
             )
         }.getOrElse { err ->
@@ -487,24 +491,26 @@ object TcptunState {
                 bridgeLastError = event.lastError,
                 eventState = event.state,
             ),
-            diagnostics = current.diagnostics.copy(
-                bridgeStatus = simpleBridgeStatus,
-                bridgeEventState = event.state.ifBlank { "Unknown" },
-                bridgeEventReason = event.reason.ifBlank { "None" },
-                bridgeEventPhase = event.phase.ifBlank { "None" },
-                bridgeListen = event.listen,
-                // An empty remote explicitly means that no managed outbound is connected.
-                bridgeRemote = event.remote,
-                bridgeActiveConnections = event.activeConnections,
-                bridgeClientIps = event.clientIps,
-                bridgeMuxSources = event.muxSources,
-                bridgeMuxSessions = event.muxSessions,
-                bridgeMuxStreams = event.muxStreams,
-                bridgeRecoverable = event.recoverable,
-                bridgeLastError = event.lastError,
-                bridgeTimestampMs = event.timestampMs,
-                bridgeSessionId = event.sessionId,
-                bridgeSequence = event.sequence,
+            diagnostics = sanitizeDiagnostics(
+                current.diagnostics.copy(
+                    bridgeStatus = simpleBridgeStatus,
+                    bridgeEventState = event.state.ifBlank { "Unknown" },
+                    bridgeEventReason = event.reason.ifBlank { "None" },
+                    bridgeEventPhase = event.phase.ifBlank { "None" },
+                    bridgeListen = event.listen,
+                    // An empty remote explicitly means that no managed outbound is connected.
+                    bridgeRemote = event.remote,
+                    bridgeActiveConnections = event.activeConnections,
+                    bridgeClientIps = event.clientIps,
+                    bridgeMuxSources = event.muxSources,
+                    bridgeMuxSessions = event.muxSessions,
+                    bridgeMuxStreams = event.muxStreams,
+                    bridgeRecoverable = event.recoverable,
+                    bridgeLastError = event.lastError,
+                    bridgeTimestampMs = event.timestampMs,
+                    bridgeSessionId = event.sessionId,
+                    bridgeSequence = event.sequence,
+                ),
             ),
         )
         if (event.shouldLog()) appendLog(event.logLine())
@@ -513,7 +519,7 @@ object TcptunState {
 
     @Synchronized
     fun appendLog(line: String) {
-        val clean = line.take(MAX_LOG_LENGTH).trim()
+        val clean = redactSensitiveText(line.take(MAX_LOG_LENGTH)).trim()
         if (clean.isEmpty()) return
         // Keep in-app log history for later inspection; avoid logcat I/O while hanging
         // in the background with the UI closed.
@@ -567,7 +573,7 @@ object TcptunState {
     fun setProfileHealth(profileId: String, health: ProfileHealth) {
         if (profileId.isBlank()) return
         val current = _state.value
-        _state.value = current.copy(profileHealth = current.profileHealth + (profileId to health))
+        _state.value = current.copy(profileHealth = current.profileHealth + (profileId to sanitizeHealth(health)))
     }
 
     @Synchronized
@@ -578,7 +584,7 @@ object TcptunState {
     ): Boolean {
         if (epoch <= 0L || epoch != bridgeEpoch || profileId.isBlank()) return false
         val current = _state.value
-        _state.value = current.copy(profileHealth = current.profileHealth + (profileId to health))
+        _state.value = current.copy(profileHealth = current.profileHealth + (profileId to sanitizeHealth(health)))
         return true
     }
 
@@ -631,7 +637,9 @@ object TcptunState {
         val current = _state.value
         if (current.tcping.requestId != requestId) return
         _state.value = current.copy(
-            tcping = current.tcping.copy(results = current.tcping.results + result),
+            tcping = current.tcping.copy(
+                results = current.tcping.results + result.copy(error = sanitizeErrorText(result.error)),
+            ),
         )
     }
 
@@ -652,7 +660,7 @@ object TcptunState {
             tcping = current.tcping.copy(
                 running = false,
                 currentProfileName = "",
-                error = error.trim(),
+                error = sanitizeErrorText(error),
             ),
         )
     }
@@ -690,7 +698,7 @@ object TcptunState {
     ): String {
         // A bridge snapshot must never erase a terminal service/lifecycle error.
         if (runtimeStatus == "Error") return currentError
-        val safeError = bridgeLastError.take(MAX_STATUS_FIELD_LENGTH).trim()
+        val safeError = redactSensitiveText(bridgeLastError.take(MAX_STATUS_FIELD_LENGTH)).trim()
         if (
             (bridgeStatus == "Error" || eventState.equals("error", ignoreCase = true)) &&
             safeError.isNotBlank()
@@ -726,6 +734,22 @@ object TcptunState {
         localProxyReachable = false,
         socketProtectEnabled = false,
     )
+
+    private fun sanitizeDiagnostics(diagnostics: TcptunDiagnostics): TcptunDiagnostics = diagnostics.copy(
+        bridgeEventReason = redactSensitiveText(diagnostics.bridgeEventReason),
+        bridgeEventPhase = redactSensitiveText(diagnostics.bridgeEventPhase),
+        bridgeListen = redactSensitiveText(diagnostics.bridgeListen),
+        bridgeRemote = redactSensitiveText(diagnostics.bridgeRemote),
+        bridgeLastError = redactSensitiveText(diagnostics.bridgeLastError),
+        lastRestartReason = redactSensitiveText(diagnostics.lastRestartReason),
+    )
+
+    private fun sanitizeHealth(health: ProfileHealth): ProfileHealth = health.copy(
+        error = sanitizeErrorText(health.error),
+    )
+
+    private fun sanitizeErrorText(value: String): String =
+        redactSensitiveText(value.take(MAX_STATUS_FIELD_LENGTH)).trim()
 
     private fun JSONObject.optStatusString(name: String): String {
         val value = opt(name)
