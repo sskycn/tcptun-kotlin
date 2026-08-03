@@ -43,11 +43,12 @@ class RouteManagementUiTest {
         composeRule.onNodeWithContentDescription(activity.getString(R.string.more_options)).performClick()
         composeRule.onNodeWithText(activity.getString(R.string.route_management)).performClick()
         composeRule.waitUntil(timeoutMillis = 5_000) {
-            composeRule.onAllNodesWithContentDescription(activity.getString(R.string.add_route_rule))
+            composeRule.onAllNodesWithContentDescription(activity.getString(R.string.route_actions))
                 .fetchSemanticsNodes().isNotEmpty()
         }
         composeRule.onNodeWithText(activity.getString(R.string.route_management)).assertIsDisplayed()
 
+        composeRule.onNodeWithContentDescription(activity.getString(R.string.route_actions)).performClick()
         composeRule.onNodeWithContentDescription(activity.getString(R.string.add_route_rule)).performClick()
         composeRule.onNodeWithText(activity.getString(R.string.route_rule_type)).assertIsDisplayed()
         composeRule.onNodeWithText(activity.getString(R.string.route_rule_value)).assertIsDisplayed()
@@ -84,5 +85,42 @@ class RouteManagementUiTest {
         composeRule.waitUntil(timeoutMillis = 5_000) {
             RouteRuleStore.load(activity).map { it.id } == listOf(second.id, first.id)
         }
+    }
+
+    @Test
+    fun opensSmartMergePreviewFromRouteActions() {
+        RouteRuleStore.save(
+            composeRule.activity,
+            listOf(
+                ManagedRouteRule(
+                    id = "merge-api",
+                    type = ManagedRouteRuleType.Domain,
+                    value = "api.example.com",
+                ),
+                ManagedRouteRule(
+                    id = "merge-cdn",
+                    type = ManagedRouteRuleType.Domain,
+                    value = "cdn.example.com",
+                ),
+            ),
+        ).getOrThrow()
+
+        val activity = composeRule.activity
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithContentDescription(activity.getString(R.string.more_options))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithContentDescription(activity.getString(R.string.more_options)).performClick()
+        composeRule.onNodeWithText(activity.getString(R.string.route_management)).performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithContentDescription(activity.getString(R.string.route_actions))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+
+        composeRule.onNodeWithContentDescription(activity.getString(R.string.route_actions)).performClick()
+        composeRule.onNodeWithContentDescription(activity.getString(R.string.smart_merge_route_rules)).performClick()
+
+        composeRule.onNodeWithText(activity.getString(R.string.smart_merge_preview)).assertIsDisplayed()
+        composeRule.onNodeWithText(activity.getString(R.string.smart_merge_confirm)).assertIsDisplayed()
     }
 }

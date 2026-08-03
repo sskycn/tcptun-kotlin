@@ -101,6 +101,7 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -3325,6 +3326,7 @@ private fun FlowRouteRuleDialog(
 @Composable
 private fun RouteManagementPage(onBack: () -> Unit) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     var profileState by remember { mutableStateOf(ProfilesState(emptyList())) }
     val routeProfiles = profileState.profiles.filter { it.rawConfigJson.isBlank() }
     var installedApps by remember { mutableStateOf<List<InstalledRouteApp>>(emptyList()) }
@@ -3332,6 +3334,9 @@ private fun RouteManagementPage(onBack: () -> Unit) {
     var routeDataLoaded by remember { mutableStateOf(false) }
     var editingRule by remember { mutableStateOf<ManagedRouteRule?>(null) }
     var deleteCandidate by remember { mutableStateOf<ManagedRouteRule?>(null) }
+    var routeActionsExpanded by remember { mutableStateOf(false) }
+    var smartMergePreview by remember { mutableStateOf<SmartRouteMergeResult?>(null) }
+    var notice by remember { mutableStateOf("") }
     var dirty by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var routeSaveCount by remember { mutableIntStateOf(0) }
@@ -3346,6 +3351,7 @@ private fun RouteManagementPage(onBack: () -> Unit) {
     val reorderScrollStep = with(LocalDensity.current) { 24.dp.toPx() }
     val routeSaving = routeSaveCount > 0
     val routeInteractionEnabled = !routeSaving && !routeLeaveRequested
+    val smartMergeResult = remember(rules) { smartMergeManagedRouteRules(rules) }
 
     LaunchedEffect(context) {
         val loaded = withContext(Dispatchers.IO) {
@@ -3414,6 +3420,7 @@ private fun RouteManagementPage(onBack: () -> Unit) {
 
     fun startRuleDrag(ruleId: String) {
         if (!routeInteractionEnabled) return
+        routeActionsExpanded = false
         draggedRuleId = ruleId
         draggedRuleOffset = 0f
         rulesBeforeDrag = rules
@@ -3488,7 +3495,9 @@ private fun RouteManagementPage(onBack: () -> Unit) {
         }
     }
 
-    BackHandler(onBack = ::leave)
+    BackHandler {
+        if (routeActionsExpanded) routeActionsExpanded = false else leave()
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -3499,11 +3508,29 @@ private fun RouteManagementPage(onBack: () -> Unit) {
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = {
-                if (routeInteractionEnabled) editingRule = ManagedRouteRule()
-            }) {
-                Icon(Icons.Rounded.Add, contentDescription = stringResource(R.string.add_route_rule))
-            }
+            RouteActionFabMenu(
+                expanded = routeActionsExpanded,
+                enabled = routeInteractionEnabled,
+                onToggle = {
+                    if (routeInteractionEnabled || routeActionsExpanded) {
+                        routeActionsExpanded = !routeActionsExpanded
+                    }
+                },
+                onAdd = {
+                    routeActionsExpanded = false
+                    editingRule = ManagedRouteRule()
+                },
+                onSmartMerge = {
+                    routeActionsExpanded = false
+                    notice = ""
+                    error = ""
+                    if (smartMergeResult.changed) {
+                        smartMergePreview = smartMergeResult
+                    } else {
+                        notice = resources.getString(R.string.smart_merge_no_changes)
+                    }
+                },
+            )
         },
     ) { padding ->
         PullRefreshContainer(
@@ -3550,14 +3577,19 @@ private fun RouteManagementPage(onBack: () -> Unit) {
                         if (error.isNotBlank()) {
                             Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                         }
+                        if (notice.isNotBlank()) {
+                            Text(
+                                notice,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
                     }
                 }
             }
             if (rules.isEmpty()) {
                 item {
-                    RouteRulesEmptyState(onAdd = {
-                        if (routeInteractionEnabled) editingRule = ManagedRouteRule()
-                    })
+                    RouteRulesEmptyState()
                 }
             }
             itemsIndexed(rules, key = { _, rule -> rule.id }) { index, rule ->
@@ -3620,6 +3652,33 @@ private fun RouteManagementPage(onBack: () -> Unit) {
         )
     }
 
+    smartMergePreview?.let { preview ->
+        SmartRouteMergeDialog(
+            result = preview,
+            saving = routeSaving,
+            error = error,
+            onDismiss = {
+                if (!routeSaving) {
+                    smartMergePreview = null
+                    error = ""
+                }
+            },
+            onConfirm = {
+                if (!routeInteractionEnabled) return@SmartRouteMergeDialog
+                reorderScope.launch {
+                    val saved = persist { current -> smartMergeManagedRouteRules(current).rules }
+                    if (saved) {
+                        smartMergePreview = null
+                        notice = resources.getString(
+                            R.string.smart_merge_complete,
+                            preview.removedRuleCount,
+                        )
+                    }
+                }
+            },
+        )
+    }
+
     deleteCandidate?.let { rule ->
         AlertDialog(
             onDismissRequest = { deleteCandidate = null },
@@ -3650,6 +3709,154 @@ private fun RouteManagementPage(onBack: () -> Unit) {
             },
         )
     }
+}
+
+@Composable
+private fun RouteActionFabMenu(
+    expanded: Boolean,
+    enabled: Boolean,
+    onToggle: () -> Unit,
+    onAdd: () -> Unit,
+    onSmartMerge: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (expanded) {
+            RouteActionFabItem(
+                label = stringResource(R.string.smart_merge_route_rules),
+                icon = Icons.Rounded.Hub,
+                enabled = enabled,
+                onClick = onSmartMerge,
+            )
+            RouteActionFabItem(
+                label = stringResource(R.string.add_route_rule),
+                icon = Icons.Rounded.Add,
+                enabled = enabled,
+                onClick = onAdd,
+            )
+        }
+        FloatingActionButton(onClick = onToggle) {
+            Icon(
+                Icons.Rounded.MoreVert,
+                contentDescription = stringResource(
+                    if (expanded) R.string.close_route_actions else R.string.route_actions,
+                ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun RouteActionFabItem(
+    label: String,
+    icon: ImageVector,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            shape = CardShapeCompact,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shadowElevation = 2.dp,
+        ) {
+            Text(
+                label,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+        SmallFloatingActionButton(
+            onClick = { if (enabled) onClick() },
+            containerColor = if (enabled) {
+                MaterialTheme.colorScheme.secondaryContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerHighest
+            },
+            contentColor = if (enabled) {
+                MaterialTheme.colorScheme.onSecondaryContainer
+            } else {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+            },
+        ) {
+            Icon(icon, contentDescription = label)
+        }
+    }
+}
+
+@Composable
+private fun SmartRouteMergeDialog(
+    result: SmartRouteMergeResult,
+    saving: Boolean,
+    error: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Rounded.Hub, contentDescription = null) },
+        title = { Text(stringResource(R.string.smart_merge_route_rules)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    stringResource(
+                        R.string.smart_merge_summary,
+                        result.rules.size + result.removedRuleCount,
+                        result.rules.size,
+                        result.removedRuleCount,
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    stringResource(R.string.smart_merge_preview),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                result.groups.take(6).forEach { group ->
+                    val sourcePreview = group.sourceRules
+                        .take(2)
+                        .joinToString(" · ", transform = ManagedRouteRule::value)
+                    val suffix = if (group.sourceRules.size > 2) " · …" else ""
+                    Text(
+                        "$sourcePreview$suffix  →  ${routeRuleTypeLabel(group.mergedRule.type)} · " +
+                            group.mergedRule.value,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (result.groups.size > 6) {
+                    Text(
+                        stringResource(R.string.flow_analysis_rules_more, result.groups.size - 6),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (error.isNotBlank()) {
+                    Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onConfirm, enabled = !saving) {
+                if (saving) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(stringResource(R.string.smart_merge_confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !saving) {
+                Text(stringResource(R.string.cancel))
+            }
+        },
+    )
 }
 
 @Composable
@@ -3802,7 +4009,7 @@ private fun ManagedRouteRuleRow(
 }
 
 @Composable
-private fun RouteRulesEmptyState(onAdd: () -> Unit) {
+private fun RouteRulesEmptyState() {
     val colors = MaterialTheme.colorScheme
     Column(
         modifier = Modifier
@@ -3822,9 +4029,12 @@ private fun RouteRulesEmptyState(onAdd: () -> Unit) {
             style = MaterialTheme.typography.titleMedium,
             color = colors.onSurface,
         )
-        FilledTonalButton(onClick = onAdd) {
-            Text(stringResource(R.string.add_route_rule))
-        }
+        Text(
+            stringResource(R.string.empty_route_rules_note),
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 

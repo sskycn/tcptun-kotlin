@@ -143,7 +143,16 @@
     <string name="route_management_note">Rules are evaluated first from top to bottom for VPN (TUN) traffic. Enable “Route local proxy traffic” in Settings to also apply them to mixed/SOCKS. Unmatched traffic uses the configured default outbound. Changes apply when you leave this page.</string>
     <string name="route_rules_count">%1$d enabled rules</string>
     <string name="empty_route_rules">No route rules yet</string>
+    <string name="empty_route_rules_note">Use the route actions button to add a rule.</string>
     <string name="add_route_rule">Add route rule</string>
+    <string name="route_actions">Route actions</string>
+    <string name="close_route_actions">Close route actions</string>
+    <string name="smart_merge_route_rules">Smart merge</string>
+    <string name="smart_merge_summary">Before: %1$d · after: %2$d · removed: %3$d. Only rules with identical outbound behavior are combined; priority stays at the earliest source position.</string>
+    <string name="smart_merge_preview">Merge preview</string>
+    <string name="smart_merge_confirm">Merge rules</string>
+    <string name="smart_merge_no_changes">No mergeable domain or IP rules found.</string>
+    <string name="smart_merge_complete">Smart merge complete · removed: %1$d.</string>
     <string name="edit_route_rule">Edit route rule</string>
     <string name="delete_route_rule">Delete route rule?</string>
     <string name="delete_route_rule_message">Delete “%1$s”?</string>

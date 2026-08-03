@@ -40,7 +40,7 @@ internal fun buildFlowRouteRuleSuggestions(
 ): List<ManagedRouteRule> {
     val domainCandidates = events.mapNotNull(::validFlowDomain).toSortedSet()
     val domainRules = domainCandidates
-        .groupBy(::registrableFlowDomain)
+        .groupBy(::registrableRouteDomain)
         .toSortedMap()
         .map { (registrableDomain, domains) ->
             if (domains.distinct().size > 1) {
@@ -65,13 +65,10 @@ internal fun buildFlowRouteRuleSuggestions(
         .distinctBy { it.bytes.toList() }
         .toList()
     val ipRules = ipCandidates
-        .groupBy { candidate ->
-            val prefixBytes = if (candidate.bytes.size == 4) 3 else 8
-            candidate.bytes.take(prefixBytes)
-        }
+        .groupBy(::numericRouteIpBucket)
         .values
         .map { subnetCandidates ->
-            val sorted = subnetCandidates.sortedWith { left, right -> compareIpBytes(left.bytes, right.bytes) }
+            val sorted = subnetCandidates.sortedWith(::compareNumericRouteIps)
             if (sorted.size == 1) {
                 ManagedRouteRule(
                     type = ManagedRouteRuleType.IP,
@@ -79,11 +76,9 @@ internal fun buildFlowRouteRuleSuggestions(
                     outbound = outbound,
                 )
             } else {
-                val prefix = commonPrefixLength(sorted.first().bytes, sorted.last().bytes)
-                val network = networkAddress(sorted.first().bytes, prefix)
                 ManagedRouteRule(
                     type = ManagedRouteRuleType.IPCidr,
-                    value = "${canonicalIp(network)}/$prefix",
+                    value = smallestContainingRouteCidr(sorted),
                     outbound = outbound,
                 )
             }
@@ -112,7 +107,7 @@ internal fun mergeFlowRouteRuleSuggestions(
     return normalizedSuggestions + normalizedExisting.filterNot { routeMatcherKey(it) in generatedMatchers }
 }
 
-private data class FlowIpCandidate(
+internal data class NumericRouteIpCandidate(
     val canonical: String,
     val bytes: ByteArray,
 )
@@ -128,15 +123,19 @@ private fun validFlowDomain(event: FlowAnalysisEvent): String? {
     }
 }
 
-private fun flowEventIp(event: FlowAnalysisEvent): FlowIpCandidate? {
+private fun flowEventIp(event: FlowAnalysisEvent): NumericRouteIpCandidate? {
     val raw = event.ip.ifBlank { destinationHost(event.destination) }.trim().removeSurrounding("[", "]")
+    return parseNumericRouteIp(raw)
+}
+
+internal fun parseNumericRouteIp(raw: String): NumericRouteIpCandidate? {
     if (!ManagedRouteRule(type = ManagedRouteRuleType.IP, value = raw).isValid()) return null
     val bytes = if (':' in raw) {
         runRecoverableCatching { InetAddress.getByName(raw).address }.getOrNull()
     } else {
         raw.split('.').map { it.toInt().toByte() }.toByteArray()
     } ?: return null
-    return FlowIpCandidate(canonicalIp(bytes), bytes)
+    return NumericRouteIpCandidate(canonicalIp(bytes), bytes)
 }
 
 private fun destinationHost(destination: String): String = when {
@@ -154,7 +153,7 @@ private val KnownTwoLabelPublicSuffixes = setOf(
     "res.in", "sch.uk", "vercel.app",
 )
 
-private fun registrableFlowDomain(domain: String): String {
+internal fun registrableRouteDomain(domain: String): String {
     val labels = domain.split('.')
     if (labels.size <= 2) return domain
     val lastTwo = labels.takeLast(2).joinToString(".")
@@ -165,12 +164,29 @@ private fun registrableFlowDomain(domain: String): String {
     }
 }
 
-private fun compareIpBytes(left: ByteArray, right: ByteArray): Int {
-    left.indices.forEach { index ->
-        val difference = (left[index].toInt() and 0xff) - (right[index].toInt() and 0xff)
+internal fun numericRouteIpBucket(candidate: NumericRouteIpCandidate): List<Byte> {
+    val prefixBytes = if (candidate.bytes.size == 4) 3 else 8
+    return candidate.bytes.take(prefixBytes)
+}
+
+internal fun compareNumericRouteIps(
+    left: NumericRouteIpCandidate,
+    right: NumericRouteIpCandidate,
+): Int {
+    left.bytes.indices.forEach { index ->
+        val difference = (left.bytes[index].toInt() and 0xff) - (right.bytes[index].toInt() and 0xff)
         if (difference != 0) return difference
     }
     return 0
+}
+
+internal fun smallestContainingRouteCidr(candidates: List<NumericRouteIpCandidate>): String {
+    require(candidates.size >= 2) { "at least two IPs are required for a subnet" }
+    val sorted = candidates.sortedWith(::compareNumericRouteIps)
+    require(sorted.first().bytes.size == sorted.last().bytes.size) { "IP families must match" }
+    val prefix = commonPrefixLength(sorted.first().bytes, sorted.last().bytes)
+    val network = networkAddress(sorted.first().bytes, prefix)
+    return "${canonicalIp(network)}/$prefix"
 }
 
 private fun commonPrefixLength(first: ByteArray, last: ByteArray): Int {
