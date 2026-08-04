@@ -1157,9 +1157,8 @@ class AndroidBridgeContractTest {
             token = "mlkit-qr-secret",
             protocol = "native",
         )
-        val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
-        assertTrue(qrPayload.startsWith("T3:"))
-        val bitmap = generateQrCodeBitmap(qrPayload, 768)
+        val qrPng = requireNotNull(ProfileUriCodec.encodeQrCode(profile))
+        val bitmap = decodeQrCodeBitmap(qrPng)
 
         val scanner = BarcodeScanning.getClient(
             BarcodeScannerOptions.Builder()
@@ -1172,7 +1171,8 @@ class AndroidBridgeContractTest {
         } finally {
             scanner.close()
         }
-        assertEquals(qrPayload, scanned)
+        val qrPayload = requireNotNull(scanned)
+        assertTrue(qrPayload.startsWith("T3:"))
         val decoded = ProfileUriCodec.decode(requireNotNull(scanned)).getOrThrow()
         assertEquals(profile.serverHost, decoded.serverHost)
         assertEquals(profile.token, decoded.token)

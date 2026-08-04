@@ -49,6 +49,9 @@ func NewEngine() *Engine
 func ValidateConfig(configJson string) error
 func CoreVersion() string
 func CoreBuildID() string
+func EncodeProfile(profileJSON string) (string, error)
+func EncodeProfileQRCode(profileJSON string, recoveryLevel string, moduleSize int, compact bool) ([]byte, error)
+func DecodeProfile(payload string) (string, error)
 func (e *Engine) SetLogCallback(cb LogCallback)
 func (e *Engine) SetStatusCallback(cb StatusCallback)
 func (e *Engine) RegisterEvent(event string) error
@@ -421,7 +424,7 @@ native://TOKEN@203.0.113.10:443?v=1&type=raw&security=reality&sni=example.com&fp
 - `VpnService` with foreground service notification.
 - Config persistence with `SharedPreferences`.
 - Independently started local profiles with add, edit, delete, and share actions; active structured profiles form one dynamically weighted, session-affine pool.
-- URI sharing and compact `T3:` QR import/export for native, VLESS, VMess, and Trojan profiles. REALITY uses `security=reality`; `carrier_mode=tcp|auto|quic` selects the physical carrier independently. T3 preserves carrier selection, QUIC UDP mode, and receive-window overrides; import remains compatible with legacy `T2:` payloads and the removed `reality-tcp` / `reality-quic` forms. Versioned payloads use tcptun-go's `EncodeProfile` / `DecodeProfile` bridge API and a dedicated profile DTO; Android only renders and scans the QR image.
+- URI sharing and compact `T3:` QR import/export for native, VLESS, VMess, and Trojan profiles. REALITY uses `security=reality`; `carrier_mode=tcp|auto|quic` selects the physical carrier independently. T3 preserves carrier selection, QUIC UDP mode, and receive-window overrides; import remains compatible with legacy `T2:` payloads and the removed `reality-tcp` / `reality-quic` forms. Versioned payloads use tcptun-go's `EncodeProfile` / `EncodeProfileQRCode` / `DecodeProfile` bridge APIs and a dedicated profile DTO; tcptun-go renders the QR PNG, while Android displays and scans it.
 - Protocol and transport selection UI.
 - Optional token, SNI, path, TLS, TLS insecure, REALITY short ID, ECH ClientHello protection, carrier mode, mux limits, and upstream protocol UI. Native REALITY supports independent `tcp`, `auto`, and `quic` carrier selection; QUIC and automatic selection require mux. ECH uses native + raw + security none + TCP carrier and requires a matching server private key. Because tcptun-go's URI and T2/T3 formats deliberately cannot represent ECH, ECH profiles run and persist locally but do not expose URI/QR sharing.
 - IPv4/IPv6 default routes send all VPN traffic into tcptun-go; explicit rules run first and unmatched traffic uses the default outbound selected in Settings.

@@ -2247,10 +2247,9 @@ private fun ProfileQrCodeDialog(
             QrCodeGenerationMutex.withLock {
                 currentCoroutineContext().ensureActive()
                 val result = runRecoverableCatching {
-                    val payload = ProfileUriCodec.encodeForQr(profile)
+                    val png = ProfileUriCodec.encodeQrCode(profile)
                         ?: throw IllegalArgumentException("profile cannot be encoded as a QR code")
-                    // 768 px remains crisp on-screen while bounding peak bitmap/matrix memory.
-                    generateQrCodeBitmap(payload, 768)
+                    decodeQrCodeBitmap(png)
                 }
                 currentCoroutineContext().ensureActive()
                 result

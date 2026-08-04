@@ -18,6 +18,29 @@ internal object TcptunProfileCodec {
         return encoded
     }
 
+    /**
+     * Renders the same T3 profile payload as tcptun-go's native QR encoder.
+     *
+     * moduleSize is a Go int, which gomobile exposes as a Java long. Zero and
+     * an empty recovery level select the bridge defaults (8 pixels and medium).
+     */
+    fun encodeQrCode(
+        profile: AppConfig,
+        recoveryLevel: String = "",
+        moduleSize: Int = 0,
+        compact: Boolean = false,
+    ): ByteArray {
+        require(moduleSize >= 0) { "QR module size must not be negative" }
+        val png = invokeQrCode(
+            profile.toBridgeProfileJson().toString(),
+            recoveryLevel,
+            moduleSize,
+            compact,
+        )
+        require(png.isNotEmpty()) { "androidbridge.EncodeProfileQRCode returned an empty image" }
+        return png
+    }
+
     fun decode(value: String): AppConfig {
         val profileJson = invoke("decodeProfile", value)
         require(profileJson.length <= MaxProfileImportLength) { "decoded profile is too large" }
@@ -36,6 +59,33 @@ internal object TcptunProfileCodec {
         } catch (err: LinkageError) {
             throw IllegalStateException(
                 "androidbridge profile codec is unavailable. Rebuild app/libs/androidbridge.aar.",
+                err,
+            )
+        }
+    }
+
+    private fun invokeQrCode(
+        profileJson: String,
+        recoveryLevel: String,
+        moduleSize: Int,
+        compact: Boolean,
+    ): ByteArray {
+        return try {
+            val bridgeClass = Class.forName("androidbridge.Androidbridge")
+            bridgeClass.getMethod(
+                "encodeProfileQRCode",
+                String::class.java,
+                String::class.java,
+                Long::class.javaPrimitiveType,
+                Boolean::class.javaPrimitiveType,
+            ).invoke(null, profileJson, recoveryLevel, moduleSize.toLong(), compact) as? ByteArray
+                ?: throw IllegalStateException("androidbridge.EncodeProfileQRCode returned no image")
+        } catch (err: ReflectiveOperationException) {
+            val cause = err.cause ?: err
+            throw IllegalArgumentException(cause.message ?: cause.javaClass.name, cause)
+        } catch (err: LinkageError) {
+            throw IllegalStateException(
+                "androidbridge profile QR codec is unavailable. Rebuild app/libs/androidbridge.aar.",
                 err,
             )
         }

@@ -5,8 +5,6 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
-import com.google.zxing.qrcode.encoder.Encoder
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -254,11 +252,6 @@ class ProfileDeepLinkTest {
                 "$protocol compact payload should be shorter than plain URI",
                 qrPayload.length < plain.length,
             )
-            assertTrue(
-                "$protocol compact payload should use a lower QR version",
-                Encoder.encode(qrPayload, ErrorCorrectionLevel.M).version.versionNumber <
-                    Encoder.encode(plain, ErrorCorrectionLevel.M).version.versionNumber,
-            )
 
             val decoded = ProfileUriCodec.decode(qrPayload).getOrThrow()
             assertEquals(protocol, decoded.protocol)
@@ -443,7 +436,7 @@ class ProfileDeepLinkTest {
         val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
         assertTrue(qrPayload.isNotBlank())
         assertTrue(qrPayload.startsWith("T3:"))
-        val bitmap = generateQrCodeBitmap(qrPayload, 512)
+        val bitmap = decodeQrCodeBitmap(requireNotNull(ProfileUriCodec.encodeQrCode(profile)))
         assertTrue(bitmap.width > 0 && bitmap.height > 0)
         val decoded = ProfileUriCodec.decode(qrPayload).getOrThrow()
         assertEquals(profile.serverHost, decoded.serverHost)
@@ -480,7 +473,7 @@ class ProfileDeepLinkTest {
         val legacyStored = fromT3.copy(path = "/")
         val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(legacyStored))
         assertTrue(qrPayload.startsWith("T3:"))
-        generateQrCodeBitmap(qrPayload, 512)
+        decodeQrCodeBitmap(requireNotNull(ProfileUriCodec.encodeQrCode(legacyStored)))
         val roundTrip = ProfileUriCodec.decode(qrPayload).getOrThrow()
         assertEquals("reality", roundTrip.tunnelSecurity)
         assertEquals("/", roundTrip.realitySpiderX)

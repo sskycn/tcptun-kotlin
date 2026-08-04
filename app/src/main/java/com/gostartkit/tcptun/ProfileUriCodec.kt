@@ -77,6 +77,25 @@ object ProfileUriCodec {
         }.getOrNull()
     }
 
+    /** Renders a profile QR code through tcptun-go and returns its PNG bytes. */
+    fun encodeQrCode(config: AppConfig): ByteArray? {
+        if (
+            config.rawConfigJson.isNotBlank() ||
+            config.hasResumableMuxSettings() ||
+            config.hasEchClientHelloSettings()
+        ) {
+            return null
+        }
+        return runRecoverableCatching {
+            TcptunProfileCodec.encodeQrCode(
+                profile = normalizeForCompactQr(config),
+                recoveryLevel = "",
+                moduleSize = 0,
+                compact = false,
+            )
+        }.getOrNull()
+    }
+
     private fun AppConfig.hasResumableMuxSettings(): Boolean =
         muxResume || muxResumeTimeoutMillis != 0 || muxResumeBufferSize != 0
 
