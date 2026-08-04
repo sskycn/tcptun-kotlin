@@ -1,5 +1,18 @@
 <resources>
     <string name="app_name">TcpTun</string>
+    <string name="vpn_notification_title">TcpTun VPN</string>
+    <string name="vpn_notification_channel_description">VPN 服务状态（静默通知）</string>
+    <string name="vpn_notification_stop">停止</string>
+    <string name="vpn_notification_starting">正在启动</string>
+    <string name="vpn_notification_reconnecting">正在重连</string>
+    <string name="vpn_notification_reconnecting_retry">正在重连 · 第 %1$d 次重试</string>
+    <string name="vpn_notification_cleanup_pending">错误 · 等待清理</string>
+    <string name="vpn_notification_error_retrying_cleanup">错误 · 正在重试清理</string>
+    <string name="vpn_notification_stopped">已停止</string>
+    <string name="vpn_notification_running_generic">运行中</string>
+    <plurals name="vpn_notification_running">
+        <item quantity="other">运行中 · %1$d 个连接</item>
+    </plurals>
     <string name="profiles_title">配置项</string>
     <string name="more_options">更多选项</string>
     <string name="import_from_clipboard">从剪切板导入</string>

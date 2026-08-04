@@ -433,7 +433,7 @@ class TcptunVpnService : VpnService() {
             // consulting lifecycle ownership so that rejecting the stale command
             // cannot crash the process with ForegroundServiceDidNotStartInTime.
             try {
-                startVpnForeground("Starting")
+                startVpnForeground(getString(R.string.vpn_notification_starting))
             } catch (error: Throwable) {
                 if (error.isFatalProcessError()) throw error
                 runRecoverableCatching {
@@ -587,7 +587,7 @@ class TcptunVpnService : VpnService() {
                 )
                 if (!destroyed.get()) {
                     cleanupStep("retain VPN cleanup foreground") {
-                        startVpnForeground("Error · cleanup pending")
+                        startVpnForeground(getString(R.string.vpn_notification_cleanup_pending))
                     }
                 }
                 return
@@ -733,7 +733,7 @@ class TcptunVpnService : VpnService() {
                         false
                     } else {
                         TcptunState.setStatus("Starting")
-                        startVpnForeground("Starting")
+                        startVpnForeground(getString(R.string.vpn_notification_starting))
                         TcptunState.updateDiagnostics {
                             it.copy(
                                 bridgeStatus = "Starting",
@@ -1525,14 +1525,17 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun runningNotificationState(plan: ProfileRunPlan): String {
-        val suffix = if (plan.activeProfiles.size == 1) "connection" else "connections"
-        return "Running · ${plan.activeProfiles.size} $suffix"
+        return resources.getQuantityString(
+            R.plurals.vpn_notification_running,
+            plan.activeProfiles.size,
+            plan.activeProfiles.size,
+        )
     }
 
     private fun buildTun(mtu: Int): android.os.ParcelFileDescriptor {
         registerUnderlyingNetworkCallback()
         return Builder()
-            .setSession(VPN_DISPLAY_NAME)
+            .setSession(getString(R.string.vpn_notification_title))
             .setMtu(mtu)
             .addAddress("10.77.0.2", 32)
             .addAddress("fd00:7777::2", 128)
@@ -1832,7 +1835,11 @@ class TcptunVpnService : VpnService() {
                     (tun != null || bridgeResources.hasOwnedResources || bridgeRecoveryCoordinator.recoveryPending)
                 ) {
                     val notificationState = runningPlan?.let(::runningNotificationState)
-                        ?: if (bridgeRecoveryCoordinator.recoveryPending) "Reconnecting" else "Running"
+                        ?: if (bridgeRecoveryCoordinator.recoveryPending) {
+                            getString(R.string.vpn_notification_reconnecting)
+                        } else {
+                            getString(R.string.vpn_notification_running_generic)
+                        }
                     startVpnForeground(notificationState)
                     TcptunState.appendLog("app task removed; VPN foreground service remains active")
                 }
@@ -1993,7 +2000,7 @@ class TcptunVpnService : VpnService() {
                 }
                 if (!destroyed.get()) {
                     cleanupGlobalStep("retain VPN cleanup foreground") {
-                        startVpnForeground("Error · retrying cleanup")
+                        startVpnForeground(getString(R.string.vpn_notification_error_retrying_cleanup))
                     }
                     scheduleBridgeTeardownRetry(
                         setStopped = setStopped,
@@ -2631,7 +2638,7 @@ class TcptunVpnService : VpnService() {
                     )
                 }
                 cleanupStep("update bridge recovery notification") {
-                    updateNotification("Reconnecting · retry $attempt")
+                    updateNotification(getString(R.string.vpn_notification_reconnecting_retry, attempt))
                 }
                 TcptunState.appendLog(
                     "tcptun bridge restart failed; retry $attempt in ${delayMs}ms: $failureText",
@@ -3692,7 +3699,7 @@ class TcptunVpnService : VpnService() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
-            .setContentTitle(VPN_DISPLAY_NAME)
+            .setContentTitle(getString(R.string.vpn_notification_title))
             .setContentText(state)
             .setContentIntent(pendingIntent)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
@@ -3701,8 +3708,12 @@ class TcptunVpnService : VpnService() {
             .setSilent(true)
             .setLocalOnly(true)
             .setVisibility(NotificationCompat.VISIBILITY_SECRET)
-            .setOngoing(state != "Stopped")
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopPendingIntent)
+            .setOngoing(state != getString(R.string.vpn_notification_stopped))
+            .addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                getString(R.string.vpn_notification_stop),
+                stopPendingIntent,
+            )
             .build()
     }
 
@@ -3735,10 +3746,10 @@ class TcptunVpnService : VpnService() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(
             CHANNEL_ID,
-            VPN_DISPLAY_NAME,
+            getString(R.string.vpn_notification_title),
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "Silent VPN service status"
+            description = getString(R.string.vpn_notification_channel_description)
             setSound(null, null)
             enableVibration(false)
             enableLights(false)
@@ -3782,7 +3793,6 @@ class TcptunVpnService : VpnService() {
         const val DEFAULT_SOCKS_PORT = 1080
         const val DEFAULT_VPN_MTU = 1400
         private const val VPN_DNS_ADDRESS = "10.77.0.1"
-        private const val VPN_DISPLAY_NAME = "TcpTun VPN"
         private const val CHANNEL_ID = "tcptun_vpn_silent"
         private const val NOTIFICATION_ID = 1001
         private const val HEALTH_FAILURE_LIMIT = 2

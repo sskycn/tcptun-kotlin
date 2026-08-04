@@ -1,5 +1,19 @@
 <resources>
     <string name="app_name">TcpTun</string>
+    <string name="vpn_notification_title">TcpTun VPN</string>
+    <string name="vpn_notification_channel_description">Silent VPN service status</string>
+    <string name="vpn_notification_stop">Stop</string>
+    <string name="vpn_notification_starting">Starting</string>
+    <string name="vpn_notification_reconnecting">Reconnecting</string>
+    <string name="vpn_notification_reconnecting_retry">Reconnecting · retry %1$d</string>
+    <string name="vpn_notification_cleanup_pending">Error · cleanup pending</string>
+    <string name="vpn_notification_error_retrying_cleanup">Error · retrying cleanup</string>
+    <string name="vpn_notification_stopped">Stopped</string>
+    <string name="vpn_notification_running_generic">Running</string>
+    <plurals name="vpn_notification_running">
+        <item quantity="one">Running · %1$d connection</item>
+        <item quantity="other">Running · %1$d connections</item>
+    </plurals>
     <string name="profiles_title">Profiles</string>
     <string name="more_options">More options</string>
     <string name="import_from_clipboard">Import from clipboard</string>
