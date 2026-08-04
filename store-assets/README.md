@@ -1,0 +1,28 @@
+# TcpTun Google Play 商店素材
+
+本目录用于 Google Play Console 的商店页和审核准备。
+
+## 可直接上传
+
+- `app-icon-512.png`：512×512 应用图标
+- `feature-graphic-1024x500.png`：1024×500 Feature graphic
+- `screenshots/zh/`：中文界面截图
+- `screenshots/en/`：英文界面截图
+
+## 文案和审核资料
+
+- `store-listing-zh-CN.md`：中文商店文案、审核步骤、VPN 声明草稿
+- `store-listing-en-US.md`：英文商店文案、审核步骤、VPN 声明草稿
+- `privacy-policy-draft-zh-CN.md`：中文隐私政策草稿
+- `privacy-policy-draft-en-US.md`：英文隐私政策草稿
+- `play-console-policy-draft-zh-CN.md`：中文 Play Console / VPN / Data safety 填写辅助稿
+- `play-console-policy-draft-en-US.md`：英文 Play Console / VPN / Data safety 填写辅助稿
+
+## 注意事项
+
+1. 隐私政策中的开发者名称和联系邮箱必须替换成真实信息，并通过 HTTPS 公开访问；当前项目没有现成的应用内隐私政策链接入口。
+2. TcpTun 不经营任何服务端。政策和商店文案已区分“开发者不收集”与“用户流量会发送到用户配置的远端节点”，不能笼统写成“网络完全不传输数据”。
+3. 当前代码包含 Google/Cloudflare 连通性探测，以及用户主动触发的 Google/GitHub/Cloudflare TCPing；这些行为已在政策和提交辅助稿中披露。
+4. Data safety 仍需在 Play Console 按最终 Release AAB 逐项填写，特别是第三方远端节点和诊断目标的网络处理，不要只复制“无开发者收集”。
+5. 截图来自当前 Debug build 的真实模拟器界面。正式上传前，建议用同一版本的 Release build 再确认一次视觉和文案没有变化。
+6. `feature-graphic-source.png` 是生成过程的高分辨率源文件，不要上传到 Play Console；上传 `feature-graphic-1024x500.png`。
