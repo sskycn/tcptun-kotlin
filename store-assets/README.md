@@ -17,6 +17,8 @@
 - `privacy-policy-draft-en-US.md`：英文隐私政策草稿
 - `play-console-policy-draft-zh-CN.md`：中文 Play Console / VPN / Data safety 填写辅助稿
 - `play-console-policy-draft-en-US.md`：英文 Play Console / VPN / Data safety 填写辅助稿
+- `release-notes-v0.2.51-zh-CN.md`：v0.2.51 中文更新说明
+- `release-notes-v0.2.51-en-US.md`：v0.2.51 英文更新说明
 
 ## 注意事项
 

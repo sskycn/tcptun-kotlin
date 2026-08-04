@@ -37,9 +37,16 @@ TcpTun 不会自动启动导入的配置。用户需要明确选择配置并确�
 
 应用运行期间可能通过当前出站连接进行 Google 和 Cloudflare 的轻量连通性探测；用户点击 TCPing 诊断时，会测试 Google、GitHub 和 Cloudflare 的 443 端口。这些请求用于连接诊断，不会发送到 TcpTun 运营者，但相应节点和目标站点可能按其自身政策处理连接元数据。
 
-## 首次发布版本说明
+## v0.2.51 首次发布
 
-首次发布 TcpTun Android 客户端，提供配置管理、二维码导入、VPN 转发、路由规则、本地代理和运行诊断功能。
+• 多配置管理，支持手动编辑、剪切板/二维码/系统链接导入，以及配置二维码生成与分享
+• 支持 native tcptun-go、VLESS、VMess 和 Trojan 配置，并提供 TLS、REALITY、ECH、Mux 等参数
+• 基于 Android VPNService 的 TCP/UDP 透明代理，支持 IPv4/IPv6、DNS 接管和 fake-IP
+• 提供 SOCKS5/mixed 本地代理，可按需开放给本机、局域网或热点客户端
+• 支持域名、IP/CIDR、IP 范围和 Android 应用分流，以及默认出口、动态连接池、运行时出口切换和智能合并规则
+• 提供可选流量分析，可查看指定应用的 TCP/UDP 目标并生成路由规则
+• 提供 VPN、网络、Go 核心、出口健康状态、TCPing、运行日志和连接恢复诊断
+• 支持中文和英文界面及 VPN 前台通知
 
 ## 审核员访问说明
 

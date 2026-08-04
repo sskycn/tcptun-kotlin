@@ -37,9 +37,15 @@ When VPN mode is used, device traffic is sent to the remote service selected in 
 
 While running, the app may use the current outbound connection for lightweight connectivity probes to Google and Cloudflare. When the user starts TCPing diagnostics, it tests port 443 on Google, GitHub, and Cloudflare. These requests are for connectivity diagnostics and are not sent to the TcpTun operator, but the selected endpoint and target sites may process connection metadata under their own policies.
 
-## What's new
+## What's new in v0.2.51
 
-Initial release of the TcpTun Android client with profile management, QR import, VPN forwarding, routing rules, local proxy support, and runtime diagnostics.
+Initial release of TcpTun:
+
+• Manage profiles with manual, clipboard, QR, and system-link import, plus QR sharing
+• Support native tcptun-go, VLESS, VMess, and Trojan profiles
+• Android VPN transparent proxy for TCP/UDP, IPv4/IPv6, DNS, and fake-IP
+• Local SOCKS5/mixed proxy and routing by domains, IPs, CIDR, ranges, and apps
+• Dynamic outbounds, runtime switching, traffic analysis, rule generation, TCPing, health diagnostics, logs, recovery, and Chinese/English UI
 
 ## App access / reviewer instructions
 

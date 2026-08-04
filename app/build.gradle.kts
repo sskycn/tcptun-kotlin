@@ -1,4 +1,5 @@
 import java.util.Properties
+import org.gradle.api.tasks.bundling.Zip
 
 plugins {
     alias(libs.plugins.android.application)
@@ -82,6 +83,9 @@ android {
             if (hasReleaseSigningConfig) {
                 signingConfig = signingConfigs.getByName("release")
             }
+            ndk {
+                debugSymbolLevel = "FULL"
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -133,4 +137,26 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
+}
+
+// androidbridge.aar contains prebuilt Go native libraries, so AGP cannot always
+// export their unstripped symbols automatically. Keep a Play Console-compatible
+// symbols ZIP alongside the release AAB.
+val packageReleaseNativeSymbols = tasks.register<Zip>("packageReleaseNativeSymbols") {
+    dependsOn("mergeReleaseNativeLibs")
+    from(layout.buildDirectory.dir("intermediates/merged_native_libs/release/mergeReleaseNativeLibs/out/lib")) {
+        include(
+            "arm64-v8a/**/*.so",
+            "armeabi-v7a/**/*.so",
+            "x86_64/**/*.so",
+        )
+    }
+    archiveFileName.set("native-debug-symbols.zip")
+    destinationDirectory.set(layout.buildDirectory.dir("outputs/native-debug-symbols/release"))
+}
+
+tasks.configureEach {
+    if (name == "bundleRelease") {
+        finalizedBy(packageReleaseNativeSymbols)
+    }
 }
