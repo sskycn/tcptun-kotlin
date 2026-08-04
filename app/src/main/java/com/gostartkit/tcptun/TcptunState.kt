@@ -14,6 +14,7 @@ data class TcptunDiagnostics(
     val bridgeEventState: String = "Unknown",
     val bridgeEventReason: String = "None",
     val bridgeEventPhase: String = "None",
+    val bridgeOutboundTag: String = "",
     val bridgeListen: String = "",
     val bridgeRemote: String = "",
     val bridgeActiveConnections: Int = 0,
@@ -133,6 +134,7 @@ internal data class BridgeStatusEvent(
     val phase: String,
     val listen: String,
     val remote: String,
+    val outboundTag: String,
     val activeConnections: Int,
     val clientIps: List<String>,
     val muxSources: Int,
@@ -159,6 +161,7 @@ internal data class BridgeStatusEvent(
             reason.takeIf { it.isNotBlank() },
             phase.takeIf { it.isNotBlank() },
             remote.takeIf { it.isNotBlank() }?.let { "remote=$it" },
+            outboundTag.takeIf { it.isNotBlank() }?.let { "outbound=$it" },
             lastError.takeIf { it.isNotBlank() }?.let { "error=$it" },
         ).joinToString(" ")
         return "tcptun status: ${state.ifBlank { "unknown" }}${details.takeIf { it.isNotBlank() }?.let { " $it" } ?: ""}"
@@ -208,6 +211,7 @@ object TcptunState {
                 bridgeEventState = "starting",
                 bridgeEventReason = "START_REQUESTED",
                 bridgeEventPhase = "Core runtime is starting",
+                bridgeOutboundTag = "",
                 bridgeRecoverable = false,
                 bridgeLastError = "",
                 bridgeActiveConnections = 0,
@@ -451,6 +455,7 @@ object TcptunState {
                 phase = json.optStatusString("phase"),
                 listen = json.optStatusString("listen"),
                 remote = json.optStatusString("remote"),
+                outboundTag = json.optStatusString("outbound_tag"),
                 activeConnections = json.optInt("active_connections", 0).coerceAtLeast(0),
                 clientIps = normalizeClientIps(
                     buildList {
@@ -498,6 +503,7 @@ object TcptunState {
                     bridgeEventReason = event.reason.ifBlank { "None" },
                     bridgeEventPhase = event.phase.ifBlank { "None" },
                     bridgeListen = event.listen,
+                    bridgeOutboundTag = event.outboundTag,
                     // An empty remote explicitly means that no managed outbound is connected.
                     bridgeRemote = event.remote,
                     bridgeActiveConnections = event.activeConnections,

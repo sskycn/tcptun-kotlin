@@ -67,7 +67,7 @@ internal fun migratedCarrierFields(
     )
 }
 
-internal fun defaultNativeTunDnsConfig(): JSONObject = JSONObject()
+internal fun defaultNativeTunDnsConfig(outboundTag: String = ""): JSONObject = JSONObject()
     .put(
         "servers",
         JSONArray()
@@ -84,6 +84,7 @@ internal fun defaultNativeTunDnsConfig(): JSONObject = JSONObject()
             .put("capacity", 65_536)
             .put("ttl", "10m"),
     )
+    .apply { outboundTag.trim().takeIf(String::isNotBlank)?.let { put("outbound", it) } }
 
 internal fun normalizeLocalProxyProtocol(value: String): String {
     return value.trim().lowercase().takeIf { it in LocalProxyProtocols }
@@ -503,7 +504,7 @@ data class AppConfig(
             .put("inbounds", JSONArray().put(inbound))
             .put("outbounds", outbounds)
             .put("route", JSONObject().put("default_outbound", "proxy").put("rules", rules))
-            .put("dns", defaultNativeTunDnsConfig())
+            .put("dns", defaultNativeTunDnsConfig("proxy"))
             .toString()
     }
 
@@ -524,9 +525,6 @@ data class AppConfig(
         // configs usable while preserving every currently supported section.
         root.remove("discovery")
         val dns = root.optJSONObject("dns")
-        if (dns == null || dns.length() == 0) {
-            root.put("dns", defaultNativeTunDnsConfig())
-        }
         val outbounds = root.optJSONArray("outbounds")
             ?: throw IllegalArgumentException("outbounds is required")
         require(outbounds.length() > 0) { "outbounds must not be empty" }
@@ -583,6 +581,9 @@ data class AppConfig(
             }
         }
         migrateRemovedDirectFirstOutbounds(route, outbounds)
+        if (dns == null || dns.length() == 0) {
+            root.put("dns", defaultNativeTunDnsConfig(route.optString("default_outbound").trim()))
+        }
         root.put("inbounds", inbounds)
         val existingRules = when {
             !route.has("rules") -> JSONArray()

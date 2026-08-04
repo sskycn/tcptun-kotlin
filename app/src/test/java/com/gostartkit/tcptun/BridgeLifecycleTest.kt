@@ -271,6 +271,7 @@ private class FakeLifecycleBridge(
     override fun start(disabledOutboundTags: List<String>): Long = 1L
     override fun startOutbound(tag: String) = Unit
     override fun stopOutbound(tag: String, force: Boolean, timeoutMillis: Long) = Unit
+    override fun switchOutbound(tag: String, stopPrevious: Boolean, timeoutMillis: Long) = Unit
     override fun probeOutbound(tag: String, host: String, port: Int, timeoutMillis: Long): Long = 0L
     override fun probeOutboundHealth(tag: String, host: String, port: Int, timeoutMillis: Long): Long = 0L
     override fun outboundsStatusJson(): String = "[]"

@@ -212,6 +212,7 @@ private class RecordingStopBridge(
     override fun start(disabledOutboundTags: List<String>): Long = unexpected("start")
     override fun startOutbound(tag: String) = unexpected("startOutbound")
     override fun stopOutbound(tag: String, force: Boolean, timeoutMillis: Long) = unexpected("stopOutbound")
+    override fun switchOutbound(tag: String, stopPrevious: Boolean, timeoutMillis: Long) = unexpected("switchOutbound")
     override fun probeOutbound(tag: String, host: String, port: Int, timeoutMillis: Long): Long =
         unexpected("probeOutbound")
     override fun probeOutboundHealth(tag: String, host: String, port: Int, timeoutMillis: Long): Long =

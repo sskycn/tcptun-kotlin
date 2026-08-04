@@ -16,9 +16,9 @@ The listener binds to `127.0.0.1` by default. Enable listening on all interfaces
 `0.0.0.0`, allowing other devices on the same reachable network to use the phone IP and port `1080`.
 
 The Go protocol implementation and gomobile wrapper live in the neighboring `tcptun-go` checkout. This Android project only consumes the generated `app/libs/androidbridge.aar`; `./scripts/build-androidbridge.sh` delegates to `../tcptun-go/scripts/build-androidbridge.sh`.
-The release workflow checks out the Go core at the revision recorded in
-`.github/workflows/release.yml` and rebuilds the AAR before Gradle runs, so a
-clean release runner does not depend on an untracked local binary.
+Local release preparation checks out the Go core from the neighboring
+`tcptun-go` directory and rebuilds the AAR before Gradle runs, so the bridge
+must be available locally when preparing a release.
 
 ## Expected Go mobile bridge
 
@@ -63,6 +63,7 @@ func (e *Engine) SetTun(fd int64, mtu int64) error
 func (e *Engine) StartConfiguredSessionWithDisabledOutbounds(disabledTagsJson string) (int64, error)
 func (e *Engine) StartOutbound(tag string) error
 func (e *Engine) StopOutbound(tag string, force bool, timeoutMillis int64) error
+func (e *Engine) SwitchOutbound(tag string, stopPrevious bool, timeoutMillis int64) error
 func (e *Engine) ProbeOutbound(tag string, host string, port int, timeoutMillis int64) (int64, error)
 func (e *Engine) ProbeOutboundHealth(tag string, host string, port int, timeoutMillis int64) (int64, error)
 func (e *Engine) OutboundsStatusJSON() string
@@ -76,8 +77,8 @@ func (e *Engine) StatusJSON() string
 
 The diagnostics page shows `CoreVersion` and `CoreBuildID`, so installed builds
 can be matched to the exact tcptun-go revision. CI and release builds currently
-pin `7d0ef7f95af9e268d98c268a4bfe8c5f0895c3b4`
-(`tcptun-go` v0.2.4-6-g7d0ef7f).
+pin `cacb2851b12b0f85c98b4c82c2ab141bf7c6a8c6`
+(`tcptun-go` v0.2.5-9-gcacb285).
 
 Optional telemetry must be opted into with `RegisterEvent`. The app registers:
 
@@ -277,8 +278,7 @@ gomobile init
 ```
 
 The generated AAR is copied to `app/libs/androidbridge.aar`. The file is ignored
-by Git and is rebuilt by the release workflow from the pinned tcptun-go revision
-listed above.
+by Git and is rebuilt locally from the selected tcptun-go checkout.
 
 ## Build the Android app
 
@@ -301,27 +301,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 Debug builds use `com.tcptun.client.debug`, so they can coexist with a signed
 release installation.
 
-## Publish a GitHub release
+## Prepare a local release
 
-The `Release Android APK` GitHub Actions workflow builds and publishes a signed
-APK whenever a semantic-version tag beginning with `v` is pushed, for example
-`v1.2.3` or `v1.2.3-rc.1`. The tag is used as the app version name, and release
-notes are generated automatically by GitHub.
-
-Configure these repository Actions secrets before pushing the first release tag:
-
-- `TCPTUN_RELEASE_KEYSTORE_BASE64`: the release keystore encoded as Base64
-- `TCPTUN_RELEASE_STORE_PASSWORD`: keystore password
-- `TCPTUN_RELEASE_KEY_ALIAS`: signing key alias
-- `TCPTUN_RELEASE_KEY_PASSWORD`: signing key password
-
-Create the Base64 value without line breaks:
-
-```bash
-base64 < /path/to/tcptun-release.jks | tr -d '\n'
-```
-
-Then publish from a clean, up-to-date `main` branch:
+Prepare a release from a clean, up-to-date `main` branch:
 
 ```bash
 make publish VERSION=v0.2.4
@@ -334,10 +316,6 @@ pushes both to `origin`. Use `RELEASE_BRANCH` or `RELEASE_REMOTE` to override th
 required branch or remote. For local release-script testing without a push, run
 `./scripts/release.sh v0.2.4 --no-push` (this still creates a local commit and
 tag).
-
-The resulting GitHub Release contains a universal APK plus smaller
-`arm64-v8a`, `armeabi-v7a`, and `x86_64` APKs, each with a SHA-256 checksum.
-Pre-release tags such as `v1.2.3-rc.1` are marked as pre-releases.
 
 ## Server example
 

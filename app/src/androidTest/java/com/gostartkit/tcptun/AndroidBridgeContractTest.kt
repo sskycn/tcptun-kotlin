@@ -35,8 +35,8 @@ class AndroidBridgeContractTest {
 
     @Test
     fun currentBridgeReportsVersionedCoreIdentity() {
-        assertEquals("v0.2.4", Androidbridge.coreVersion())
-        assertTrue(Androidbridge.coreBuildID().startsWith("7d0ef7f95af9"))
+        assertEquals("v0.2.5", Androidbridge.coreVersion())
+        assertTrue(Androidbridge.coreBuildID().startsWith("cacb2851b12b"))
     }
 
     @Test
@@ -77,6 +77,12 @@ class AndroidBridgeContractTest {
             )
             engine.javaClass.getMethod(
                 "stopOutbound",
+                String::class.java,
+                Boolean::class.javaPrimitiveType,
+                Long::class.javaPrimitiveType,
+            )
+            engine.javaClass.getMethod(
+                "switchOutbound",
                 String::class.java,
                 Boolean::class.javaPrimitiveType,
                 Long::class.javaPrimitiveType,
@@ -1224,6 +1230,7 @@ class AndroidBridgeContractTest {
         val dns = root.getJSONObject("dns")
         assertEquals("1.1.1.1", dns.getJSONArray("servers").getString(0))
         assertEquals("prefer_ipv4", dns.getString("strategy"))
+        assertEquals("proxy", dns.getString("outbound"))
         assertTrue(dns.getJSONObject("fake_ip").getBoolean("enabled"))
         assertEquals("198.18.0.0/15", dns.getJSONObject("fake_ip").getString("ipv4_range"))
 
@@ -1616,6 +1623,9 @@ class AndroidBridgeContractTest {
                 .map(started::getJSONObject)
                 .first { it.getString("tag") == tag }
             assertTrue(startedStatus.getBoolean("running"))
+
+            engine.switchOutbound(tag, false, 1_000)
+            assertTrue(engine.status() in setOf("Starting", "Running"))
         } finally {
             engine.close()
         }

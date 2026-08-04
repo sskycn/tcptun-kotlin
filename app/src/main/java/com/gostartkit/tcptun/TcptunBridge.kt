@@ -118,6 +118,7 @@ interface TcptunBridge {
     fun start(disabledOutboundTags: List<String>): Long
     fun startOutbound(tag: String)
     fun stopOutbound(tag: String, force: Boolean, timeoutMillis: Long)
+    fun switchOutbound(tag: String, stopPrevious: Boolean, timeoutMillis: Long)
     fun probeOutbound(tag: String, host: String, port: Int, timeoutMillis: Long): Long
     fun probeOutboundHealth(tag: String, host: String, port: Int, timeoutMillis: Long): Long
     fun outboundsStatusJson(): String
@@ -224,6 +225,16 @@ class ReflectionTcptunBridge : TcptunBridge {
             arrayOf(String::class.java, java.lang.Boolean.TYPE, java.lang.Long.TYPE),
             tag,
             force,
+            timeoutMillis,
+        )
+    }
+
+    override fun switchOutbound(tag: String, stopPrevious: Boolean, timeoutMillis: Long) {
+        invokeEngine(
+            "switchOutbound",
+            arrayOf(String::class.java, java.lang.Boolean.TYPE, java.lang.Long.TYPE),
+            tag,
+            stopPrevious,
             timeoutMillis,
         )
     }

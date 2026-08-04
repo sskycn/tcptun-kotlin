@@ -231,6 +231,6 @@ internal fun ProfileRunPlan.toBridgeJson(
         .put("inbounds", JSONArray().put(inbound))
         .put("outbounds", outbounds)
         .put("route", JSONObject().put("default_outbound", defaultOutboundTag).put("rules", rules))
-        .put("dns", defaultNativeTunDnsConfig())
+        .put("dns", defaultNativeTunDnsConfig(defaultOutboundTag))
         .toString()
 }

@@ -145,7 +145,7 @@ run git tag -a "$version" -m "$version"
 if [ "$push_release" -eq 1 ]; then
 	run git push "$remote" "$branch"
 	run git push "$remote" "$version"
-	printf 'release: pushed %s and triggered the Android tag release workflow\n' "$version"
+	printf 'release: pushed %s\n' "$version"
 else
 	printf 'release: created local commit and tag %s; push skipped\n' "$version"
 fi
