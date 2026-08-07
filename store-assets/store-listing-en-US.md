@@ -10,7 +10,7 @@
 
 ## Short description
 
-VPN client with profile import, routing rules, and connection diagnostics.
+VPN client with routing, local proxy, profile import, and diagnostics.
 
 ## Full description
 
@@ -22,14 +22,18 @@ TcpTun does not operate VPN nodes, proxy servers, subscriptions, or cloud servic
 
 Features:
 
-• Manage multiple connection profiles and start or stop them individually
-• Import profiles from the clipboard, QR codes, system links, or the manual form
-• Support for VLESS, VMess, Trojan, and native tcptun-go profiles
-• IPv4/IPv6 VPN traffic and transparent proxy support
-• Ordered routing rules, a default outbound, and a dynamic connection pool
-• Local SOCKS5 or mixed proxy listener
-• VPN, underlying-network, connection, and Go-core diagnostics
-• In-app runtime logs and optional traffic-destination analysis
+• Manage multiple profiles with manual editing and individual start/stop control
+• Import profiles from the clipboard, QR codes, system links, or manual forms
+• Generate and share profile QR codes for easy transfer to another device
+• Support native tcptun-go, VLESS, VMess, and Trojan profiles
+• Advanced transport options including TLS, REALITY, ECH, Mux, and full JSON configuration
+• TCP/UDP VPN traffic with IPv4/IPv6, DNS interception, and fake-IP support
+• Ordered routing by domain, IP, CIDR, IP range, or Android app
+• Default outbound, dynamic connection pool, runtime outbound switching, and smart rule merging
+• Local SOCKS5 or mixed proxy listener for the device, LAN, or hotspot clients
+• Optional traffic analysis for one selected app, with one-tap route-rule generation
+• VPN, underlying-network, outbound-health, connection, and Go-core diagnostics
+• TCPing tests, in-app runtime logs, reconnect recovery, and Chinese/English UI
 
 TcpTun does not start an imported profile automatically. The user must select a profile and confirm Android's VPN permission prompt before a connection starts.
 

@@ -368,6 +368,7 @@ private fun QrCameraPreview(
     onCodeDetected: (String, onComplete: (Boolean) -> Unit) -> Unit,
 ) {
     val context = LocalContext.current
+    val appContext = context.applicationContext ?: context
     val lifecycleOwner = LocalLifecycleOwner.current
     val previewViewResult = remember(context) {
         runRecoverableCatching {
@@ -412,7 +413,11 @@ private fun QrCameraPreview(
         var analysisUseCase: ImageAnalysis? = null
         var barcodeScanner: BarcodeScanner? = null
         var analyzer: MlKitQrAnalyzer? = null
-        val providerFuture = runRecoverableCatching { ProcessCameraProvider.getInstance(context) }.getOrElse { error ->
+        // ProcessCameraProvider is a process singleton; never give that ownership
+        // boundary an Activity context.
+        val providerFuture = runRecoverableCatching {
+            ProcessCameraProvider.getInstance(appContext)
+        }.getOrElse { error ->
             runRecoverableCatching { currentOnCameraError(error) }
             return@DisposableEffect onDispose {
                 runRecoverableCatching { analysisExecutor.shutdownNow() }
@@ -576,11 +581,21 @@ private fun QrCameraPreview(
             disposed = true
             runRecoverableCatching { analyzer?.close() }
             runRecoverableCatching { analysisUseCase?.clearAnalyzer() }
+            runRecoverableCatching { previewUseCase?.setSurfaceProvider(null) }
             runRecoverableCatching { barcodeScanner?.close() }
             runRecoverableCatching { previewView.setOnTouchListener(null) }
             cameraProvider?.let { provider ->
-                previewUseCase?.let { runRecoverableCatching { provider.unbind(it) } }
-                analysisUseCase?.let { runRecoverableCatching { provider.unbind(it) } }
+                val ownedUseCases = listOfNotNull(previewUseCase, analysisUseCase).toTypedArray()
+                if (ownedUseCases.isNotEmpty()) {
+                    // Release this composition's use cases in one transaction without
+                    // disturbing a replacement Activity that may already own CameraX.
+                    runRecoverableCatching { provider.unbind(*ownedUseCases) }
+                        .onFailure {
+                            ownedUseCases.forEach { useCase ->
+                                runRecoverableCatching { provider.unbind(useCase) }
+                            }
+                        }
+                }
             }
             runRecoverableCatching { analysisExecutor.shutdownNow() }
             runRecoverableCatching { currentOnCameraReady(null) }

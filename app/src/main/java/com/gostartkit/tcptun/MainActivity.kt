@@ -5098,18 +5098,21 @@ private fun needsNotificationPermission(context: Context): Boolean {
 }
 
 private fun startVpn(context: Context, plan: ProfileRunPlan) {
+    val appContext = context.applicationContext ?: context
+    val dispatchFailureMessage = appContext.getString(R.string.start_failed)
     TcptunState.setStatus("Starting")
     TcptunState.setConnectionsReady(false)
     TcptunState.appendLog("start requested")
     enqueueVpnPlanCommand(
-        context = context,
+        context = appContext,
         plan = plan,
         updateOnly = false,
         onDispatchFailure = { message ->
-            TcptunState.errorIfStatus("Starting", message)
-            reportUiError(message)
+            val safeMessage = message.ifBlank { dispatchFailureMessage }
+            TcptunState.errorIfStatus("Starting", safeMessage)
+            reportUiError(safeMessage)
             try {
-                rollbackInitialStartAfterDispatchFailure(context.applicationContext, plan)
+                rollbackInitialStartAfterDispatchFailure(appContext, plan)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
@@ -5247,6 +5250,9 @@ private fun enqueueVpnPlanCommand(
         }
     }
     VpnPlanCommandJob.getAndSet(job)?.cancel()
+    job.invokeOnCompletion {
+        VpnPlanCommandJob.compareAndSet(job, null)
+    }
 }
 
 private fun applyRuntimeSettings(context: Context, forceRestart: Boolean = false) {

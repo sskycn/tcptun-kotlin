@@ -106,6 +106,21 @@ class CrashGuardTest {
     }
 
     @Test
+    fun lifecycleSchedulerImmediatelyUnlinksCancelledLongDelayTasks() {
+        val executor = newLifecycleScheduledExecutor("memory-ownership-test")
+        try {
+            val future = executor.schedule({}, 1, TimeUnit.DAYS)
+            assertEquals(1, executor.queue.size)
+
+            future.cancel(false)
+
+            assertEquals(0, executor.queue.size)
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
     fun bridgeProxyContainsCallbackFailuresAndImplementsObjectMethods() {
         val proxy = createSafeBridgeCallbackProxy(
             callbackClass = GuardedTestCallback::class.java,

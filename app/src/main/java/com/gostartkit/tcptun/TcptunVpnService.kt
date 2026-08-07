@@ -32,6 +32,7 @@ import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -112,6 +113,20 @@ internal fun scheduleCrashGuardedFuture(
         null
     }
 }
+
+/**
+ * A lifecycle scheduler must unlink cancelled debounce tasks immediately.
+ * The default policy retains each task (and its captured object graph) until
+ * the original delay expires, which can be up to 24 hours in this service.
+ */
+internal fun newLifecycleScheduledExecutor(threadName: String): ScheduledThreadPoolExecutor =
+    ScheduledThreadPoolExecutor(1) { runnable ->
+        Thread(runnable, threadName).apply { isDaemon = true }
+    }.apply {
+        removeOnCancelPolicy = true
+        setExecuteExistingDelayedTasksAfterShutdownPolicy(false)
+        setContinueExistingPeriodicTasksAfterShutdownPolicy(false)
+    }
 
 internal fun startCrashGuardedThread(
     threadName: String,
@@ -277,9 +292,7 @@ class TcptunVpnService : VpnService() {
     private val teardownLock = Any()
     /** Shared with service ownership so old/new instances cannot publish across each other. */
     private val lifecycleCommandLock = serviceOwnerLock
-    private val lifecycleExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
-        Thread(runnable, "TcptunLifecycle").apply { isDaemon = true }
-    }
+    private val lifecycleExecutor = newLifecycleScheduledExecutor("TcptunLifecycle")
     private val tcpingExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "TcptunTcping").apply { isDaemon = true }
     }
@@ -289,6 +302,10 @@ class TcptunVpnService : VpnService() {
         Thread(runnable, "TcptunMemberHealth").apply { isDaemon = true }
     }
     private val memberHealthBatchSelector = RoundRobinBatchSelector()
+    private val memberHealthProbeNotBeforeElapsedMs = AtomicLong(0L)
+    private val memberHealthProbeScheduleGeneration = AtomicInteger()
+    private val memberHealthDelayLock = Any()
+    private val memberHealthDelayTask = LatestTaskSlot()
     private val lifecycleGeneration = AtomicInteger()
     private val persistentCommandGeneration = AtomicInteger()
     private val lifecycleWorkInFlight = AtomicInteger()
@@ -319,6 +336,7 @@ class TcptunVpnService : VpnService() {
     @Volatile private var monitorThread: Thread? = null
     private val monitorWaitLock = Object()
     private val monitorWakeCallback: () -> Unit = ::wakeBridgeMonitor
+    private val memberHealthProbeCallback: (String, Long) -> Unit = ::scheduleMemberHealthProbe
     private val connectivityDelegate = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         getSystemService(ConnectivityManager::class.java)
             ?: throw IllegalStateException("ConnectivityManager is unavailable")
@@ -365,11 +383,13 @@ class TcptunVpnService : VpnService() {
         }
         try {
             activeMonitorWakeCallback.set(monitorWakeCallback)
+            activeMemberHealthProbeCallback.set(memberHealthProbeCallback)
             createNotificationChannel()
             initialized.set(true)
         } catch (error: Throwable) {
             if (error.isFatalProcessError()) throw error
             activeMonitorWakeCallback.compareAndSet(monitorWakeCallback, null)
+            activeMemberHealthProbeCallback.compareAndSet(memberHealthProbeCallback, null)
             synchronized(lifecycleCommandLock) {
                 if (isActiveServiceOwner()) {
                     TcptunState.error("VPN service initialization failed: ${failureDescription(error)}")
@@ -1936,12 +1956,10 @@ class TcptunVpnService : VpnService() {
             powerSavingMode = true
             lastMemberHealthProbeAtElapsedMs = 0L
             memberHealthBatchSelector.clear()
-            runGlobalStep {
-                synchronized(memberHealthDelayLock) {
-                    memberHealthProbeNotBeforeElapsedMs.set(0L)
-                    memberHealthProbeScheduleGeneration.incrementAndGet()
-                    memberHealthDelayFuture.getAndSet(null)?.cancel(false)
-                }
+            synchronized(memberHealthDelayLock) {
+                memberHealthProbeNotBeforeElapsedMs.set(0L)
+                memberHealthProbeScheduleGeneration.incrementAndGet()
+                memberHealthDelayTask.cancel()
             }
             runningPlan = null
             val disposition = bridgeTeardownDisposition(bridgeResources.hasOwnedResources)
@@ -2087,6 +2105,7 @@ class TcptunVpnService : VpnService() {
         try {
             initialized.set(false)
             activeMonitorWakeCallback.compareAndSet(monitorWakeCallback, null)
+            activeMemberHealthProbeCallback.compareAndSet(memberHealthProbeCallback, null)
             synchronized(lifecycleCommandLock) {
                 stopping = true
                 lifecycleGeneration.incrementAndGet()
@@ -2100,6 +2119,7 @@ class TcptunVpnService : VpnService() {
             )
             bridgeRecoveryTask.cancel()
             runtimeSettingsApplyTask.cancel()
+            memberHealthDelayTask.cancel()
             lifecycleExecutor.shutdownNow()
             tcpingExecutor.shutdownNow()
             memberHealthExecutor.shutdownNow()
@@ -3023,6 +3043,58 @@ class TcptunVpnService : VpnService() {
         }
     }
 
+    /** Debounces member probes on the service-owned lifecycle executor. */
+    private fun scheduleMemberHealthProbe(reason: String, requestedDelayMs: Long) {
+        val delayMs = requestedDelayMs.coerceIn(0L, MAX_MEMBER_HEALTH_PROBE_DELAY_MS)
+        if (destroyed.get() || stopping || !isActiveServiceOwner()) return
+        forceNextMemberHealthProbe.set(true)
+        synchronized(memberHealthDelayLock) {
+            if (delayMs == 0L) {
+                memberHealthProbeNotBeforeElapsedMs.set(0L)
+                memberHealthProbeScheduleGeneration.incrementAndGet()
+                memberHealthDelayTask.cancel()
+                TcptunState.appendLog("bridge health check requested: $reason")
+                wakeBridgeMonitor()
+                return
+            }
+            val notBefore = SystemClock.elapsedRealtime() + delayMs
+            memberHealthProbeNotBeforeElapsedMs.updateAndGet { current -> maxOf(current, notBefore) }
+            val generation = memberHealthProbeScheduleGeneration.incrementAndGet()
+            val scheduledDelay = (
+                memberHealthProbeNotBeforeElapsedMs.get() - SystemClock.elapsedRealtime()
+            ).coerceAtLeast(0L)
+            TcptunState.appendLog("member health probe scheduled in ${delayMs}ms: $reason")
+            val future = scheduleCrashGuardedFuture(
+                executor = lifecycleExecutor,
+                delay = scheduledDelay,
+                unit = TimeUnit.MILLISECONDS,
+                taskName = "delayed member health probe",
+                onFailure = { error -> TcptunState.appendLog(failureDescription(error)) },
+            ) delayedProbe@{
+                if (
+                    generation != memberHealthProbeScheduleGeneration.get() ||
+                    destroyed.get() ||
+                    stopping ||
+                    !isActiveServiceOwner()
+                ) {
+                    return@delayedProbe
+                }
+                forceNextMemberHealthProbe.set(true)
+                TcptunState.appendLog("bridge health check requested: $reason")
+                wakeBridgeMonitor()
+            }
+            if (future == null) {
+                TcptunState.appendLog(
+                    "member health probe scheduling failed; requesting an immediate check",
+                )
+                forceNextMemberHealthProbe.set(true)
+                wakeBridgeMonitor()
+            } else {
+                memberHealthDelayTask.replace(future)
+            }
+        }
+    }
+
     private fun stopBridgeMonitor() {
         monitorGeneration.incrementAndGet()
         wakeBridgeMonitor()
@@ -3840,15 +3912,8 @@ class TcptunVpnService : VpnService() {
         private val forceNextUpstreamProbe = AtomicBoolean(false)
         private val forceNextMemberHealthProbe = AtomicBoolean(false)
         private val forceStatusReconcile = AtomicBoolean(false)
-        /** ElapsedRealtime deadline; member probes are blocked until this time. */
-        private val memberHealthProbeNotBeforeElapsedMs = AtomicLong(0L)
-        private val memberHealthProbeScheduleGeneration = AtomicInteger()
-        private val memberHealthDelayLock = Any()
-        private val memberHealthDelayExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
-            Thread(runnable, "TcptunMemberHealthDelay").apply { isDaemon = true }
-        }
-        private val memberHealthDelayFuture = AtomicReference<ScheduledFuture<*>?>(null)
         private val activeMonitorWakeCallback = AtomicReference<(() -> Unit)?>(null)
+        private val activeMemberHealthProbeCallback = AtomicReference<((String, Long) -> Unit)?>(null)
         private val serviceOwnerLock = Any()
         private val nextServiceInstanceId = AtomicLong()
         private val activeServiceInstanceId = AtomicLong()
@@ -4031,42 +4096,8 @@ class TcptunVpnService : VpnService() {
         ) {
             val delay = delayMs.coerceIn(0L, MAX_MEMBER_HEALTH_PROBE_DELAY_MS)
             forceNextMemberHealthProbe.set(true)
-            if (delay > 0L) {
-                synchronized(memberHealthDelayLock) {
-                    val notBefore = SystemClock.elapsedRealtime() + delay
-                    memberHealthProbeNotBeforeElapsedMs.updateAndGet { current ->
-                        maxOf(current, notBefore)
-                    }
-                    val generation = memberHealthProbeScheduleGeneration.incrementAndGet()
-                    TcptunState.appendLog("member health probe scheduled in ${delay}ms: $reason")
-                    val scheduledDelay = (
-                        memberHealthProbeNotBeforeElapsedMs.get() - SystemClock.elapsedRealtime()
-                    ).coerceAtLeast(0L)
-                    val future = scheduleCrashGuardedFuture(
-                        executor = memberHealthDelayExecutor,
-                        delay = scheduledDelay,
-                        unit = TimeUnit.MILLISECONDS,
-                        taskName = "delayed member health probe",
-                        onFailure = { error ->
-                            TcptunState.appendLog(failureDescription(error))
-                        },
-                    ) delayedProbe@{
-                        if (generation != memberHealthProbeScheduleGeneration.get()) return@delayedProbe
-                        forceNextMemberHealthProbe.set(true)
-                        requestHealthCheck(reason)
-                    }
-                    if (future == null) {
-                        TcptunState.appendLog(
-                            "member health probe scheduling failed; requesting an immediate check",
-                        )
-                        requestHealthCheck(reason)
-                        return
-                    }
-                    memberHealthDelayFuture.getAndSet(future)?.cancel(false)
-                }
-                return
-            }
-            requestHealthCheck(reason)
+            val requester = activeMemberHealthProbeCallback.get()
+            if (requester != null) requester(reason, delay) else requestHealthCheck(reason)
         }
 
         @Deprecated("Use requestHealthCheck", ReplaceWith("requestHealthCheck(reason)"))
@@ -4079,13 +4110,7 @@ class TcptunVpnService : VpnService() {
             forceNextUpstreamProbe.set(true)
             forceNextMemberHealthProbe.set(true)
             forceStatusReconcile.set(true)
-            synchronized(memberHealthDelayLock) {
-                memberHealthProbeNotBeforeElapsedMs.set(0L)
-                memberHealthProbeScheduleGeneration.incrementAndGet()
-                memberHealthDelayFuture.getAndSet(null)?.cancel(false)
-            }
-            TcptunState.appendLog("bridge health check requested: app visible")
-            activeMonitorWakeCallback.get()?.invoke()
+            requestMemberHealthProbe("app visible")
         }
 
         fun readRuntimeSettings(context: Context): RuntimeSettings {
