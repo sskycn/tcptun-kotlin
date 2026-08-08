@@ -257,6 +257,8 @@ private class FakeLifecycleBridge(
         stopError?.let { throw it }
     }
 
+    override fun abort() = Unit
+
     override fun waitStopped(sessionId: Long, timeoutMillis: Long) {
         waitCalled = true
         waitSessionId = sessionId

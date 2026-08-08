@@ -154,10 +154,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -201,7 +203,9 @@ private val UiErrorMessages = Channel<String>(
 )
 private val ProcessProfileMutationMutex = Mutex()
 private val ProcessRouteRuleMutationMutex = Mutex()
+private val ProcessRuntimeSettingsMutationMutex = Mutex()
 private val QrCodeGenerationMutex = Mutex()
+private val DurableMutationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 private const val MaxProfileMutationAttempts = 4
 private const val MaxProfileNameInputLength = 512
 private const val MaxProfileHostInputLength = 2_048
@@ -217,6 +221,87 @@ private val PendingProfileSaver = Saver<AppConfig?, String>(
     save = { profile -> encodePendingProfile(profile) },
     restore = { encoded -> decodePendingProfile(encoded) },
 )
+private val AppConfigSaver = Saver<AppConfig, String>(
+    save = { profile -> encodePendingProfile(profile) },
+    restore = { encoded -> decodePendingProfile(encoded) },
+)
+private val RuntimeSettingsSaver = Saver<RuntimeSettings, String>(
+    save = { settings ->
+        JSONObject()
+            .put("mtu", settings.mtu)
+            .put("powerSavingMode", settings.powerSavingMode)
+            .put("logLevel", settings.logLevel)
+            .put("socksPort", settings.socksPort)
+            .put("localProxyProtocol", settings.localProxyProtocol)
+            .put("socksListenAll", settings.socksListenAll)
+            .put("socksUsername", settings.socksUsername)
+            .put("socksPassword", settings.socksPassword)
+            .put("routeLocalProxyTraffic", settings.routeLocalProxyTraffic)
+            .put("defaultOutbound", settings.defaultOutbound)
+            .put("flowAnalysisApp", settings.flowAnalysisApp)
+            .toString()
+    },
+    restore = { encoded ->
+        runRecoverableCatching {
+            requireSafeJsonNesting(encoded)
+            val json = JSONObject(encoded)
+            RuntimeSettings(
+                mtu = json.optInt("mtu", TcptunVpnService.DEFAULT_VPN_MTU),
+                powerSavingMode = json.optBoolean("powerSavingMode", true),
+                logLevel = json.optString("logLevel", DefaultLogLevel),
+                socksPort = json.optInt("socksPort", TcptunVpnService.DEFAULT_SOCKS_PORT),
+                localProxyProtocol = json.optString("localProxyProtocol", DefaultLocalProxyProtocol),
+                socksListenAll = json.optBoolean("socksListenAll", false),
+                socksUsername = json.optString("socksUsername"),
+                socksPassword = json.optString("socksPassword"),
+                routeLocalProxyTraffic = json.optBoolean("routeLocalProxyTraffic", false),
+                defaultOutbound = json.optString("defaultOutbound", DefaultOutboundDynamicPool),
+                flowAnalysisApp = json.optString("flowAnalysisApp"),
+            )
+        }.getOrNull()
+    },
+)
+private val ManagedRouteRuleSaver = Saver<ManagedRouteRule?, String>(
+    save = { rule ->
+        rule?.let {
+            JSONObject()
+                .put("id", it.id)
+                .put("type", it.type.name)
+                .put("value", it.value)
+                .put("outbound", it.outbound.name)
+                .put("outboundProfileId", it.outboundProfileId)
+                .put("enabled", it.enabled)
+                .toString()
+        }
+    },
+    restore = { encoded ->
+        runRecoverableCatching {
+            requireSafeJsonNesting(encoded)
+            val json = JSONObject(encoded)
+            ManagedRouteRule(
+                id = json.getString("id"),
+                type = ManagedRouteRuleType.valueOf(json.getString("type")),
+                value = json.getString("value"),
+                outbound = ManagedRouteOutbound.valueOf(json.getString("outbound")),
+                outboundProfileId = json.optString("outboundProfileId"),
+                enabled = json.optBoolean("enabled", true),
+            )
+        }.getOrNull()
+    },
+)
+
+private fun <T> durableMutation(
+    name: String,
+    action: suspend CoroutineScope.() -> T,
+): Deferred<T> = DurableMutationScope.async(block = action).also { deferred ->
+    deferred.invokeOnCompletion { error ->
+        if (error != null && error !is CancellationException && !error.isFatalProcessError()) {
+            runRecoverableCatching {
+                TcptunState.appendLog("$name failed: ${failureDescription(error)}")
+            }
+        }
+    }
+}
 
 private val CardShapeCompact = RoundedCornerShape(12.dp)
 private val MenuShape = RoundedCornerShape(12.dp)
@@ -738,6 +823,7 @@ internal fun TcptunScreen(
     onProfileUriConsumed: (Long) -> Unit = {},
 ) {
     val context = LocalContext.current
+    val appContext = context.applicationContext
     val resources = LocalResources.current
     val emptyClipboard = stringResource(R.string.empty_clipboard)
     val invalidClipboard = stringResource(R.string.invalid_clipboard_data)
@@ -752,18 +838,22 @@ internal fun TcptunScreen(
     var pendingNotificationConfig by rememberSaveable(stateSaver = PendingRunPlanSaver) {
         mutableStateOf<ProfileRunPlan?>(null)
     }
-    var editingProfile by remember { mutableStateOf<AppConfig?>(null) }
-    var showIpInformation by remember { mutableStateOf(false) }
-    var showDiagnostics by remember { mutableStateOf(false) }
-    var showSettings by remember { mutableStateOf(false) }
-    var showFlowAnalysis by remember { mutableStateOf(false) }
-    var showRouteManagement by remember { mutableStateOf(false) }
-    var showQrScanner by remember { mutableStateOf(false) }
-    var scannerSessionGeneration by remember { mutableIntStateOf(0) }
+    var editingProfile by rememberSaveable(stateSaver = PendingProfileSaver) {
+        mutableStateOf<AppConfig?>(null)
+    }
+    var showIpInformation by rememberSaveable { mutableStateOf(false) }
+    var showDiagnostics by rememberSaveable { mutableStateOf(false) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
+    var showFlowAnalysis by rememberSaveable { mutableStateOf(false) }
+    var showRouteManagement by rememberSaveable { mutableStateOf(false) }
+    var showQrScanner by rememberSaveable { mutableStateOf(false) }
+    var scannerSessionGeneration by rememberSaveable { mutableIntStateOf(0) }
     var scannerImportJob by remember { mutableStateOf<Job?>(null) }
-    var showLogs by remember { mutableStateOf(false) }
-    var profileQrCode by remember { mutableStateOf<AppConfig?>(null) }
-    var tcpingTargetIndex by remember { mutableIntStateOf(0) }
+    var showLogs by rememberSaveable { mutableStateOf(false) }
+    var profileQrCode by rememberSaveable(stateSaver = PendingProfileSaver) {
+        mutableStateOf<AppConfig?>(null)
+    }
+    var tcpingTargetIndex by rememberSaveable { mutableIntStateOf(0) }
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(snackbarHostState) {
         for (message in UiErrorMessages) {
@@ -780,10 +870,10 @@ internal fun TcptunScreen(
     var profileReorderScrollJob by remember { mutableStateOf<Job?>(null) }
     val profileReorderScrollStep = with(LocalDensity.current) { 24.dp.toPx() }
     val vpnState by TcptunState.state.collectAsStateWithLifecycle()
-    LaunchedEffect(context) {
+    LaunchedEffect(appContext) {
         val generation = profileReloadGeneration.incrementAndGet()
         val loaded = profileMutationMutex.withLock {
-            withContext(Dispatchers.IO) { ProfileStore.load(context) }
+            withContext(Dispatchers.IO) { ProfileStore.load(appContext) }
         }
         if (generation == profileReloadGeneration.get()) storedState = loaded
     }
@@ -792,7 +882,7 @@ internal fun TcptunScreen(
             delay(100)
             val generation = profileReloadGeneration.incrementAndGet()
             val loaded = profileMutationMutex.withLock {
-                withContext(Dispatchers.IO) { ProfileStore.load(context) }
+                withContext(Dispatchers.IO) { ProfileStore.load(appContext) }
             }
             if (generation == profileReloadGeneration.get()) storedState = loaded
         }
@@ -801,7 +891,7 @@ internal fun TcptunScreen(
         if (vpnState.profileStateRevision > 0) {
             val generation = profileReloadGeneration.incrementAndGet()
             val loaded = profileMutationMutex.withLock {
-                withContext(Dispatchers.IO) { ProfileStore.load(context) }
+                withContext(Dispatchers.IO) { ProfileStore.load(appContext) }
             }
             if (generation == profileReloadGeneration.get()) storedState = loaded
         }
@@ -873,41 +963,39 @@ internal fun TcptunScreen(
     }
     fun requireProfileMutationAllowed() {
         check(!isVpnTransitionStatus(TcptunState.status)) {
-            resources.getString(R.string.profile_save_failed)
+            appContext.getString(R.string.profile_save_failed)
         }
     }
     suspend fun commitProfileMutationLocked(
         transform: (ProfilesState) -> ProfilesState,
         validate: suspend (ProfilesState, ProfilesState) -> Unit = { _, _ -> },
     ): Pair<ProfilesState, ProfileStoreSnapshot> {
-        val generation = profileReloadGeneration.incrementAndGet()
-        return withContext(NonCancellable) {
-            repeat(MaxProfileMutationAttempts) {
-                requireProfileMutationAllowed()
-                val snapshot = withContext(Dispatchers.IO) { ProfileStore.snapshot(context) }
-                val next = withContext(Dispatchers.Default) { transform(snapshot.state) }
-                validate(snapshot.state, next)
-                requireProfileMutationAllowed()
-                val saved = withContext(Dispatchers.IO) {
-                    ProfileStore.saveIfCurrent(context, snapshot, next).getOrThrow()
-                }
-                if (saved != null) {
-                    if (generation == profileReloadGeneration.get()) storedState = saved.state
-                    TcptunState.notifyProfileStateChanged()
-                    return@withContext snapshot.state to saved
-                }
+        repeat(MaxProfileMutationAttempts) {
+            requireProfileMutationAllowed()
+            val snapshot = withContext(Dispatchers.IO) { ProfileStore.snapshot(appContext) }
+            val next = withContext(Dispatchers.Default) { transform(snapshot.state) }
+            validate(snapshot.state, next)
+            requireProfileMutationAllowed()
+            val saved = withContext(Dispatchers.IO) {
+                ProfileStore.saveIfCurrent(appContext, snapshot, next).getOrThrow()
             }
-            throw IllegalStateException("profile state changed repeatedly; please retry")
+            if (saved != null) {
+                TcptunState.notifyProfileStateChanged()
+                return snapshot.state to saved
+            }
         }
+        throw IllegalStateException("profile state changed repeatedly; please retry")
     }
 
     suspend fun saveProfileMutation(
         transform: (ProfilesState) -> ProfilesState,
     ): ProfilesState? {
         return try {
-            profileMutationMutex.withLock {
-                commitProfileMutationLocked(transform).second.state
-            }
+            durableMutation("profile save") {
+                profileMutationMutex.withLock {
+                    commitProfileMutationLocked(transform).second.state
+                }
+            }.await()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
@@ -920,35 +1008,31 @@ internal fun TcptunScreen(
         committed: ProfileStoreSnapshot,
         previous: ProfilesState,
     ): Boolean {
-        val generation = profileReloadGeneration.incrementAndGet()
-        return withContext(NonCancellable) {
-            repeat(MaxProfileMutationAttempts) {
-                val snapshot = withContext(Dispatchers.IO) { ProfileStore.snapshot(context) }
-                val currentState = snapshot.requireAuthoritativeState()
-                val rollback = rollbackProfileStateIfStillCommitted(
-                    current = currentState,
-                    currentRevision = snapshot.mutationRevision,
-                    committed = committed.state,
-                    committedRevision = committed.mutationRevision,
-                    previous = previous,
-                ) ?: run {
-                    TcptunState.appendLog(
-                        "profile rollback skipped because a newer profile state is already stored",
-                    )
-                    return@withContext false
-                }
-                val restored = withContext(Dispatchers.IO) {
-                    ProfileStore.saveIfCurrent(context, snapshot, rollback).getOrThrow()
-                }
-                if (restored != null) {
-                    if (generation == profileReloadGeneration.get()) storedState = restored.state
-                    TcptunState.notifyProfileStateChanged()
-                    TcptunState.appendLog("profile state rolled back after VPN command dispatch failed")
-                    return@withContext true
-                }
+        repeat(MaxProfileMutationAttempts) {
+            val snapshot = withContext(Dispatchers.IO) { ProfileStore.snapshot(appContext) }
+            val currentState = snapshot.requireAuthoritativeState()
+            val rollback = rollbackProfileStateIfStillCommitted(
+                current = currentState,
+                currentRevision = snapshot.mutationRevision,
+                committed = committed.state,
+                committedRevision = committed.mutationRevision,
+                previous = previous,
+            ) ?: run {
+                TcptunState.appendLog(
+                    "profile rollback skipped because a newer profile state is already stored",
+                )
+                return false
             }
-            throw IllegalStateException("profile state changed repeatedly while rolling back")
+            val restored = withContext(Dispatchers.IO) {
+                ProfileStore.saveIfCurrent(appContext, snapshot, rollback).getOrThrow()
+            }
+            if (restored != null) {
+                TcptunState.notifyProfileStateChanged()
+                TcptunState.appendLog("profile state rolled back after VPN command dispatch failed")
+                return true
+            }
         }
+        throw IllegalStateException("profile state changed repeatedly while rolling back")
     }
 
     suspend fun decodeValidatedProfile(raw: String): AppConfig = withContext(Dispatchers.Default) {
@@ -956,27 +1040,29 @@ internal fun TcptunScreen(
     }
 
     suspend fun storeValidatedProfile(profile: AppConfig): Pair<AppConfig, Boolean> =
-        profileMutationMutex.withLock {
-            val identity = withContext(Dispatchers.Default) {
-                profileConnectionIdentity(profile)
-                    ?: throw IllegalArgumentException("profile identity could not be created")
-            }
-            var storedProfile = profile
-            var added = false
-            commitProfileMutationLocked(transform = { current ->
-                current.profiles.firstOrNull { candidate ->
-                    profileConnectionIdentity(candidate) == identity
-                }?.let { existing ->
-                    storedProfile = existing
-                    added = false
-                    current
-                } ?: current.copy(profiles = current.profiles + profile).also {
-                    storedProfile = profile
-                    added = true
+        durableMutation("scanned profile save") {
+            profileMutationMutex.withLock {
+                val identity = withContext(Dispatchers.Default) {
+                    profileConnectionIdentity(profile)
+                        ?: throw IllegalArgumentException("profile identity could not be created")
                 }
-            })
-            storedProfile to added
-        }
+                var storedProfile = profile
+                var added = false
+                commitProfileMutationLocked(transform = { current ->
+                    current.profiles.firstOrNull { candidate ->
+                        profileConnectionIdentity(candidate) == identity
+                    }?.let { existing ->
+                        storedProfile = existing
+                        added = false
+                        current
+                    } ?: current.copy(profiles = current.profiles + profile).also {
+                        storedProfile = profile
+                        added = true
+                    }
+                })
+                storedProfile to added
+            }
+        }.await()
 
     fun openQrScanner() {
         if (isVpnTransitionStatus(vpnState.status)) return
@@ -1115,9 +1201,8 @@ internal fun TcptunScreen(
         transform: (ProfilesState) -> ProfilesState,
     ): Boolean {
         return try {
-            var pendingInteractiveStart: ProfileRunPlan? = null
-            val mutationApplied = profileMutationMutex.withLock {
-                withContext(NonCancellable) {
+            val (mutationApplied, pendingInteractiveStart) = durableMutation("profile runtime mutation") {
+                profileMutationMutex.withLock profileMutation@{
                     var applyRuntime = false
                     var intendedOutboundUpdate = false
                     var plan: ProfileRunPlan? = null
@@ -1139,10 +1224,10 @@ internal fun TcptunScreen(
                                 ProcessRouteRuleMutationMutex.withLock {
                                     withContext(Dispatchers.IO) {
                                         TcptunVpnService.preflightStartPayload(
-                                            context = context,
+                                            context = appContext,
                                             sourcePlan = candidatePlan,
                                             managedRouteRules = RouteRuleStore
-                                                .loadAuthoritative(context)
+                                                .loadAuthoritative(appContext)
                                                 .getOrThrow(),
                                         )
                                     }
@@ -1150,12 +1235,12 @@ internal fun TcptunScreen(
                             }
                         },
                     )
-                    if (!applyRuntime) return@withContext true
+                    if (!applyRuntime) return@profileMutation true to null
                     val committedPlan = plan
                     if (committedPlan == null) {
-                        if (!stopVpn(context.applicationContext)) {
+                        if (!stopVpn(appContext)) {
                             rollbackCommittedProfileMutation(committedSnapshot, previousState)
-                            return@withContext false
+                            return@profileMutation false to null
                         }
                     } else {
                         TcptunState.clearTcping()
@@ -1165,12 +1250,12 @@ internal fun TcptunScreen(
                                 // use this committed state as its rollback baseline only after the
                                 // service has accepted the corresponding command.
                                 val dispatched = updateVpnOutbounds(
-                                    context = context.applicationContext,
+                                    context = appContext,
                                     plan = committedPlan,
                                 )
                                 if (!dispatched) {
                                     rollbackCommittedProfileMutation(committedSnapshot, previousState)
-                                    return@withContext false
+                                    return@profileMutation false to null
                                 }
                             } else {
                                 TcptunState.appendLog(
@@ -1178,12 +1263,12 @@ internal fun TcptunScreen(
                                 )
                             }
                         } else {
-                            pendingInteractiveStart = committedPlan
+                            return@profileMutation true to committedPlan
                         }
                     }
-                    true
+                    true to null
                 }
-            }
+            }.await()
             if (!mutationApplied) return false
             pendingInteractiveStart?.let(::launchPlan)
             true
@@ -1377,7 +1462,7 @@ internal fun TcptunScreen(
     } else if (editing == null) {
         val listIpInfo = rememberLocalIpInfo(context)
         val configuredListenAddress = TcptunVpnService.localSocksListenAddr(
-            rememberUiRuntimeSettings(context) ?: RuntimeSettings(),
+            rememberUiRuntimeSettings(appContext) ?: RuntimeSettings(),
         )
         val effectiveListenAddress = vpnState.diagnostics.bridgeListen
             .takeIf { vpnState.status == "Running" }
@@ -1448,7 +1533,7 @@ internal fun TcptunScreen(
                 onRefresh = {
                     val generation = profileReloadGeneration.incrementAndGet()
                     val loaded = profileMutationMutex.withLock {
-                        withContext(Dispatchers.IO) { ProfileStore.load(context) }
+                        withContext(Dispatchers.IO) { ProfileStore.load(appContext) }
                     }
                     if (generation == profileReloadGeneration.get()) storedState = loaded
                     listIpInfo.refresh()
@@ -2542,12 +2627,15 @@ private fun tcpingStatusText(progress: TcpingProgress): String {
 @Composable
 private fun SettingsPage(onBack: () -> Unit) {
     val context = LocalContext.current
+    val appContext = context.applicationContext
     val startFailedMessage = stringResource(R.string.start_failed)
-    var settings by remember { mutableStateOf(RuntimeSettings()) }
-    var socksPortText by remember { mutableStateOf(settings.socksPort.toString()) }
-    var settingsDirty by remember { mutableStateOf(false) }
+    var settings by rememberSaveable(stateSaver = RuntimeSettingsSaver) {
+        mutableStateOf(RuntimeSettings())
+    }
+    var socksPortText by rememberSaveable { mutableStateOf(settings.socksPort.toString()) }
+    var settingsDirty by rememberSaveable { mutableStateOf(false) }
     var savingSettings by remember { mutableStateOf(false) }
-    var settingsLoaded by remember { mutableStateOf(false) }
+    var settingsLoaded by rememberSaveable { mutableStateOf(false) }
     val settingsScope = rememberCoroutineScope()
     val vpnState by TcptunState.state.collectAsStateWithLifecycle()
     val diagnostics = vpnState.diagnostics
@@ -2563,11 +2651,13 @@ private fun SettingsPage(onBack: () -> Unit) {
         ?.second
         ?: defaultPoolLabel
 
-    LaunchedEffect(context) {
-        val loadedSettings = withContext(Dispatchers.IO) { readUiRuntimeSettings(context) }
-        settings = loadedSettings
-        socksPortText = loadedSettings.socksPort.toString()
-        settingsLoaded = true
+    LaunchedEffect(appContext, settingsLoaded) {
+        if (!settingsLoaded) {
+            val loadedSettings = withContext(Dispatchers.IO) { readUiRuntimeSettings(appContext) }
+            settings = loadedSettings
+            socksPortText = loadedSettings.socksPort.toString()
+            settingsLoaded = true
+        }
     }
 
     if (!settingsLoaded) {
@@ -2597,24 +2687,24 @@ private fun SettingsPage(onBack: () -> Unit) {
         val next = settings.copy(socksPort = socksPort)
         savingSettings = true
         settingsScope.launch {
-            withContext(NonCancellable) {
-                val saved = withContext(Dispatchers.IO) {
-                    writeUiRuntimeSettings(context, next).map { readUiRuntimeSettings(context) }
-                }
-                saved.fold(
-                    onSuccess = { persisted ->
-                        settings = persisted
-                        socksPortText = persisted.socksPort.toString()
-                        applyRuntimeSettings(context)
-                        settingsDirty = false
-                        savingSettings = false
-                        onBack()
-                    },
-                    onFailure = { error ->
-                        savingSettings = false
-                        reportUiError(error.message ?: startFailedMessage)
-                    },
-                )
+            try {
+                val persisted = durableMutation("runtime settings save") {
+                    ProcessRuntimeSettingsMutationMutex.withLock {
+                        writeUiRuntimeSettings(appContext, next).getOrThrow()
+                        applyRuntimeSettings(appContext)
+                        readUiRuntimeSettings(appContext)
+                    }
+                }.await()
+                settings = persisted
+                socksPortText = persisted.socksPort.toString()
+                settingsDirty = false
+                onBack()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                reportUiError(error.message ?: startFailedMessage)
+            } finally {
+                savingSettings = false
             }
         }
     }
@@ -2630,7 +2720,7 @@ private fun SettingsPage(onBack: () -> Unit) {
         PullRefreshContainer(
             onRefresh = {
                 if (!settingsDirty) {
-                    val loadedSettings = withContext(Dispatchers.IO) { readUiRuntimeSettings(context) }
+                    val loadedSettings = withContext(Dispatchers.IO) { readUiRuntimeSettings(appContext) }
                     settings = loadedSettings
                     socksPortText = settings.socksPort.toString()
                 }
@@ -2885,6 +2975,7 @@ private suspend fun mutateManagedRouteRules(
 @Composable
 private fun FlowAnalysisPage(onBack: () -> Unit) {
     val context = LocalContext.current
+    val appContext = context.applicationContext
     val resources = LocalResources.current
     val startFailedMessage = stringResource(R.string.start_failed)
     val runtimeState by TcptunState.state.collectAsStateWithLifecycle()
@@ -2892,14 +2983,13 @@ private fun FlowAnalysisPage(onBack: () -> Unit) {
     var installedApps by remember { mutableStateOf<List<InstalledRouteApp>>(emptyList()) }
     var selectionSaving by remember { mutableStateOf(false) }
     var routeRuleSaving by remember { mutableStateOf(false) }
-    var showRouteRuleDialog by remember { mutableStateOf(false) }
-    var routeRuleOutbound by remember { mutableStateOf(ManagedRouteOutbound.Proxy) }
-    var routeRuleResult by remember { mutableStateOf("") }
-    var routeRuleError by remember { mutableStateOf("") }
+    var showRouteRuleDialog by rememberSaveable { mutableStateOf(false) }
+    var routeRuleOutbound by rememberSaveable { mutableStateOf(ManagedRouteOutbound.Proxy) }
+    var routeRuleResult by rememberSaveable { mutableStateOf("") }
+    var routeRuleError by rememberSaveable { mutableStateOf("") }
     var flowLeaveRequested by remember { mutableStateOf(false) }
     var pageLoaded by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val flowSettingsMutex = remember { Mutex() }
     val flowAnalysisDisabled = stringResource(R.string.flow_analysis_disabled)
     val flowAppOptions = listOf(flowAnalysisDisabled) + installedApps.map(InstalledRouteApp::displayName)
     val selectedPackage = settings.flowAnalysisApp
@@ -2919,29 +3009,27 @@ private fun FlowAnalysisPage(onBack: () -> Unit) {
         if (packageName == selectedPackage) return
         selectionSaving = true
         scope.launch {
-            withContext(NonCancellable) {
-                flowSettingsMutex.withLock {
-                    val saved = withContext(Dispatchers.IO) {
-                        writeUiRuntimeSettings(context, settings.copy(flowAnalysisApp = packageName))
-                            .map { readUiRuntimeSettings(context) }
+            try {
+                val next = settings.copy(flowAnalysisApp = packageName)
+                val persisted = durableMutation("flow analysis setting save") {
+                    ProcessRuntimeSettingsMutationMutex.withLock {
+                        writeUiRuntimeSettings(appContext, next).getOrThrow()
+                        applyFlowAnalysisSettings(appContext)
+                        readUiRuntimeSettings(appContext)
                     }
-                    saved.fold(
-                        onSuccess = { persisted ->
-                            settings = persisted
-                            selectionSaving = false
-                            applyFlowAnalysisSettings(context)
-                            if (flowLeaveRequested && !routeRuleSaving) {
-                                flowLeaveRequested = false
-                                onBack()
-                            }
-                        },
-                        onFailure = { error ->
-                            selectionSaving = false
-                            flowLeaveRequested = false
-                            reportUiError(error.message ?: startFailedMessage)
-                        },
-                    )
+                }.await()
+                settings = persisted
+                if (flowLeaveRequested && !routeRuleSaving) {
+                    flowLeaveRequested = false
+                    onBack()
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                flowLeaveRequested = false
+                reportUiError(error.message ?: startFailedMessage)
+            } finally {
+                selectionSaving = false
             }
         }
     }
@@ -2961,17 +3049,17 @@ private fun FlowAnalysisPage(onBack: () -> Unit) {
         routeRuleError = ""
         scope.launch {
             try {
-                withContext(NonCancellable) {
-                    mutateManagedRouteRules(context) { existing ->
+                durableMutation("flow route rule creation") {
+                    mutateManagedRouteRules(appContext) { existing ->
                         mergeFlowRouteRuleSuggestions(existing, suggestions)
                     }
-                    applyRuntimeSettings(context, forceRestart = true)
-                    routeRuleResult = resources.getString(
-                        R.string.flow_analysis_rules_created,
-                        suggestions.size,
-                    )
-                    showRouteRuleDialog = false
-                }
+                    applyRuntimeSettings(appContext, forceRestart = true)
+                }.await()
+                routeRuleResult = resources.getString(
+                    R.string.flow_analysis_rules_created,
+                    suggestions.size,
+                )
+                showRouteRuleDialog = false
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
@@ -2986,9 +3074,11 @@ private fun FlowAnalysisPage(onBack: () -> Unit) {
         }
     }
 
-    LaunchedEffect(context) {
+    LaunchedEffect(appContext) {
         val loaded = withContext(Dispatchers.IO) {
-            readUiRuntimeSettings(context) to loadInstalledRouteApps(context)
+            ProcessRuntimeSettingsMutationMutex.withLock {
+                readUiRuntimeSettings(appContext) to loadInstalledRouteApps(appContext)
+            }
         }
         settings = loaded.first
         installedApps = loaded.second
@@ -3029,9 +3119,9 @@ private fun FlowAnalysisPage(onBack: () -> Unit) {
     ) { padding ->
         PullRefreshContainer(
             onRefresh = {
-                val refreshed = flowSettingsMutex.withLock {
+                val refreshed = ProcessRuntimeSettingsMutationMutex.withLock {
                     withContext(Dispatchers.IO) {
-                        readUiRuntimeSettings(context) to loadInstalledRouteApps(context)
+                        readUiRuntimeSettings(appContext) to loadInstalledRouteApps(appContext)
                     }
                 }
                 settings = refreshed.first
@@ -3331,15 +3421,20 @@ private fun FlowRouteRuleDialog(
 @Composable
 private fun RouteManagementPage(onBack: () -> Unit) {
     val context = LocalContext.current
+    val appContext = context.applicationContext
     val resources = LocalResources.current
     var profileState by remember { mutableStateOf(ProfilesState(emptyList())) }
     val routeProfiles = profileState.profiles.filter { it.rawConfigJson.isBlank() }
     var installedApps by remember { mutableStateOf<List<InstalledRouteApp>>(emptyList()) }
     var rules by remember { mutableStateOf<List<ManagedRouteRule>>(emptyList()) }
     var routeDataLoaded by remember { mutableStateOf(false) }
-    var editingRule by remember { mutableStateOf<ManagedRouteRule?>(null) }
-    var deleteCandidate by remember { mutableStateOf<ManagedRouteRule?>(null) }
-    var routeActionsExpanded by remember { mutableStateOf(false) }
+    var editingRule by rememberSaveable(stateSaver = ManagedRouteRuleSaver) {
+        mutableStateOf<ManagedRouteRule?>(null)
+    }
+    var deleteCandidate by rememberSaveable(stateSaver = ManagedRouteRuleSaver) {
+        mutableStateOf<ManagedRouteRule?>(null)
+    }
+    var routeActionsExpanded by rememberSaveable { mutableStateOf(false) }
     var smartMergePreview by remember { mutableStateOf<SmartRouteMergeResult?>(null) }
     var notice by remember { mutableStateOf("") }
     var dirty by remember { mutableStateOf(false) }
@@ -3358,12 +3453,12 @@ private fun RouteManagementPage(onBack: () -> Unit) {
     val routeInteractionEnabled = !routeSaving && !routeLeaveRequested
     val smartMergeResult = remember(rules) { smartMergeManagedRouteRules(rules) }
 
-    LaunchedEffect(context) {
+    LaunchedEffect(appContext) {
         val loaded = withContext(Dispatchers.IO) {
             Triple(
-                ProfileStore.load(context),
-                loadInstalledRouteApps(context),
-                RouteRuleStore.load(context),
+                ProfileStore.load(appContext),
+                loadInstalledRouteApps(appContext),
+                RouteRuleStore.load(appContext),
             )
         }
         profileState = loaded.first
@@ -3388,17 +3483,16 @@ private fun RouteManagementPage(onBack: () -> Unit) {
     ): Boolean {
         routeSaveCount += 1
         return try {
-            withContext(NonCancellable) {
-                val (persisted, currentProfiles) = mutateManagedRouteRules(context, transform)
-                rules = persisted
-                profileState = currentProfiles
-                dirty = true
-                error = ""
-                // Keep the running service synchronized even if the Activity is recreated
-                // before this page can execute its normal leave path.
-                applyRuntimeSettings(context, forceRestart = true)
-                true
-            }
+            val (persisted, currentProfiles) = durableMutation("managed route mutation") {
+                val result = mutateManagedRouteRules(appContext, transform)
+                applyRuntimeSettings(appContext, forceRestart = true)
+                result
+            }.await()
+            rules = persisted
+            profileState = currentProfiles
+            dirty = true
+            error = ""
+            true
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
@@ -3408,7 +3502,7 @@ private fun RouteManagementPage(onBack: () -> Unit) {
             routeSaveCount = (routeSaveCount - 1).coerceAtLeast(0)
             if (routeLeaveRequested && routeSaveCount == 0) {
                 routeLeaveRequested = false
-                if (dirty) applyRuntimeSettings(context, forceRestart = true)
+                if (dirty) applyRuntimeSettings(appContext, forceRestart = true)
                 onBack()
             }
         }
@@ -3419,7 +3513,7 @@ private fun RouteManagementPage(onBack: () -> Unit) {
             routeLeaveRequested = true
             return
         }
-        if (dirty) applyRuntimeSettings(context, forceRestart = true)
+        if (dirty) applyRuntimeSettings(appContext, forceRestart = true)
         onBack()
     }
 
@@ -3544,9 +3638,9 @@ private fun RouteManagementPage(onBack: () -> Unit) {
                     val shouldReloadRules = draggedRuleId == null && !dirty && routeSaveCount == 0
                     withContext(Dispatchers.IO) {
                         Triple(
-                            ProfileStore.load(context),
-                            loadInstalledRouteApps(context),
-                            if (shouldReloadRules) RouteRuleStore.load(context) else null,
+                            ProfileStore.load(appContext),
+                            loadInstalledRouteApps(appContext),
+                            if (shouldReloadRules) RouteRuleStore.load(appContext) else null,
                         )
                     }
                 }
@@ -4026,14 +4120,14 @@ private fun ManagedRouteRuleDialog(
     onDismiss: () -> Unit,
     onSave: (ManagedRouteRule) -> Unit,
 ) {
-    var type by remember(rule.id) { mutableStateOf(rule.type) }
-    var value by remember(rule.id) {
+    var type by rememberSaveable(rule.id) { mutableStateOf(rule.type) }
+    var value by rememberSaveable(rule.id) {
         mutableStateOf(rule.value.take(MaxManagedRouteRuleValueLength))
     }
-    var outbound by remember(rule.id) { mutableStateOf(rule.outbound) }
-    var outboundProfileId by remember(rule.id) { mutableStateOf(rule.outboundProfileId) }
-    var enabled by remember(rule.id) { mutableStateOf(rule.enabled) }
-    var invalid by remember(rule.id) { mutableStateOf(false) }
+    var outbound by rememberSaveable(rule.id) { mutableStateOf(rule.outbound) }
+    var outboundProfileId by rememberSaveable(rule.id) { mutableStateOf(rule.outboundProfileId) }
+    var enabled by rememberSaveable(rule.id) { mutableStateOf(rule.enabled) }
+    var invalid by rememberSaveable(rule.id) { mutableStateOf(false) }
     val types = ManagedRouteRuleType.entries.filter {
         it != ManagedRouteRuleType.App || Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q || rule.type == it
     }
@@ -4185,9 +4279,13 @@ private fun SettingsTopBar(onBack: () -> Unit) {
 
 @Composable
 private fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (AppConfig) -> Unit) {
-    var config by remember(initial.id) { mutableStateOf(initial.boundedForEditor()) }
-    var useFullConfig by remember(initial.id) { mutableStateOf(initial.rawConfigJson.isNotBlank()) }
-    var formError by remember(initial.id) { mutableStateOf("") }
+    var config by rememberSaveable(initial.id, stateSaver = AppConfigSaver) {
+        mutableStateOf(initial.boundedForEditor())
+    }
+    var useFullConfig by rememberSaveable(initial.id) {
+        mutableStateOf(initial.rawConfigJson.isNotBlank())
+    }
+    var formError by rememberSaveable(initial.id) { mutableStateOf("") }
     var validating by remember(initial.id) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val invalidProfileMessage = stringResource(R.string.invalid_profile_link)

@@ -82,6 +82,7 @@ import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.min
@@ -706,6 +707,7 @@ private class MlKitQrAnalyzer(
     private val awaitingResult = AtomicBoolean(false)
     private val errorReported = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
+    private val activeImage = AtomicReference<ImageProxy?>(null)
 
     @ExperimentalGetImage
     override fun analyze(image: ImageProxy) {
@@ -713,10 +715,16 @@ private class MlKitQrAnalyzer(
             closeImageSafely(image)
             return
         }
+        activeImage.set(image)
+        if (closed.get()) {
+            releaseImage(image)
+            processing.set(false)
+            return
+        }
         val mediaImage = image.image
         if (mediaImage == null) {
+            releaseImage(image)
             processing.set(false)
-            closeImageSafely(image)
             return
         }
         try {
@@ -741,12 +749,12 @@ private class MlKitQrAnalyzer(
                     reportError(error)
                 }
                 .addOnCompleteListener {
+                    releaseImage(image)
                     processing.set(false)
-                    closeImageSafely(image)
                 }
         } catch (error: Throwable) {
+            releaseImage(image)
             processing.set(false)
-            closeImageSafely(image)
             reportError(error)
         }
     }
@@ -762,8 +770,14 @@ private class MlKitQrAnalyzer(
         runRecoverableCatching { image.close() }
     }
 
+    private fun releaseImage(image: ImageProxy) {
+        if (activeImage.compareAndSet(image, null)) closeImageSafely(image)
+    }
+
     fun close() {
-        closed.set(true)
+        if (!closed.compareAndSet(false, true)) return
         awaitingResult.set(true)
+        activeImage.getAndSet(null)?.let(::closeImageSafely)
+        processing.set(false)
     }
 }

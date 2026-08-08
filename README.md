@@ -68,6 +68,7 @@ func (e *Engine) ProbeOutbound(tag string, host string, port int, timeoutMillis 
 func (e *Engine) ProbeOutboundHealth(tag string, host string, port int, timeoutMillis int64) (int64, error)
 func (e *Engine) OutboundsStatusJSON() string
 func (e *Engine) Stop() error
+func (e *Engine) Abort() error
 func (e *Engine) Close() error
 func (e *Engine) SessionID() int64
 func (e *Engine) WaitStopped(sessionID int64, timeoutMillis int64) error

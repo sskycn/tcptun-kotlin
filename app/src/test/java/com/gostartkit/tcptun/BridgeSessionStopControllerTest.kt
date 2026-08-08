@@ -59,13 +59,38 @@ class BridgeSessionStopControllerTest {
     }
 
     @Test
-    fun unsettledSessionRetainsNativeAndCallbackOwnership() {
+    fun unsettledSessionUsesAbortThenReleasesNativeAndCallbackOwnership() {
         val resources = startedResources()
         resources.beginStop()
         val waitError = IllegalStateException("wait timeout")
         val bridge = RecordingStopBridge(
             stopError = IllegalStateException("stop timeout"),
             waitError = waitError,
+            currentStatus = "Error",
+            currentStatusReason = "STOP_TIMEOUT",
+        )
+        var stoppedWithError: Throwable? = null
+
+        BridgeSessionStopController(bridge, resources).stop(
+            settleTimeoutMillis = 500L,
+            callbacks = callbacks(onStoppedWithError = { stoppedWithError = it }),
+        )
+
+        assertTrue(bridge.calls.contains("abort"))
+        assertTrue(stoppedWithError?.cause === waitError)
+        assertEquals(BridgeResourcePhase.Idle, resources.snapshot.phase)
+        assertTrue(bridge.calls.any { it.startsWith("clear") })
+    }
+
+    @Test
+    fun abortFailureRetainsNativeAndCallbackOwnership() {
+        val resources = startedResources()
+        resources.beginStop()
+        val abortError = IllegalStateException("abort failed")
+        val bridge = RecordingStopBridge(
+            stopError = IllegalStateException("stop timeout"),
+            waitError = IllegalStateException("wait timeout"),
+            abortError = abortError,
             currentStatus = "Error",
             currentStatusReason = "STOP_TIMEOUT",
         )
@@ -79,6 +104,7 @@ class BridgeSessionStopControllerTest {
         }
 
         assertSame(thrown, reported)
+        assertSame(abortError, thrown.cause)
         assertEquals(BridgeResourcePhase.Stopping, resources.snapshot.phase)
         assertTrue(resources.snapshot.nativeStopRequired)
         assertTrue(resources.snapshot.callbacksRequireCleanup)
@@ -142,9 +168,10 @@ class BridgeSessionStopControllerTest {
     private fun callbacks(
         onCleanupFailure: (String, Throwable) -> Unit = { _, _ -> },
         onStillStopping: (Throwable) -> Unit = {},
+        onStoppedWithError: (Throwable) -> Unit = {},
     ): BridgeSessionStopCallbacks = BridgeSessionStopCallbacks(
         onNativeStillStopping = onStillStopping,
-        onNativeStoppedWithError = {},
+        onNativeStoppedWithError = onStoppedWithError,
         onCleanupFailure = onCleanupFailure,
     )
 }
@@ -152,6 +179,7 @@ class BridgeSessionStopControllerTest {
 private class RecordingStopBridge(
     private val stopError: Throwable? = null,
     private val waitError: Throwable? = null,
+    private val abortError: Throwable? = null,
     private val currentStatus: String = "Stopped",
     private val currentStatusReason: String = "",
     private val nativeSessionId: Long = 41L,
@@ -169,6 +197,11 @@ private class RecordingStopBridge(
     override fun waitStopped(sessionId: Long, timeoutMillis: Long) {
         calls += "waitStopped:$sessionId:$timeoutMillis"
         waitError?.let { throw it }
+    }
+
+    override fun abort() {
+        calls += "abort"
+        abortError?.let { throw it }
     }
 
     override fun sessionId(): Long {

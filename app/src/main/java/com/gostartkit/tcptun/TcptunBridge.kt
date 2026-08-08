@@ -123,6 +123,7 @@ interface TcptunBridge {
     fun probeOutboundHealth(tag: String, host: String, port: Int, timeoutMillis: Long): Long
     fun outboundsStatusJson(): String
     fun stop()
+    fun abort()
     fun sessionId(): Long
     fun waitStopped(sessionId: Long, timeoutMillis: Long)
     fun close()
@@ -273,6 +274,10 @@ class ReflectionTcptunBridge : TcptunBridge {
 
     override fun stop() {
         invokeEngine("stop")
+    }
+
+    override fun abort() {
+        invokeEngine("abort")
     }
 
     override fun sessionId(): Long {

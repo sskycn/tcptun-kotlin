@@ -65,11 +65,22 @@ class QrScannerLifecycleUiTest {
             }
         }
 
+        composeRule.onNodeWithContentDescription(activity.getString(R.string.more_options)).performClick()
+        composeRule.onNodeWithText(activity.getString(R.string.scan_qr_code)).performClick()
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodesWithTag(QrCameraReadyTestTag).fetchSemanticsNodes().isNotEmpty()
+        }
+
         composeRule.activityRule.scenario.recreate()
-        composeRule.waitUntil(timeoutMillis = 5_000) {
-            composeRule.onAllNodesWithText(composeRule.activity.getString(R.string.profiles_title))
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodesWithText(composeRule.activity.getString(R.string.scan_profile_qr_code))
                 .fetchSemanticsNodes().isNotEmpty()
         }
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.scan_profile_qr_code)).assertIsDisplayed()
+        composeRule.waitUntil(timeoutMillis = 10_000) {
+            composeRule.onAllNodesWithTag(QrCameraReadyTestTag).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithContentDescription(composeRule.activity.getString(R.string.back)).performClick()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.profiles_title)).assertIsDisplayed()
     }
 }

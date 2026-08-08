@@ -220,6 +220,7 @@ private class RecordingSessionBridge(
         unexpected("probeOutboundHealth")
     override fun outboundsStatusJson(): String = unexpected("outboundsStatusJson")
     override fun stop() = unexpected("stop")
+    override fun abort() = unexpected("abort")
     override fun sessionId(): Long = unexpected("sessionId")
     override fun waitStopped(sessionId: Long, timeoutMillis: Long) = unexpected("waitStopped")
     override fun close() = unexpected("close")

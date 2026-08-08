@@ -33,7 +33,7 @@ class ClipboardImportUiTest {
         originalClipboardText = clipboard?.primaryClip
             ?.takeIf { it.itemCount > 0 }
             ?.getItemAt(0)
-            ?.coerceToText(activity)
+            ?.text
             ?.toString()
     }
 
@@ -106,7 +106,7 @@ class ClipboardImportUiTest {
         val remainingText = currentActivity.getSystemService(ClipboardManager::class.java)?.primaryClip
             ?.takeIf { it.itemCount > 0 }
             ?.getItemAt(0)
-            ?.coerceToText(currentActivity)
+            ?.text
             ?.toString()
         assertFalse(remainingText == clipboardConfig)
     }

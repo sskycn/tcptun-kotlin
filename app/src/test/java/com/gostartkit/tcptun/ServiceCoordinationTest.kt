@@ -5,7 +5,10 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.FutureTask
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.TimeUnit
 
 class ServiceCoordinationTest {
     @Test
@@ -156,6 +159,38 @@ class ServiceCoordinationTest {
 
         selector.clear()
         assertEquals(values, selector.select(values, 99))
+    }
+
+    @Test
+    fun boundedLifecycleExecutorRejectsOverflowAndPurgesCancelledOwnership() {
+        val executor = newBoundedLifecycleExecutor("bounded-ownership-test", queueCapacity = 2)
+        val workerStarted = CountDownLatch(1)
+        val releaseWorker = CountDownLatch(1)
+        try {
+            executor.submit {
+                workerStarted.countDown()
+                releaseWorker.await()
+            }
+            assertTrue(workerStarted.await(1, TimeUnit.SECONDS))
+            val queuedFirst = executor.submit {}
+            val queuedSecond = executor.submit {}
+            assertEquals(2, executor.queue.size)
+
+            try {
+                executor.submit {}
+                throw AssertionError("overflow task should have been rejected")
+            } catch (_: RejectedExecutionException) {
+                // The bounded queue must not retain another task graph.
+            }
+
+            queuedFirst.cancel(false)
+            queuedSecond.cancel(false)
+            executor.purge()
+            assertEquals(0, executor.queue.size)
+        } finally {
+            releaseWorker.countDown()
+            executor.shutdownNow()
+        }
     }
 
     private fun recoveryCoordinator(

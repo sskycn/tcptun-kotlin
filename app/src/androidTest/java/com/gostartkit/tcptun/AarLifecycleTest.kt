@@ -61,6 +61,31 @@ class AarLifecycleTest {
         }
     }
 
+    @Test
+    fun abortIsIdempotentAndAllowsEngineReuse() {
+        val engine = Androidbridge.newEngine()
+        try {
+            val port = availablePort()
+            engine.configure(directConfig(port))
+            val abortedSession = engine.startConfiguredSessionWithDisabledOutbounds("[]")
+
+            engine.abort()
+            engine.abort()
+            engine.waitStopped(abortedSession, 100)
+            assertEquals("Stopped", engine.status())
+
+            // Abort must synchronously release listener ownership even though
+            // the old runtime may still be completing full cleanup in the background.
+            engine.configure(directConfig(port))
+            val replacementSession = engine.startConfiguredSessionWithDisabledOutbounds("[]")
+            assertTrue(replacementSession > abortedSession)
+            engine.stop()
+            engine.waitStopped(replacementSession, 2_000)
+        } finally {
+            engine.close()
+        }
+    }
+
     private fun availablePort(): Int = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use {
         it.localPort
     }

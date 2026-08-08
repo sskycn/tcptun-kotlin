@@ -24,15 +24,16 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Callable
 import java.util.concurrent.CancellationException
-import java.util.concurrent.Executors
 import java.util.concurrent.Executor
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -127,6 +128,27 @@ internal fun newLifecycleScheduledExecutor(threadName: String): ScheduledThreadP
         setExecuteExistingDelayedTasksAfterShutdownPolicy(false)
         setContinueExistingPeriodicTasksAfterShutdownPolicy(false)
     }
+
+/**
+ * A native probe can fail to honor its timeout or Java interruption. Keep later
+ * batches bounded so one stuck worker cannot accumulate cancelled FutureTasks
+ * and every object graph captured by them.
+ */
+internal fun newBoundedLifecycleExecutor(
+    threadName: String,
+    queueCapacity: Int,
+): ThreadPoolExecutor {
+    require(queueCapacity > 0) { "lifecycle executor queue capacity must be positive" }
+    return ThreadPoolExecutor(
+        1,
+        1,
+        0L,
+        TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(queueCapacity),
+        { runnable -> Thread(runnable, threadName).apply { isDaemon = true } },
+        ThreadPoolExecutor.AbortPolicy(),
+    )
+}
 
 internal fun startCrashGuardedThread(
     threadName: String,
@@ -293,14 +315,16 @@ class TcptunVpnService : VpnService() {
     /** Shared with service ownership so old/new instances cannot publish across each other. */
     private val lifecycleCommandLock = serviceOwnerLock
     private val lifecycleExecutor = newLifecycleScheduledExecutor("TcptunLifecycle")
-    private val tcpingExecutor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "TcptunTcping").apply { isDaemon = true }
-    }
+    private val tcpingExecutor = newBoundedLifecycleExecutor(
+        threadName = "TcptunTcping",
+        queueCapacity = MAX_TCPING_EXECUTOR_QUEUE_CAPACITY,
+    )
     // ProbeOutboundHealth is serialized by bridgeLock, so a wider pool only
     // creates cancelled workers waiting on the same native engine.
-    private val memberHealthExecutor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "TcptunMemberHealth").apply { isDaemon = true }
-    }
+    private val memberHealthExecutor = newBoundedLifecycleExecutor(
+        threadName = "TcptunMemberHealth",
+        queueCapacity = MAX_MEMBER_HEALTH_EXECUTOR_QUEUE_CAPACITY,
+    )
     private val memberHealthBatchSelector = RoundRobinBatchSelector()
     private val memberHealthProbeNotBeforeElapsedMs = AtomicLong(0L)
     private val memberHealthProbeScheduleGeneration = AtomicInteger()
@@ -2138,58 +2162,72 @@ class TcptunVpnService : VpnService() {
             threadName = "TcptunDestroyCoordinator",
             onFailure = { error -> cleanupStep("VPN destroy coordinator") { throw error } },
         ) coordinator@{
+            var abortSucceeded = false
             var lifecycleStopped = lifecycleExecutor.awaitTermination(
                 DESTROY_EXECUTOR_WAIT_MS,
                 TimeUnit.MILLISECONDS,
             )
             if (!lifecycleStopped) {
-                TcptunState.appendLog("tcptun lifecycle is still exiting; destroy cleanup deferred")
+                TcptunState.appendLog("tcptun lifecycle is still exiting; aborting native session")
+                abortSucceeded = abortBridgeEngineForDestroy()
                 lifecycleStopped = lifecycleExecutor.awaitTermination(
-                    DEFERRED_DESTROY_WAIT_MS,
+                    DESTROY_ABORT_SETTLE_WAIT_MS,
                     TimeUnit.MILLISECONDS,
                 )
             }
             if (!lifecycleStopped) {
                 TcptunState.appendLog(
-                    "tcptun lifecycle task did not exit; teardown will remain queued off the main thread",
+                    "tcptun lifecycle task did not exit after abort; teardown remains owned off the main thread",
                 )
             }
 
-            val teardownThread = startCrashGuardedThread(
-                threadName = "TcptunDestroyTeardown",
-                onFailure = { error -> cleanupStep("VPN destroy teardown") { throw error } },
-            ) {
-                stopVpn(
-                    setStopped = TcptunState.status != "Error",
-                    clearSavedConfig = false,
-                    stopSelfService = false,
-                    globalStateOwner = ::isActiveServiceOwner,
+            while (!lifecycleStopped) {
+                // Never start a second teardown thread while lifecycle work may
+                // still be inside JNI holding bridgeLock. The coordinator keeps
+                // ownership and performs cleanup itself as soon as that worker exits.
+                lifecycleStopped = lifecycleExecutor.awaitTermination(
+                    DEFERRED_DESTROY_WAIT_MS,
+                    TimeUnit.MILLISECONDS,
                 )
-                if (closeBridgeEngine()) {
-                    TcptunState.appendLog("tcptun destroy cleanup completed")
-                } else {
-                    TcptunState.appendLog(
-                        "tcptun destroy cleanup incomplete; engine retained for safe process teardown",
-                    )
+                if (!lifecycleStopped && !abortSucceeded) {
+                    abortSucceeded = abortBridgeEngineForDestroy()
                 }
-            } ?: return@coordinator
-
-            try {
-                teardownThread.join(DESTROY_NATIVE_TEARDOWN_WAIT_MS)
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-                teardownThread.interrupt()
-                return@coordinator
             }
-            if (teardownThread.isAlive) {
-                teardownThread.interrupt()
-                TcptunState.appendLog("tcptun native destroy cleanup timed out; main thread remains responsive")
+
+            stopVpn(
+                setStopped = TcptunState.status != "Error",
+                clearSavedConfig = false,
+                stopSelfService = false,
+                globalStateOwner = ::isActiveServiceOwner,
+            )
+            if (closeBridgeEngine()) {
+                TcptunState.appendLog("tcptun destroy cleanup completed")
+            } else {
+                TcptunState.appendLog(
+                    "tcptun destroy cleanup incomplete; engine retained for safe process teardown",
+                )
             }
         }
         if (coordinator == null) {
             cleanupStep("start VPN destroy coordinator") {
                 throw IllegalStateException("destroy coordinator thread could not be started")
             }
+        }
+    }
+
+    /** Abort is deliberately not serialized by bridgeLock: it must release a JNI call holding that lock. */
+    private fun abortBridgeEngineForDestroy(): Boolean {
+        // Return false so the coordinator retries if bridge initialization is
+        // racing this check; do not mark an engine we never observed as aborted.
+        if (!bridgeDelegate.isInitialized()) return false
+        return try {
+            bridge.abort()
+            TcptunState.appendLog("tcptun native session aborted for destroy cleanup")
+            true
+        } catch (error: Throwable) {
+            if (error.isFatalProcessError()) throw error
+            cleanupStep("tcptun engine abort") { throw error }
+            false
         }
     }
 
@@ -2372,9 +2410,9 @@ class TcptunVpnService : VpnService() {
                 settleTimeoutMillis = BRIDGE_STOP_SETTLE_TIMEOUT_MS,
                 callbacks = BridgeSessionStopCallbacks(
                     onNativeStillStopping = { error ->
-                        // Keep callbacks and the stop obligation alive. onDestroy
-                        // will retry through Stop/Close; clearing Java proxies here
-                        // would violate tcptun-go's active-runtime ownership contract.
+                        // Stop and Abort both failed. Keep callbacks and the stop
+                        // obligation alive; clearing Java proxies would violate
+                        // tcptun-go's active-runtime ownership contract.
                         TcptunState.appendLog(
                             "tcptun engine is still stopping: ${failureDescription(error)}",
                         )
@@ -3323,7 +3361,15 @@ class TcptunVpnService : VpnService() {
             MEMBER_HEALTH_BATCH_TIMEOUT_MS,
             worstCaseProfileMs * profiles.size,
         ) + MEMBER_HEALTH_PROBE_GRACE_MS
-        val futures = memberHealthExecutor.invokeAll(tasks, timeoutMs, TimeUnit.MILLISECONDS)
+        val futures = try {
+            memberHealthExecutor.purge()
+            memberHealthExecutor.invokeAll(tasks, timeoutMs, TimeUnit.MILLISECONDS)
+        } finally {
+            // invokeAll cancels unfinished tasks at the deadline, but a blocked
+            // single worker cannot dequeue them. Purge immediately releases the
+            // profiles, targets, and service references captured by that batch.
+            memberHealthExecutor.purge()
+        }
         if (monitorEpoch != monitorGeneration.get() || stopping) return
         val coreRefreshProfiles = mutableListOf<AppConfig>()
         var retryTransientFailure = false
@@ -3879,10 +3925,14 @@ class TcptunVpnService : VpnService() {
         private const val MEMBER_HEALTH_PROBE_TIMEOUT_MS = 3_000L
         private const val MEMBER_HEALTH_PROBE_GRACE_MS = 1_000L
         private const val MEMBER_HEALTH_BATCH_TIMEOUT_MS = 30_000L
+        // One-target batches can contain up to ten profiles. Leave headroom for
+        // invokeAll's current batch while still placing a hard ownership bound.
+        private const val MAX_MEMBER_HEALTH_EXECUTOR_QUEUE_CAPACITY = 16
+        private const val MAX_TCPING_EXECUTOR_QUEUE_CAPACITY = 2
         private const val RUNTIME_SETTINGS_APPLY_DEBOUNCE_MS = 800L
         private const val DESTROY_EXECUTOR_WAIT_MS = 2_000L
+        private const val DESTROY_ABORT_SETTLE_WAIT_MS = 5_000L
         private const val DEFERRED_DESTROY_WAIT_MS = 15_000L
-        private const val DESTROY_NATIVE_TEARDOWN_WAIT_MS = 15_000L
         private const val PREVIOUS_RUNTIME_RELEASE_WAIT_MS = 35_000L
         private const val MAX_MEMBER_HEALTH_PROBE_DELAY_MS = 86_400_000L
         private const val MAX_RUNTIME_CREDENTIAL_LENGTH = 4_096

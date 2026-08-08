@@ -24,10 +24,7 @@ class VpnServiceLifecycleTest {
         val originalSettings = TcptunVpnService.readRuntimeSettings(context)
         val originalProfiles = ProfileStore.load(context)
         val socksPort = availablePort()
-        val directTarget = InetAddress.getAllByName("www.qq.com")
-            .first { it.address.size == 4 }
-            .hostAddress
-            .orEmpty()
+        val directTarget = "127.0.0.1"
         val profile = AppConfig(
             id = "vpn-service-lifecycle",
             name = "VPN service lifecycle",
@@ -100,17 +97,23 @@ class VpnServiceLifecycleTest {
                     }
                     assertEquals(sessionId, TcptunState.diagnostics.bridgeSessionId)
                 }
-                Socket().use { socket ->
-                    socket.connect(InetSocketAddress(InetAddress.getByName("127.0.0.1"), socksPort), 2_000)
-                    socket.soTimeout = 5_000
-                    try {
-                        assertSocks5Connect(socket, directTarget, 80)
-                    } catch (error: Throwable) {
-                        throw AssertionError(
-                            "SOCKS direct connect failed; status=${TcptunState.status}, " +
-                                "bridge=${TcptunState.diagnostics}, logs=${TcptunState.logs.takeLast(40)}",
-                            error,
-                        )
+                ServerSocket(0, 1, InetAddress.getByName(directTarget)).use { directServer ->
+                    directServer.soTimeout = 5_000
+                    Socket().use { socket ->
+                        socket.connect(InetSocketAddress(InetAddress.getByName("127.0.0.1"), socksPort), 2_000)
+                        socket.soTimeout = 5_000
+                        try {
+                            assertSocks5Connect(socket, directTarget, directServer.localPort)
+                            directServer.accept().use { accepted ->
+                                assertEquals(directTarget, accepted.inetAddress.hostAddress)
+                            }
+                        } catch (error: Throwable) {
+                            throw AssertionError(
+                                "SOCKS direct connect failed; status=${TcptunState.status}, " +
+                                    "bridge=${TcptunState.diagnostics}, logs=${TcptunState.logs.takeLast(40)}",
+                                error,
+                            )
+                        }
                     }
                 }
                 context.startService(TcptunVpnService.stopIntent(context))

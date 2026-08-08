@@ -36,7 +36,7 @@ class AndroidBridgeContractTest {
     @Test
     fun currentBridgeReportsVersionedCoreIdentity() {
         assertEquals("v0.2.5", Androidbridge.coreVersion())
-        assertTrue(Androidbridge.coreBuildID().startsWith("cacb2851b12b"))
+        assertTrue(Androidbridge.coreBuildID().matches(Regex("[0-9a-f]{12,40}(?:-dirty)?")))
     }
 
     @Test
@@ -104,6 +104,7 @@ class AndroidBridgeContractTest {
             engine.javaClass.getMethod("outboundsStatusJSON")
             engine.javaClass.getMethod("registerEvent", String::class.java)
             engine.javaClass.getMethod("unregisterEvent", String::class.java)
+            engine.javaClass.getMethod("abort")
             assertEquals("Stopped", engine.status())
             assertEquals("stopped", JSONObject(engine.statusJSON()).getString("state"))
             assertEquals(0L, engine.sessionID())

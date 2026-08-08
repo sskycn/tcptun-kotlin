@@ -32,16 +32,25 @@ internal class BridgeSessionStopController(
                 sessionId = sessionId,
                 settleTimeoutMillis = settleTimeoutMillis,
             )
-            try {
-                result.requireSettled()
-            } catch (error: Throwable) {
-                callbacks.onNativeStillStopping(
-                    result.error ?: IllegalStateException("unknown stop failure"),
-                )
-                throw error
+            if (!result.settled) {
+                val abortError = runRecoverableCatching { bridge.abort() }.exceptionOrNull()
+                if (abortError == null) {
+                    resources.nativeStopped()
+                    callbacks.onNativeStoppedWithError(
+                        result.error ?: IllegalStateException("tcptun session required forced abort"),
+                    )
+                } else {
+                    val error = IllegalStateException(
+                        "tcptun session did not stop and abort failed",
+                        abortError,
+                    ).apply { result.error?.let(::addSuppressed) }
+                    callbacks.onNativeStillStopping(error)
+                    throw error
+                }
+            } else {
+                resources.nativeStopped()
+                result.error?.let(callbacks.onNativeStoppedWithError)
             }
-            resources.nativeStopped()
-            result.error?.let(callbacks.onNativeStoppedWithError)
         } else {
             resources.nativeStopped()
         }
