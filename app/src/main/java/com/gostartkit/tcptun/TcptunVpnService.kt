@@ -2366,9 +2366,6 @@ class TcptunVpnService : VpnService() {
                             if (!destroyed.get()) onBridgeStatusEvent(epoch, eventJson)
                         },
                         protectSocket = { fd -> !destroyed.get() && !stopping && protect(fd) },
-                        identifyApp = { flow ->
-                            if (destroyed.get() || stopping) null else appIdentityProvider.identify(flow)
-                        },
                         configureFlowAnalysis = {
                             configureFlowAnalysis(activeFlowAnalysisApp, epoch, configJson)
                         },
@@ -2461,10 +2458,20 @@ class TcptunVpnService : VpnService() {
     private fun configureFlowAnalysis(packageName: String, epoch: Long, configJson: String) {
         val normalized = normalizeFlowAnalysisApp(packageName)
         TcptunState.setFlowAnalysisApp(normalized)
-        appIdentityProvider.setIdentityLookupRequired(
-            configRequiresAppIdentityLookup(configJson, normalized),
-        )
-        appIdentityProvider.setFlowAnalysisApp(normalized)
+        val identityLookupRequired = configRequiresAppIdentityLookup(configJson, normalized)
+        if (identityLookupRequired) {
+            appIdentityProvider.setIdentityLookupRequired(true)
+            appIdentityProvider.setFlowAnalysisApp(normalized)
+            bridge.setAppIdentityProvider { flow ->
+                if (destroyed.get() || stopping) null else appIdentityProvider.identify(flow)
+            }
+        } else {
+            if (appIdentityProviderDelegate.isInitialized()) {
+                appIdentityProvider.setIdentityLookupRequired(false)
+                appIdentityProvider.setFlowAnalysisApp("")
+            }
+            bridge.clearAppIdentityProvider()
+        }
         if (normalized.isBlank()) {
             bridge.setFlowAnalysisApp("")
             bridge.clearFlowCallback()

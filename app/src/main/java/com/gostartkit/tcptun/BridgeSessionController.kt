@@ -12,7 +12,6 @@ internal data class BridgeSessionCallbacks(
     val onLog: (String) -> Unit,
     val onStatus: (String) -> Unit,
     val protectSocket: (Int) -> Boolean,
-    val identifyApp: (String) -> String?,
     val configureFlowAnalysis: () -> Unit,
     val onInitialStatus: (String) -> Unit,
     val onOptionalEventRegistrationFailure: (String, Throwable) -> Unit,
@@ -44,7 +43,9 @@ internal class BridgeSessionController(
             }
         }
         bridge.setSocketProtector(callbacks.protectSocket)
-        bridge.setAppIdentityProvider(callbacks.identifyApp)
+        // App-aware configuration owns the optional identity callback as one unit.
+        // Leaving the provider unset when app metadata is unused avoids one
+        // gomobile/JNI round trip and a flow JSON allocation per connection.
         callbacks.configureFlowAnalysis()
         callbacks.onInitialStatus(bridge.statusJson())
         bridge.configure(request.configJson)

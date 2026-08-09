@@ -174,7 +174,6 @@ class BridgeLifecycleIntegrationTest {
         onLog = {},
         onStatus = {},
         protectSocket = { true },
-        identifyApp = { null },
         configureFlowAnalysis = {},
         onInitialStatus = {},
         onOptionalEventRegistrationFailure = { _, _ -> },

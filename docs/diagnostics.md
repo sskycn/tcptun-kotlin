@@ -24,5 +24,10 @@ Tests:
 - `SensitiveTextTest` checks state/log redaction.
 - `AndroidBridgeContractTest` verifies that core status data remains credential-free.
 
+On Android 11 and newer, process startup also records the most recent system-reported exit
+category, sampled PSS/RSS, and the bounded system description in the runtime log. This
+distinguishes Java/native crashes, ANRs, low-memory kills, and OEM actions such as Xiaomi
+`OneKeyClean` without collecting a crash trace.
+
 If a bug report needs the raw profile or credentials, collect those separately through an
 explicit user-controlled channel; never add them to automatic diagnostics.
