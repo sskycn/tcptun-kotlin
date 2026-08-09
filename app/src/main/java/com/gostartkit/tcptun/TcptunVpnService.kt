@@ -1732,6 +1732,7 @@ class TcptunVpnService : VpnService() {
                         initialSelection = selectionClaim.initial,
                         networkAvailable = network != null,
                         vpnRunning = TcptunState.status == "Running",
+                        previousNetworkAvailable = selectionClaim.previousValue != null,
                     )
                 ) {
                     // Restart path reseeds member probes after "vpn started".
@@ -1840,6 +1841,13 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun closeTunAfterBridgeStopAttempt() {
+        if (!canCloseAndroidTun(bridgeResources.snapshot)) {
+            // Keep the original ParcelFileDescriptor alive while Go may still
+            // own its duplicate. A retry or destroy coordinator must finish
+            // the native stop before this slot is detached.
+            TcptunState.appendLog("retaining VPN TUN until native ownership is released")
+            return
+        }
         val activeTun = tunOwner.release()
         if (activeTun != null) {
             TcptunState.appendLog("closing VPN TUN")
@@ -2163,6 +2171,8 @@ class TcptunVpnService : VpnService() {
             onFailure = { error -> cleanupStep("VPN destroy coordinator") { throw error } },
         ) coordinator@{
             var abortSucceeded = false
+            val destroyDeadlineNanos = System.nanoTime() +
+                TimeUnit.MILLISECONDS.toNanos(DESTROY_MAX_LIFECYCLE_WAIT_MS)
             var lifecycleStopped = lifecycleExecutor.awaitTermination(
                 DESTROY_EXECUTOR_WAIT_MS,
                 TimeUnit.MILLISECONDS,
@@ -2185,13 +2195,25 @@ class TcptunVpnService : VpnService() {
                 // Never start a second teardown thread while lifecycle work may
                 // still be inside JNI holding bridgeLock. The coordinator keeps
                 // ownership and performs cleanup itself as soon as that worker exits.
+                val remainingNanos = destroyDeadlineNanos - System.nanoTime()
+                if (remainingNanos <= 0L) break
                 lifecycleStopped = lifecycleExecutor.awaitTermination(
-                    DEFERRED_DESTROY_WAIT_MS,
+                    minOf(
+                        DEFERRED_DESTROY_WAIT_MS,
+                        TimeUnit.NANOSECONDS.toMillis(remainingNanos).coerceAtLeast(1L),
+                    ),
                     TimeUnit.MILLISECONDS,
                 )
                 if (!lifecycleStopped && !abortSucceeded) {
                     abortSucceeded = abortBridgeEngineForDestroy()
                 }
+            }
+
+            if (!lifecycleStopped) {
+                TcptunState.appendLog(
+                    "tcptun lifecycle did not stop within the destroy deadline; native ownership retained",
+                )
+                return@coordinator
             }
 
             stopVpn(
@@ -2200,11 +2222,11 @@ class TcptunVpnService : VpnService() {
                 stopSelfService = false,
                 globalStateOwner = ::isActiveServiceOwner,
             )
-            if (closeBridgeEngine()) {
+            if (!bridgeResources.hasOwnedResources && closeBridgeEngine()) {
                 TcptunState.appendLog("tcptun destroy cleanup completed")
             } else {
                 TcptunState.appendLog(
-                    "tcptun destroy cleanup incomplete; engine retained for safe process teardown",
+                    "tcptun destroy cleanup incomplete; native resources retained for safe process teardown",
                 )
             }
         }
@@ -2236,6 +2258,10 @@ class TcptunVpnService : VpnService() {
             bridgeResources.engineClosed()
             bridgeRuntimeLease.release(serviceInstanceId)
             return true
+        }
+        if (bridgeResources.snapshot.nativeStopRequired) {
+            TcptunState.appendLog("tcptun engine close deferred while native session is active")
+            return false
         }
         return try {
             synchronized(bridgeLock) {
@@ -2343,7 +2369,9 @@ class TcptunVpnService : VpnService() {
                         identifyApp = { flow ->
                             if (destroyed.get() || stopping) null else appIdentityProvider.identify(flow)
                         },
-                        configureFlowAnalysis = { configureFlowAnalysis(activeFlowAnalysisApp, epoch) },
+                        configureFlowAnalysis = {
+                            configureFlowAnalysis(activeFlowAnalysisApp, epoch, configJson)
+                        },
                         onInitialStatus = { statusJson ->
                             TcptunState.applyBridgeStatusEvent(epoch, statusJson)
                         },
@@ -2430,9 +2458,12 @@ class TcptunVpnService : VpnService() {
         }
     }
 
-    private fun configureFlowAnalysis(packageName: String, epoch: Long) {
+    private fun configureFlowAnalysis(packageName: String, epoch: Long, configJson: String) {
         val normalized = normalizeFlowAnalysisApp(packageName)
         TcptunState.setFlowAnalysisApp(normalized)
+        appIdentityProvider.setIdentityLookupRequired(
+            configRequiresAppIdentityLookup(configJson, normalized),
+        )
         appIdentityProvider.setFlowAnalysisApp(normalized)
         if (normalized.isBlank()) {
             bridge.setFlowAnalysisApp("")
@@ -2961,7 +2992,11 @@ class TcptunVpnService : VpnService() {
             }
             try {
                 synchronized(bridgeLock) {
-                    configureFlowAnalysis(packageName, epoch)
+                    configureFlowAnalysis(
+                        packageName = packageName,
+                        epoch = epoch,
+                        configJson = requireNotNull(bridgeResources.activeConfigJson),
+                    )
                 }
                 TcptunState.appendLog("flow analysis switched without VPN restart: ${packageName.ifBlank { "disabled" }}")
             } catch (error: Throwable) {
@@ -3933,6 +3968,7 @@ class TcptunVpnService : VpnService() {
         private const val DESTROY_EXECUTOR_WAIT_MS = 2_000L
         private const val DESTROY_ABORT_SETTLE_WAIT_MS = 5_000L
         private const val DEFERRED_DESTROY_WAIT_MS = 15_000L
+        private const val DESTROY_MAX_LIFECYCLE_WAIT_MS = 35_000L
         private const val PREVIOUS_RUNTIME_RELEASE_WAIT_MS = 35_000L
         private const val MAX_MEMBER_HEALTH_PROBE_DELAY_MS = 86_400_000L
         private const val MAX_RUNTIME_CREDENTIAL_LENGTH = 4_096

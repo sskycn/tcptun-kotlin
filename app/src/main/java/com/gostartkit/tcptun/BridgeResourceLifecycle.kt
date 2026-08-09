@@ -310,6 +310,10 @@ internal data class BridgeStopResult(
     }
 }
 
+/** The Android-owned descriptor is safe to close only after native ownership is gone. */
+internal fun canCloseAndroidTun(snapshot: BridgeResourceSnapshot): Boolean =
+    !snapshot.nativeStopRequired
+
 private val BridgeStatusReasonPattern = Regex(""""reason"\s*:\s*"([A-Za-z0-9_]+)"""")
 
 private fun bridgeReportsSettled(bridge: TcptunBridge): Boolean {

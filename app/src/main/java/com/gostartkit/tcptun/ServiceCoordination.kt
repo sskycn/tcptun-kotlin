@@ -5,6 +5,7 @@ import java.util.concurrent.Future
 internal data class RankedSelectionClaim<K>(
     val value: K?,
     val initial: Boolean,
+    val previousValue: K? = null,
 )
 
 /**
@@ -31,7 +32,11 @@ internal class RankedSelectionTracker<K> {
     @Synchronized
     fun claim(selection: K?): RankedSelectionClaim<K>? {
         if (selection != selectedLocked() || current == selection) return null
-        val claim = RankedSelectionClaim(selection, initial = !initialized)
+        val claim = RankedSelectionClaim(
+            value = selection,
+            initial = !initialized,
+            previousValue = current,
+        )
         initialized = true
         current = selection
         return claim

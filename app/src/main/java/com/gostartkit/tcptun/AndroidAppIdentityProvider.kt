@@ -160,6 +160,34 @@ internal fun androidAppIdentityJson(uid: Int, packages: List<String>, flowAnalys
     }.getOrNull()
 }
 
+/**
+ * UID ownership lookup is an Android control-plane operation. Do not perform
+ * it for every flow unless the active runtime actually needs app metadata.
+ */
+internal fun configRequiresAppIdentityLookup(
+    configJson: String,
+    flowAnalysisApp: String,
+): Boolean {
+    val hasAppRouteRules = runRecoverableCatching {
+        requireSafeJsonNesting(configJson)
+        JSONObject(configJson)
+            .optJSONObject("route")
+            ?.optJSONArray("rules")
+            ?.let { rules ->
+                (0 until rules.length()).any { index ->
+                    rules.optJSONObject(index)?.has("app") == true
+                }
+            }
+            ?: false
+    }.getOrDefault(false)
+    return appIdentityLookupRequired(flowAnalysisApp, hasAppRouteRules)
+}
+
+internal fun appIdentityLookupRequired(
+    flowAnalysisApp: String,
+    hasAppRouteRules: Boolean,
+): Boolean = normalizeFlowAnalysisApp(flowAnalysisApp).isNotBlank() || hasAppRouteRules
+
 private data class OriginalFlow(
     val protocol: Int,
     val local: InetSocketAddress,
@@ -180,6 +208,7 @@ internal class AndroidAppIdentityProvider(
     }.getOrNull()
     private val identities = ConcurrentHashMap<IdentityCacheKey, String>()
     @Volatile private var flowAnalysisApp: String = ""
+    @Volatile private var identityLookupRequired = false
 
     fun setFlowAnalysisApp(packageName: String) {
         val normalized = packageName
@@ -191,7 +220,14 @@ internal class AndroidAppIdentityProvider(
         identities.clear()
     }
 
+    fun setIdentityLookupRequired(required: Boolean) {
+        if (identityLookupRequired == required) return
+        identityLookupRequired = required
+        if (!required) identities.clear()
+    }
+
     fun identify(flowJson: String): String? {
+        if (!identityLookupRequired) return null
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
         if (flowJson.length > MAX_IDENTITY_FLOW_JSON_LENGTH) return null
         val original = runRecoverableCatching {

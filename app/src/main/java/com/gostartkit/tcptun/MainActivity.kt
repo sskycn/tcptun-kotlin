@@ -151,14 +151,12 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tcptun.client.ui.theme.TcpTunTheme
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -186,15 +184,6 @@ private const val SavedPendingProfileUri = "pendingProfileUri"
 internal const val PullRefreshSettleMillis = 350L
 private const val PostNotificationsPermission = "android.permission.POST_NOTIFICATIONS"
 
-private val VpnPlanCommandExceptionHandler = CoroutineExceptionHandler { _, error ->
-    if (error.isFatalProcessError()) throw error
-    runRecoverableCatching {
-        TcptunState.appendLog("VPN command coroutine failed: ${failureDescription(error)}")
-    }
-}
-private val VpnPlanCommandScope = CoroutineScope(
-    SupervisorJob() + Dispatchers.Main.immediate + VpnPlanCommandExceptionHandler,
-)
 private val VpnPlanCommandGeneration = AtomicInteger()
 private val VpnPlanCommandJob = AtomicReference<Job?>(null)
 private val UiErrorMessages = Channel<String>(
@@ -205,7 +194,6 @@ private val ProcessProfileMutationMutex = Mutex()
 private val ProcessRouteRuleMutationMutex = Mutex()
 private val ProcessRuntimeSettingsMutationMutex = Mutex()
 private val QrCodeGenerationMutex = Mutex()
-private val DurableMutationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 private const val MaxProfileMutationAttempts = 4
 private const val MaxProfileNameInputLength = 512
 private const val MaxProfileHostInputLength = 2_048
@@ -291,9 +279,10 @@ private val ManagedRouteRuleSaver = Saver<ManagedRouteRule?, String>(
 )
 
 private fun <T> durableMutation(
+    context: Context,
     name: String,
     action: suspend CoroutineScope.() -> T,
-): Deferred<T> = DurableMutationScope.async(block = action).also { deferred ->
+): Deferred<T> = context.tcptunApplication().durableMutationScope.async(block = action).also { deferred ->
     deferred.invokeOnCompletion { error ->
         if (error != null && error !is CancellationException && !error.isFatalProcessError()) {
             runRecoverableCatching {
@@ -302,6 +291,10 @@ private fun <T> durableMutation(
         }
     }
 }
+
+private fun Context.tcptunApplication(): TcptunApplication =
+    (applicationContext ?: this) as? TcptunApplication
+        ?: error("TcpTun must run with TcptunApplication")
 
 private val CardShapeCompact = RoundedCornerShape(12.dp)
 private val MenuShape = RoundedCornerShape(12.dp)
@@ -911,7 +904,7 @@ internal fun TcptunScreen(
     }
     fun failPendingVpnStart(plan: ProfileRunPlan, message: String) {
         reportUiError(message)
-        VpnPlanCommandScope.launch {
+        appContext.tcptunApplication().vpnPlanCommandScope.launch {
             runRecoverableCatching {
                 rollbackInitialStartAfterDispatchFailure(context.applicationContext, plan)
             }.onFailure { rollbackError ->
@@ -991,7 +984,7 @@ internal fun TcptunScreen(
         transform: (ProfilesState) -> ProfilesState,
     ): ProfilesState? {
         return try {
-            durableMutation("profile save") {
+            durableMutation(appContext, "profile save") {
                 profileMutationMutex.withLock {
                     commitProfileMutationLocked(transform).second.state
                 }
@@ -1040,7 +1033,7 @@ internal fun TcptunScreen(
     }
 
     suspend fun storeValidatedProfile(profile: AppConfig): Pair<AppConfig, Boolean> =
-        durableMutation("scanned profile save") {
+        durableMutation(appContext, "scanned profile save") {
             profileMutationMutex.withLock {
                 val identity = withContext(Dispatchers.Default) {
                     profileConnectionIdentity(profile)
@@ -1201,7 +1194,7 @@ internal fun TcptunScreen(
         transform: (ProfilesState) -> ProfilesState,
     ): Boolean {
         return try {
-            val (mutationApplied, pendingInteractiveStart) = durableMutation("profile runtime mutation") {
+            val (mutationApplied, pendingInteractiveStart) = durableMutation(appContext, "profile runtime mutation") {
                 profileMutationMutex.withLock profileMutation@{
                     var applyRuntime = false
                     var intendedOutboundUpdate = false
@@ -2688,7 +2681,7 @@ private fun SettingsPage(onBack: () -> Unit) {
         savingSettings = true
         settingsScope.launch {
             try {
-                val persisted = durableMutation("runtime settings save") {
+                val persisted = durableMutation(appContext, "runtime settings save") {
                     ProcessRuntimeSettingsMutationMutex.withLock {
                         writeUiRuntimeSettings(appContext, next).getOrThrow()
                         applyRuntimeSettings(appContext)
@@ -3011,7 +3004,7 @@ private fun FlowAnalysisPage(onBack: () -> Unit) {
         scope.launch {
             try {
                 val next = settings.copy(flowAnalysisApp = packageName)
-                val persisted = durableMutation("flow analysis setting save") {
+                val persisted = durableMutation(appContext, "flow analysis setting save") {
                     ProcessRuntimeSettingsMutationMutex.withLock {
                         writeUiRuntimeSettings(appContext, next).getOrThrow()
                         applyFlowAnalysisSettings(appContext)
@@ -3049,7 +3042,7 @@ private fun FlowAnalysisPage(onBack: () -> Unit) {
         routeRuleError = ""
         scope.launch {
             try {
-                durableMutation("flow route rule creation") {
+                durableMutation(appContext, "flow route rule creation") {
                     mutateManagedRouteRules(appContext) { existing ->
                         mergeFlowRouteRuleSuggestions(existing, suggestions)
                     }
@@ -3483,7 +3476,7 @@ private fun RouteManagementPage(onBack: () -> Unit) {
     ): Boolean {
         routeSaveCount += 1
         return try {
-            val (persisted, currentProfiles) = durableMutation("managed route mutation") {
+            val (persisted, currentProfiles) = durableMutation(appContext, "managed route mutation") {
                 val result = mutateManagedRouteRules(appContext, transform)
                 applyRuntimeSettings(appContext, forceRestart = true)
                 result
@@ -5312,7 +5305,7 @@ private fun enqueueVpnPlanCommand(
 ) {
     val appContext = context.applicationContext ?: context
     val generation = VpnPlanCommandGeneration.incrementAndGet()
-    val job = VpnPlanCommandScope.launch {
+    val job = appContext.tcptunApplication().vpnPlanCommandScope.launch {
         val intent = try {
             withContext(Dispatchers.IO) {
                 if (updateOnly) {

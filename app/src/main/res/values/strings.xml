@@ -127,6 +127,11 @@
     <string name="proxy_no_reachable_address">No reachable address</string>
     <string name="ip_information_note">The client proxy address is the address another device can use. It prefers the active Wi-Fi hotspot interface, then falls back to the current LAN address. A loopback listener is only reachable on this device. These are local addresses, not public egress IPs. Pull down to refresh addresses and connected clients.</string>
     <string name="runtime_diagnostics">Runtime diagnostics</string>
+    <string name="diag_app_version">App version</string>
+    <string name="diag_session">Session</string>
+    <string name="diag_tun_mtu">TUN MTU</string>
+    <string name="diag_tun_tcp">TUN TCP state</string>
+    <string name="diag_tun_udp">TUN UDP state</string>
     <string name="diag_vpn">VPN</string>
     <string name="diag_underlying_network">Underlying network</string>
     <string name="diag_bridge">Bridge</string>

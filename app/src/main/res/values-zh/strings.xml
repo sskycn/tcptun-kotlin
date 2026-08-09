@@ -125,6 +125,11 @@
     <string name="proxy_no_reachable_address">无可访问地址</string>
     <string name="ip_information_note">客户端代理地址是其他设备实际使用的连接地址：优先显示当前 Wi-Fi 热点接口，未启用热点时回退到当前局域网地址。回环监听只能由本机访问。这里显示的是本地地址，不是公网出口 IP。下拉可刷新地址与已连接客户端。</string>
     <string name="runtime_diagnostics">运行诊断</string>
+    <string name="diag_app_version">应用版本</string>
+    <string name="diag_session">会话</string>
+    <string name="diag_tun_mtu">TUN MTU</string>
+    <string name="diag_tun_tcp">TUN TCP 状态</string>
+    <string name="diag_tun_udp">TUN UDP 状态</string>
     <string name="diag_vpn">VPN</string>
     <string name="diag_underlying_network">底层网络</string>
     <string name="diag_bridge">Bridge</string>

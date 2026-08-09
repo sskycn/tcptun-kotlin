@@ -43,6 +43,21 @@ class ProfileDeepLinkTest {
     }
 
     @Test
+    fun manifestDoesNotHandleOtherHttpsPaths() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        listOf("/v2", "/x/v1").forEach { path ->
+            val intent = Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse("https://x.tcptun.com$path#p=YWJj"),
+            )
+                .addCategory(Intent.CATEGORY_BROWSABLE)
+                .setPackage(context.packageName)
+            val matches = context.packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+            assertTrue("manifest unexpectedly handles $path", matches.none { it.activityInfo.name == MainActivity::class.java.name })
+        }
+    }
+
+    @Test
     fun viewIntentAcceptsSupportedUrisOnly() {
         SupportedProfileUriSchemes.forEach { scheme ->
             val uri = "$scheme://credential@example.com:443"

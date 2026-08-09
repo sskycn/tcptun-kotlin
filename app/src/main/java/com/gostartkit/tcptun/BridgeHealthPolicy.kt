@@ -105,7 +105,9 @@ internal object BridgeHealthPolicy {
         initialSelection: Boolean,
         networkAvailable: Boolean,
         vpnRunning: Boolean,
+        previousNetworkAvailable: Boolean = true,
     ): Boolean = !initialSelection && networkAvailable && vpnRunning
+        && previousNetworkAvailable
 
     fun isStructuralRuntimeChange(previous: RuntimeSettings, next: RuntimeSettings): Boolean {
         return previous.mtu != next.mtu ||

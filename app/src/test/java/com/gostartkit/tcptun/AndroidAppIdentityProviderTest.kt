@@ -3,9 +3,18 @@ package com.tcptun.client
 import android.system.OsConstants
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AndroidAppIdentityProviderTest {
+    @Test
+    fun uidLookupIsRequiredOnlyForSelectedAnalysisOrAppRouteRules() {
+        assertFalse(appIdentityLookupRequired("", hasAppRouteRules = false))
+        assertTrue(appIdentityLookupRequired("com.example", hasAppRouteRules = false))
+        assertTrue(appIdentityLookupRequired("", hasAppRouteRules = true))
+    }
+
     @Test
     fun parsesTcpIpv4ProxySource() {
         val flow = parseProxyFlowSource("tcp", "127.0.0.1:54321")

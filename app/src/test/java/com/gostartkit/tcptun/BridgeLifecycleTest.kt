@@ -204,6 +204,19 @@ class BridgeLifecycleTest {
     }
 
     @Test
+    fun originalTunRemainsOwnedUntilNativeStopIsConfirmed() {
+        val active = BridgeResourceSnapshot(
+            phase = BridgeResourcePhase.Stopping,
+            callbacksRequireCleanup = true,
+            nativeStopRequired = true,
+        )
+        val nativeStopped = active.copy(nativeStopRequired = false)
+
+        assertFalse(canCloseAndroidTun(active))
+        assertTrue(canCloseAndroidTun(nativeStopped))
+    }
+
+    @Test
     fun completedSessionCanReportShutdownErrorWithoutRemainingActive() {
         val stopError = IllegalStateException("stop timeout")
         val waitError = IllegalStateException("graceful shutdown deadline exceeded")
