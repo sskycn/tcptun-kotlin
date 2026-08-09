@@ -181,7 +181,7 @@ internal fun isExplicitlyHealthyBridgeEventState(eventState: String): Boolean =
     eventState.trim().lowercase() in ExplicitlyHealthyBridgeEventStates
 
 internal fun canRestoreConnectionsReady(
-    runtimeStatus: String,
+    runtimeStatus: VpnStatus,
     bridgeStatus: String,
     bridgeEventState: String,
     localProxyReachable: Boolean,
@@ -191,7 +191,7 @@ internal fun canRestoreConnectionsReady(
     stopping: Boolean,
     bridgeRestarting: Boolean,
     explicitStopRequested: Boolean,
-): Boolean = runtimeStatus == "Running" &&
+): Boolean = runtimeStatus == VpnStatus.Running &&
     bridgeStatus == "Running" &&
     isExplicitlyHealthyBridgeEventState(bridgeEventState) &&
     localProxyReachable &&

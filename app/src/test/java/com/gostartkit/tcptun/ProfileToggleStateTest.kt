@@ -13,7 +13,7 @@ class ProfileToggleStateTest {
         val nextActiveIds = nextActiveProfileIds(
             activeIds = activeIds,
             profileId = "profile-a",
-            vpnStatus = "Stopped",
+            vpnStatus = VpnStatus.Stopped,
         )
 
         assertEquals(activeIds, nextActiveIds)
@@ -24,7 +24,7 @@ class ProfileToggleStateTest {
         val nextActiveIds = nextActiveProfileIds(
             activeIds = setOf("profile-a", "profile-b"),
             profileId = "profile-a",
-            vpnStatus = "Running",
+            vpnStatus = VpnStatus.Running,
         )
 
         assertEquals(setOf("profile-b"), nextActiveIds)
@@ -34,11 +34,11 @@ class ProfileToggleStateTest {
     fun inactiveProfileIsAddedForStoppedOrRunningVpn() {
         assertEquals(
             setOf("profile-a"),
-            nextActiveProfileIds(emptySet(), "profile-a", "Stopped"),
+            nextActiveProfileIds(emptySet(), "profile-a", VpnStatus.Stopped),
         )
         assertEquals(
             setOf("profile-a", "profile-b"),
-            nextActiveProfileIds(setOf("profile-a"), "profile-b", "Running"),
+            nextActiveProfileIds(setOf("profile-a"), "profile-b", VpnStatus.Running),
         )
     }
 

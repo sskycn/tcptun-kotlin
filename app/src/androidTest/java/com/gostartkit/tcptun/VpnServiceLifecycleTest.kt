@@ -64,7 +64,7 @@ class VpnServiceLifecycleTest {
             repeat(2) { cycle ->
                 TcptunState.clearLogs()
                 ContextCompat.startForegroundService(context, TcptunVpnService.startIntent(context, profile))
-                waitUntil("VPN reaches Running") { TcptunState.status == "Running" }
+                waitUntil("VPN reaches Running") { TcptunState.status == VpnStatus.Running }
                 waitUntil("native TUN bridge reaches Running") {
                     TcptunState.diagnostics.bridgeStatus == "Running"
                 }
@@ -82,7 +82,7 @@ class VpnServiceLifecycleTest {
                             it == "flow analysis switched without VPN restart: com.android.settings"
                         }
                     }
-                    assertEquals("Running", TcptunState.status)
+                    assertEquals(VpnStatus.Running, TcptunState.status)
                     assertEquals(sessionId, TcptunState.diagnostics.bridgeSessionId)
 
                     TcptunVpnService.writeRuntimeSettings(
@@ -118,7 +118,7 @@ class VpnServiceLifecycleTest {
                 }
                 context.startService(TcptunVpnService.stopIntent(context))
                 waitUntil("VPN reaches Stopped promptly", timeoutMillis = 5_000) {
-                    TcptunState.status == "Stopped"
+                    TcptunState.status == VpnStatus.Stopped
                 }
                 assertEquals("Stopped", TcptunState.diagnostics.bridgeStatus)
                 // After the first cycle, start again as soon as Stopped is
@@ -132,7 +132,9 @@ class VpnServiceLifecycleTest {
             }
         } finally {
             context.startService(TcptunVpnService.stopIntent(context))
-            waitUntil("VPN cleanup", timeoutMillis = 10_000) { TcptunState.status != "Stopping" }
+            waitUntil("VPN cleanup", timeoutMillis = 10_000) {
+                TcptunState.status != VpnStatus.Stopping
+            }
             TcptunVpnService.writeRuntimeSettings(context, originalSettings)
             ProfileStore.save(context, originalProfiles)
             runShell("appops set ${context.packageName} ACTIVATE_VPN default")

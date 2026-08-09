@@ -9,7 +9,7 @@ class TcpingReadinessTest {
     fun runningVpnWithReadyConnectionsEnablesTcping() {
         assertTrue(
             canStartTcping(
-                status = "Running",
+                status = VpnStatus.Running,
                 activeProfileCount = 2,
                 connectionsReady = true,
             ),
@@ -18,15 +18,15 @@ class TcpingReadinessTest {
 
     @Test
     fun tcpingRequiresRunningVpnAndAnActiveProfile() {
-        assertFalse(canStartTcping(status = "Starting", activeProfileCount = 2, connectionsReady = false))
-        assertFalse(canStartTcping(status = "Running", activeProfileCount = 0, connectionsReady = true))
+        assertFalse(canStartTcping(status = VpnStatus.Starting, activeProfileCount = 2, connectionsReady = false))
+        assertFalse(canStartTcping(status = VpnStatus.Running, activeProfileCount = 0, connectionsReady = true))
     }
 
     @Test
     fun tcpingDisabledWhileConnectionsAreStillStarting() {
         assertFalse(
             canStartTcping(
-                status = "Running",
+                status = VpnStatus.Running,
                 activeProfileCount = 2,
                 connectionsReady = false,
             ),

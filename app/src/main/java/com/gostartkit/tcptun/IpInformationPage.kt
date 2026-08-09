@@ -36,9 +36,9 @@ internal fun IpInformationPage(onBack: () -> Unit) {
     val ipInfo = ipInfoController.info
     val vpnState by TcptunState.state.collectAsStateWithLifecycle()
     val settings = rememberUiRuntimeSettings(context) ?: RuntimeSettings()
-    val configuredListenAddress = TcptunVpnService.localSocksListenAddr(settings)
+    val configuredListenAddress = RuntimeSettingsRepository.localSocksListenAddress(settings)
     val actualListenAddress = vpnState.diagnostics.bridgeListen
-        .takeIf { vpnState.status == "Running" }
+        .takeIf { vpnState.status == VpnStatus.Running }
         .orEmpty()
     val effectiveListenAddress = actualListenAddress.ifBlank { configuredListenAddress }
     val listenerNetwork = mixedListenerNetworkDisplay(
@@ -51,7 +51,7 @@ internal fun IpInformationPage(onBack: () -> Unit) {
         listenAddress = effectiveListenAddress,
         hotspotIpv4 = ipInfo.hotspotIpv4,
         underlyingIpv4 = ipInfo.underlyingIpv4,
-        proxyRunning = vpnState.status == "Running",
+        proxyRunning = vpnState.status == VpnStatus.Running,
     )
     val noneLabel = stringResource(R.string.none)
 
@@ -63,7 +63,7 @@ internal fun IpInformationPage(onBack: () -> Unit) {
         PullRefreshContainer(
             onRefresh = {
                 ipInfoController.refresh()
-                if (vpnState.status == "Running") {
+                if (vpnState.status == VpnStatus.Running) {
                     runRecoverableCatching {
                         context.startService(TcptunVpnService.refreshClientIpsIntent(context))
                     }

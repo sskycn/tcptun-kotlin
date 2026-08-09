@@ -28,7 +28,7 @@ class TcpingUiTest {
     fun restoreState() {
         ProfileStore.save(composeRule.activity, originalState)
         TcptunState.clearTcping()
-        TcptunState.setStatus("Stopped")
+        TcptunState.setStatus(VpnStatus.Stopped)
         composeRule.activity.stopService(TcptunVpnService.stopIntent(composeRule.activity))
     }
 
@@ -43,7 +43,7 @@ class TcpingUiTest {
                 activeIds = linkedSetOf(first.id, second.id),
             ),
         )
-        TcptunState.setStatus("Running")
+        TcptunState.setStatus(VpnStatus.Running)
         TcptunState.setConnectionsReady(true)
         composeRule.activityRule.scenario.recreate()
 

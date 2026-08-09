@@ -127,7 +127,7 @@ data class TcptunDiagnosticsSnapshot(
                     version = coreIdentity.version.takeIf(String::isNotBlank),
                     buildId = coreIdentity.buildId.takeIf(String::isNotBlank),
                 ),
-                vpnState = runtimeState.status,
+                vpnState = runtimeState.status.displayName,
                 sessionId = diagnostics.bridgeSessionId.takeIf { it > 0L },
                 network = TcptunDiagnosticsNetwork(
                     type = diagnostics.underlyingNetwork,

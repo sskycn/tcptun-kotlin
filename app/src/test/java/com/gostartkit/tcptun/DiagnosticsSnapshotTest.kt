@@ -8,7 +8,7 @@ class DiagnosticsSnapshotTest {
     @Test
     fun snapshotContainsRequiredRuntimeSections() {
         val state = TcptunRuntimeState(
-            status = "Running",
+            status = VpnStatus.Running,
             diagnostics = TcptunDiagnostics(
                 underlyingNetwork = "WIFI",
                 mtu = 1400,

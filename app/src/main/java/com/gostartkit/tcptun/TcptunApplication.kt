@@ -19,6 +19,8 @@ import kotlinx.coroutines.cancel
 internal class TcptunApplication : Application() {
     private val processJob = SupervisorJob()
 
+    internal val profileRepository: ProfileRepository = SharedPreferencesProfileRepository
+
     internal val vpnPlanCommandScope = CoroutineScope(
         processJob + Dispatchers.Main.immediate + VpnPlanCommandExceptionHandler,
     )

@@ -9,7 +9,7 @@ import org.junit.Test
 class ProfileHealthStateTest {
     @After
     fun resetState() {
-        TcptunState.setStatus("Stopped")
+        TcptunState.setStatus(VpnStatus.Stopped)
     }
 
     @Test
@@ -43,14 +43,14 @@ class ProfileHealthStateTest {
         )
         assertTrue(TcptunState.state.value.profileHealth.isNotEmpty())
 
-        TcptunState.setStatus("Stopped")
+        TcptunState.setStatus(VpnStatus.Stopped)
 
         assertTrue(TcptunState.state.value.profileHealth.isEmpty())
     }
 
     @Test
     fun authoritativeBridgeSnapshotClearsOnlyRecoverableErrorsAndAdvancesCursor() {
-        TcptunState.setStatus("Running")
+        TcptunState.setStatus(VpnStatus.Running)
         val epoch = TcptunState.beginBridgeSession()
         assertTrue(
             TcptunState.reconcileBridgeStatusSnapshotForEpoch(
@@ -118,7 +118,7 @@ class ProfileHealthStateTest {
                 update = { it },
             ),
         )
-        assertEquals("Error", TcptunState.state.value.status)
+        assertEquals(VpnStatus.Error, TcptunState.state.value.status)
         assertEquals("terminal failure", TcptunState.state.value.lastError)
     }
 }

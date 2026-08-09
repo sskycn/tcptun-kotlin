@@ -63,7 +63,7 @@ class SensitiveTextTest {
             assertEquals("password=<redacted>", TcptunState.state.value.tcping.results.single().error)
             assertEquals("private_key=<redacted>", TcptunState.state.value.tcping.error)
         } finally {
-            TcptunState.setStatus("Stopped")
+            TcptunState.setStatus(VpnStatus.Stopped)
             TcptunState.clearLogs()
         }
     }

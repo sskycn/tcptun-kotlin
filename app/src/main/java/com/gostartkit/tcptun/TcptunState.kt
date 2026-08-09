@@ -4,7 +4,6 @@ import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToLong
 
@@ -41,7 +40,7 @@ data class TcptunDiagnostics(
 )
 
 data class TcptunRuntimeState(
-    val status: String = "Stopped",
+    val status: VpnStatus = VpnStatus.Stopped,
     val lastError: String = "",
     /**
      * True only after VPN/outbounds have finished starting or updating.
@@ -126,48 +125,6 @@ internal class UiVisibilityLease(
     }
 }
 
-internal data class BridgeStatusEvent(
-    val sessionId: Long,
-    val sequence: Long,
-    val state: String,
-    val reason: String,
-    val phase: String,
-    val listen: String,
-    val remote: String,
-    val outboundTag: String,
-    val activeConnections: Int,
-    val clientIps: List<String>,
-    val muxSources: Int,
-    val muxSessions: Int,
-    val muxStreams: Int,
-    val recoverable: Boolean,
-    val lastError: String,
-    val timestampMs: Long,
-) {
-    fun shouldLog(): Boolean {
-        return state.lowercase() in setOf(
-            "core_ready",
-            "running",
-            "degraded",
-            "reconnecting",
-            "remote_endpoints_changed",
-            "error",
-            "stopped",
-        )
-    }
-
-    fun logLine(): String {
-        val details = listOfNotNull(
-            reason.takeIf { it.isNotBlank() },
-            phase.takeIf { it.isNotBlank() },
-            remote.takeIf { it.isNotBlank() }?.let { "remote=$it" },
-            outboundTag.takeIf { it.isNotBlank() }?.let { "outbound=$it" },
-            lastError.takeIf { it.isNotBlank() }?.let { "error=$it" },
-        ).joinToString(" ")
-        return "tcptun status: ${state.ifBlank { "unknown" }}${details.takeIf { it.isNotBlank() }?.let { " $it" } ?: ""}"
-    }
-}
-
 object TcptunState {
     private const val MAX_LOGS = 80
     private const val MAX_LOG_LENGTH = 4_096
@@ -179,7 +136,7 @@ object TcptunState {
     private val _state = MutableStateFlow(TcptunRuntimeState())
     val state: StateFlow<TcptunRuntimeState> = _state.asStateFlow()
 
-    val status: String get() = state.value.status
+    val status: VpnStatus get() = state.value.status
     val lastError: String get() = state.value.lastError
     val diagnostics: TcptunDiagnostics get() = state.value.diagnostics
     val logs: List<String> get() = state.value.logs
@@ -280,20 +237,20 @@ object TcptunState {
     }
 
     @Synchronized
-    fun setStatus(value: String) {
+    fun setStatus(value: VpnStatus) {
         val current = _state.value
-        val terminal = value == "Stopped" || value == "Error"
-        val transitioning = value == "Starting" || value == "Stopping"
+        val terminal = value.isTerminal
+        val transitioning = value.isTransitioning
         _state.value = current.copy(
             status = value,
             // Bring-up / teardown is never TCPing-ready; only an explicit ready
             // mark after a successful start/update re-enables it.
             connectionsReady = if (terminal || transitioning) false else current.connectionsReady,
-            lastError = if (value == "Error") current.lastError else "",
+            lastError = if (value == VpnStatus.Error) current.lastError else "",
             diagnostics = if (terminal) {
                 terminalDiagnostics(current.diagnostics, value, current.lastError)
             } else {
-                current.diagnostics.copy(vpnStatus = value)
+                current.diagnostics.copy(vpnStatus = value.displayName)
             },
             tcping = if (terminal) TcpingProgress() else current.tcping,
             profileHealth = if (terminal) emptyMap() else current.profileHealth,
@@ -308,7 +265,7 @@ object TcptunState {
     }
 
     @Synchronized
-    internal fun errorIfStatus(expectedStatus: String, message: String): Boolean {
+    internal fun errorIfStatus(expectedStatus: VpnStatus, message: String): Boolean {
         if (_state.value.status != expectedStatus) return false
         error(message)
         return true
@@ -316,8 +273,8 @@ object TcptunState {
 
     @Synchronized
     internal fun restoreCommandStateIfStatus(
-        expectedStatus: String,
-        restoredStatus: String,
+        expectedStatus: VpnStatus,
+        restoredStatus: VpnStatus,
         restoredConnectionsReady: Boolean,
         restoredLastError: String = "",
     ): Boolean {
@@ -327,14 +284,14 @@ object TcptunState {
             status = restoredStatus,
             connectionsReady = restoredConnectionsReady,
             lastError = redactSensitiveText(restoredLastError.take(MAX_STATUS_FIELD_LENGTH)),
-            diagnostics = current.diagnostics.copy(vpnStatus = restoredStatus),
+            diagnostics = current.diagnostics.copy(vpnStatus = restoredStatus.displayName),
         )
         return true
     }
 
     @Synchronized
     internal fun restoreConnectionsReadyIfStatus(
-        expectedStatus: String,
+        expectedStatus: VpnStatus,
         restoredConnectionsReady: Boolean,
     ): Boolean {
         val current = _state.value
@@ -363,10 +320,10 @@ object TcptunState {
             .ifBlank { "Unknown error" }
         val current = _state.value
         _state.value = current.copy(
-            status = "Error",
+            status = VpnStatus.Error,
             connectionsReady = false,
             lastError = safeMessage,
-            diagnostics = terminalDiagnostics(current.diagnostics, "Error", safeMessage),
+            diagnostics = terminalDiagnostics(current.diagnostics, VpnStatus.Error, safeMessage),
             tcping = TcpingProgress(),
             profileHealth = emptyMap(),
         )
@@ -446,33 +403,7 @@ object TcptunState {
         }
         val event = runRecoverableCatching {
             requireSafeJsonNesting(eventJson)
-            val json = JSONObject(eventJson)
-            BridgeStatusEvent(
-                sessionId = json.optLong("session_id", 0),
-                sequence = json.optLong("sequence", 0),
-                state = json.optStatusString("state"),
-                reason = json.optStatusString("reason"),
-                phase = json.optStatusString("phase"),
-                listen = json.optStatusString("listen"),
-                remote = json.optStatusString("remote"),
-                outboundTag = json.optStatusString("outbound_tag"),
-                activeConnections = json.optInt("active_connections", 0).coerceAtLeast(0),
-                clientIps = normalizeClientIps(
-                    buildList {
-                        json.optJSONArray("client_ips")?.let { values ->
-                            for (index in 0 until minOf(values.length(), MAX_CLIENT_IP_CANDIDATES)) {
-                                add(values.optString(index))
-                            }
-                        }
-                    },
-                ),
-                muxSources = json.optInt("mux_sources", 0).coerceAtLeast(0),
-                muxSessions = json.optInt("mux_sessions", 0).coerceAtLeast(0),
-                muxStreams = json.optInt("mux_streams", 0).coerceAtLeast(0),
-                recoverable = json.optBoolean("recoverable", false),
-                lastError = redactSensitiveText(json.optStatusString("last_error")),
-                timestampMs = json.optLong("timestamp_ms", 0),
-            )
+            BridgeStatusJson.parse(eventJson).toEvent()
         }.getOrElse { err ->
             appendLog("tcptun status parse failed: ${err.message}")
             return null
@@ -696,14 +627,14 @@ object TcptunState {
     }
 
     private fun bridgeDisplayError(
-        runtimeStatus: String,
+        runtimeStatus: VpnStatus,
         currentError: String,
         bridgeStatus: String,
         bridgeLastError: String,
         eventState: String = "",
     ): String {
         // A bridge snapshot must never erase a terminal service/lifecycle error.
-        if (runtimeStatus == "Error") return currentError
+        if (runtimeStatus == VpnStatus.Error) return currentError
         val safeError = redactSensitiveText(bridgeLastError.take(MAX_STATUS_FIELD_LENGTH)).trim()
         if (
             (bridgeStatus == "Error" || eventState.equals("error", ignoreCase = true)) &&
@@ -717,14 +648,14 @@ object TcptunState {
 
     private fun terminalDiagnostics(
         diagnostics: TcptunDiagnostics,
-        status: String,
+        status: VpnStatus,
         error: String,
     ): TcptunDiagnostics = diagnostics.copy(
-        vpnStatus = status,
-        bridgeStatus = status,
-        bridgeEventState = status.lowercase(),
-        bridgeEventReason = if (status == "Error") "SERVICE_ERROR" else "None",
-        bridgeEventPhase = if (status == "Error") "Runtime stopped after an error" else "None",
+        vpnStatus = status.displayName,
+        bridgeStatus = status.displayName,
+        bridgeEventState = status.displayName.lowercase(),
+        bridgeEventReason = if (status == VpnStatus.Error) "SERVICE_ERROR" else "None",
+        bridgeEventPhase = if (status == VpnStatus.Error) "Runtime stopped after an error" else "None",
         bridgeListen = "",
         bridgeRemote = "",
         bridgeActiveConnections = 0,
@@ -733,7 +664,7 @@ object TcptunState {
         bridgeMuxSessions = 0,
         bridgeMuxStreams = 0,
         bridgeRecoverable = false,
-        bridgeLastError = if (status == "Error") error else "",
+        bridgeLastError = if (status == VpnStatus.Error) error else "",
         bridgeTimestampMs = 0,
         bridgeSessionId = 0,
         bridgeSequence = 0,
@@ -757,10 +688,4 @@ object TcptunState {
     private fun sanitizeErrorText(value: String): String =
         redactSensitiveText(value.take(MAX_STATUS_FIELD_LENGTH)).trim()
 
-    private fun JSONObject.optStatusString(name: String): String {
-        val value = opt(name)
-        if (value == null || value === JSONObject.NULL) return ""
-        if (value !is String) return ""
-        return value.take(MAX_STATUS_FIELD_LENGTH).trim()
-    }
 }

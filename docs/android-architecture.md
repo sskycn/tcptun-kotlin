@@ -42,6 +42,35 @@ existing local persistence layer. Flow events and diagnostics are not persisted 
 data. No protocol, profile, or URI schema is defined in this Android architecture document;
 see the focused documents below.
 
+Application lifecycle state is represented by `VpnStatus`; bridge wire states are converted
+from strings only at the bridge boundary. UI code accesses profile persistence through
+`ProfileRepository`, while `RuntimeSettingsRepository` owns the durable runtime-settings
+schema. `TcptunVpnService` retains compatibility forwarding methods for device tests and old
+call sites, but it no longer owns either persistence implementation.
+
+Compose feature pages are split by responsibility (`SettingsPage`, `FlowAnalysisPage`,
+`RouteManagementPage`, and `EditProfilePage`). `MainActivity` owns Android activity lifecycle;
+`TcptunScreen` is the root screen coordinator. Mutually exclusive sub-pages use the typed
+`MainDestination` state rather than independent booleans. All UI continues to use Material 3
+components.
+
+Foreground notification construction and channel management belong to
+`VpnNotificationController`. Incoming service actions are converted to `VpnServiceCommand`
+before lifecycle dispatch so policy code does not branch on arbitrary action strings.
+Desired-running-plan persistence, SOCKS5 probe handshakes, underlying-network callback
+ownership, and delayed member-health scheduling are isolated in focused collaborators. The
+Gradle `check` lifecycle enforces hotspot line-count baselines so these responsibilities do
+not drift back into `MainActivity` or `TcptunVpnService`. It also caps individual Service
+lifecycle functions at 180 lines so startup, connection mutation, rollback, and teardown stay
+as named transaction stages instead of growing back into monolithic methods.
+
+`VpnServiceIntents` owns the validated command payload and extras schema while the Service
+companion keeps source-compatible forwarding APIs. `VpnHealthCheckRequests` owns process-wide
+refresh flags and hands requests to only the currently installed Service callbacks.
+`BridgeStatusJson` is the single bounded parser for callback events, reconciled snapshots,
+client-IP refreshes, and per-outbound health records; it preserves field-presence semantics
+when a partial snapshot must not erase newer diagnostics.
+
 ## Testing boundaries
 
 The production seam is the existing `TcptunBridge` interface:

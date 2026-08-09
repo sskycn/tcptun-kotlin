@@ -63,7 +63,9 @@ class LiveConnectivityTest {
             repeat(2) { cycle ->
                 TcptunState.clearLogs()
                 ContextCompat.startForegroundService(context, TcptunVpnService.startIntent(context, profile))
-                waitUntil("VPN cycle ${cycle + 1} reaches Running") { TcptunState.status == "Running" }
+                waitUntil("VPN cycle ${cycle + 1} reaches Running") {
+                    TcptunState.status == VpnStatus.Running
+                }
                 waitUntil("native TUN bridge reaches Running") {
                     TcptunState.diagnostics.bridgeStatus == "Running"
                 }
@@ -97,13 +99,13 @@ class LiveConnectivityTest {
                 )
                 context.startService(TcptunVpnService.stopIntent(context))
                 waitUntil("VPN cycle ${cycle + 1} reaches Stopped", 15_000) {
-                    TcptunState.status == "Stopped"
+                    TcptunState.status == VpnStatus.Stopped
                 }
                 Thread.sleep(300)
             }
         } finally {
             context.startService(TcptunVpnService.stopIntent(context))
-            waitUntil("VPN cleanup", 10_000) { TcptunState.status != "Stopping" }
+            waitUntil("VPN cleanup", 10_000) { TcptunState.status != VpnStatus.Stopping }
             TcptunVpnService.writeRuntimeSettings(context, originalSettings)
             runShell("appops set ${context.packageName} ACTIVATE_VPN default")
         }

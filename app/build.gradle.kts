@@ -1,5 +1,6 @@
 import java.util.Properties
 import org.gradle.api.tasks.bundling.Zip
+import org.gradle.api.tasks.Exec
 
 plugins {
     alias(libs.plugins.android.application)
@@ -159,4 +160,17 @@ tasks.configureEach {
     if (name == "bundleRelease") {
         finalizedBy(packageReleaseNativeSymbols)
     }
+}
+
+val maintainabilityCheck = tasks.register<Exec>("maintainabilityCheck") {
+    group = "verification"
+    description = "Prevents known Kotlin hotspots from growing beyond their refactoring baselines."
+    workingDir(rootProject.projectDir)
+    commandLine("bash", "scripts/check-maintainability.sh")
+    inputs.dir(layout.projectDirectory.dir("src/main/java"))
+    inputs.file(rootProject.layout.projectDirectory.file("scripts/check-maintainability.sh"))
+}
+
+tasks.named("check").configure {
+    dependsOn(maintainabilityCheck, "compileDebugAndroidTestKotlin")
 }

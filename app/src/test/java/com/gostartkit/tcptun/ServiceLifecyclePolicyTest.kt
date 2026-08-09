@@ -256,7 +256,7 @@ class ServiceLifecyclePolicyTest {
     @Test
     fun `healthy authoritative snapshot restores actions only for current live runtime`() {
         val healthy = canRestoreConnectionsReady(
-            runtimeStatus = "Running",
+            runtimeStatus = VpnStatus.Running,
             bridgeStatus = "Running",
             bridgeEventState = "upstream_connected",
             localProxyReachable = true,
@@ -271,7 +271,7 @@ class ServiceLifecyclePolicyTest {
 
         assertFalse(
             canRestoreConnectionsReady(
-                runtimeStatus = "Running",
+                runtimeStatus = VpnStatus.Running,
                 bridgeStatus = "Running",
                 bridgeEventState = "upstream_connected",
                 localProxyReachable = false,
@@ -285,7 +285,7 @@ class ServiceLifecyclePolicyTest {
         )
         assertFalse(
             canRestoreConnectionsReady(
-                runtimeStatus = "Running",
+                runtimeStatus = VpnStatus.Running,
                 bridgeStatus = "Running",
                 bridgeEventState = "upstream_connected",
                 localProxyReachable = true,
@@ -299,7 +299,7 @@ class ServiceLifecyclePolicyTest {
         )
         assertFalse(
             canRestoreConnectionsReady(
-                runtimeStatus = "Running",
+                runtimeStatus = VpnStatus.Running,
                 bridgeStatus = "Running",
                 bridgeEventState = "upstream_connected",
                 localProxyReachable = true,
@@ -319,7 +319,7 @@ class ServiceLifecyclePolicyTest {
             .forEach { eventState ->
                 assertFalse(
                     canRestoreConnectionsReady(
-                        runtimeStatus = "Running",
+                        runtimeStatus = VpnStatus.Running,
                         bridgeStatus = "Running",
                         bridgeEventState = eventState,
                         localProxyReachable = true,
