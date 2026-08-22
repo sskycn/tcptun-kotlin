@@ -216,37 +216,37 @@ internal val AppConfigSaver = Saver<AppConfig, String>(
     restore = { encoded -> decodePendingProfile(encoded) },
 )
 internal val RuntimeSettingsSaver = Saver<RuntimeSettings, String>(
-    save = { settings ->
-        JSONObject()
-            .put("mtu", settings.mtu)
-            .put("powerSavingMode", settings.powerSavingMode)
-            .put("logLevel", settings.logLevel)
-            .put("socksPort", settings.socksPort)
-            .put("localProxyProtocol", settings.localProxyProtocol)
-            .put("socksListenAll", settings.socksListenAll)
-            .put("routeLocalProxyTraffic", settings.routeLocalProxyTraffic)
-            .put("defaultOutbound", settings.defaultOutbound)
-            .put("flowAnalysisApp", settings.flowAnalysisApp)
-            .toString()
-    },
-    restore = { encoded ->
-        runRecoverableCatching {
-            requireSafeJsonNesting(encoded)
-            val json = JSONObject(encoded)
-            RuntimeSettings(
-                mtu = json.optInt("mtu", RuntimeSettingsDefaults.VpnMtu),
-                powerSavingMode = json.optBoolean("powerSavingMode", true),
-                logLevel = json.optString("logLevel", DefaultLogLevel),
-                socksPort = json.optInt("socksPort", RuntimeSettingsDefaults.SocksPort),
-                localProxyProtocol = json.optString("localProxyProtocol", DefaultLocalProxyProtocol),
-                socksListenAll = json.optBoolean("socksListenAll", false),
-                routeLocalProxyTraffic = json.optBoolean("routeLocalProxyTraffic", false),
-                defaultOutbound = json.optString("defaultOutbound", DefaultOutboundDynamicPool),
-                flowAnalysisApp = json.optString("flowAnalysisApp"),
-            )
-        }.getOrNull()
-    },
+    save = { settings -> encodeRuntimeSettingsSavedState(settings) },
+    restore = ::decodeRuntimeSettingsSavedState,
 )
+
+internal fun encodeRuntimeSettingsSavedState(settings: RuntimeSettings): String = JSONObject()
+    .put("mtu", settings.mtu)
+    .put("powerSavingMode", settings.powerSavingMode)
+    .put("logLevel", settings.logLevel)
+    .put("socksPort", settings.socksPort)
+    .put("localProxyProtocol", settings.localProxyProtocol)
+    .put("socksListenAll", settings.socksListenAll)
+    .put("routeLocalProxyTraffic", settings.routeLocalProxyTraffic)
+    .put("defaultOutbound", settings.defaultOutbound)
+    .put("flowAnalysisApp", settings.flowAnalysisApp)
+    .toString()
+
+internal fun decodeRuntimeSettingsSavedState(encoded: String): RuntimeSettings? = runRecoverableCatching {
+    requireSafeJsonNesting(encoded)
+    val json = JSONObject(encoded)
+    RuntimeSettings(
+        mtu = json.optInt("mtu", RuntimeSettingsDefaults.VpnMtu),
+        powerSavingMode = json.optBoolean("powerSavingMode", true),
+        logLevel = json.optString("logLevel", DefaultLogLevel),
+        socksPort = json.optInt("socksPort", RuntimeSettingsDefaults.SocksPort),
+        localProxyProtocol = json.optString("localProxyProtocol", DefaultLocalProxyProtocol),
+        socksListenAll = json.optBoolean("socksListenAll", false),
+        routeLocalProxyTraffic = json.optBoolean("routeLocalProxyTraffic", false),
+        defaultOutbound = json.optString("defaultOutbound", DefaultOutboundDynamicPool),
+        flowAnalysisApp = json.optString("flowAnalysisApp"),
+    )
+}.getOrNull()
 internal val ManagedRouteRuleSaver = Saver<ManagedRouteRule?, String>(
     save = { rule ->
         rule?.let {

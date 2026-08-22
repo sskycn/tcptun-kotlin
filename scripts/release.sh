@@ -114,7 +114,7 @@ current_branch=$(git rev-parse --abbrev-ref HEAD) || die "failed to read current
 
 [ -z "$(git status --porcelain)" ] || die "working tree is dirty; commit or stash changes first"
 
-run ./scripts/build-androidbridge.sh --verify-lock
+run ./scripts/build-androidbridge.sh --verify-release
 
 run git fetch "$remote" --tags
 

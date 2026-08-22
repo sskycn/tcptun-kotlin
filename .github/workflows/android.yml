@@ -107,4 +107,4 @@ jobs:
       - name: Run critical instrumentation tests
         run: >-
           ./gradlew :app:tcptunCiApi35DebugAndroidTest
-          -Pandroid.testInstrumentationRunnerArguments.class=com.tcptun.client.VpnServiceLifecycleTest,com.tcptun.client.AndroidBridgeContractTest,com.tcptun.client.BridgeStatusJsonAndroidTest,com.tcptun.client.ProfileSecretSerializationAndroidTest,com.tcptun.client.DesiredRunningPlanStoreEncryptionTest,com.tcptun.client.DesiredRunningPlanMigrationAndroidTest,com.tcptun.client.SecretAtRestAndroidTest
+          -Pandroid.testInstrumentationRunnerArguments.class=com.tcptun.client.VpnServiceLifecycleTest,com.tcptun.client.AndroidBridgeContractTest,com.tcptun.client.BridgeStatusJsonAndroidTest,com.tcptun.client.ProfileSecretSerializationAndroidTest,com.tcptun.client.DesiredRunningPlanStoreEncryptionTest,com.tcptun.client.DesiredRunningPlanMigrationAndroidTest,com.tcptun.client.SecretAtRestAndroidTest,com.tcptun.client.RuntimeSettingsRecreationAndroidTest

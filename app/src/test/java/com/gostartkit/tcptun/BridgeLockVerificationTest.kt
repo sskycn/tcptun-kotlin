@@ -80,6 +80,21 @@ class BridgeLockVerificationTest {
         assertFalse(process.waitFor() == 0)
     }
 
+    @Test
+    fun localPinnedCommitMissingFromRemoteFailsReleasePreflight() {
+        val fixture = createRemotePreflightFixture()
+
+        assertFalse(releasePreflight(fixture) == 0)
+    }
+
+    @Test
+    fun remoteContainingPinnedCommitPassesReleasePreflight() {
+        val fixture = createRemotePreflightFixture()
+        git(fixture.core, "push", "origin", "HEAD:refs/heads/main")
+
+        assertEquals(0, releasePreflight(fixture))
+    }
+
     private fun createAar(sha: String, api: String, dirty: Boolean): File {
         val aar = temporaryFolder.newFile("bridge-${temporaryFolder.root.listFiles()?.size}.aar")
         ZipOutputStream(aar.outputStream()).use { zip ->
@@ -106,6 +121,57 @@ class BridgeLockVerificationTest {
     ).redirectErrorStream(true).start().let { process ->
         process.inputStream.bufferedReader().readText()
         process.waitFor()
+    }
+
+    private data class RemotePreflightFixture(
+        val root: File,
+        val core: File,
+        val lock: File,
+    )
+
+    private fun createRemotePreflightFixture(): RemotePreflightFixture {
+        val root = repositoryRoot()
+        val core = temporaryFolder.newFolder("release-core-${temporaryFolder.root.listFiles()?.size}")
+        val remote = temporaryFolder.newFolder("release-remote-${temporaryFolder.root.listFiles()?.size}.git")
+        git(core, "init")
+        git(core, "config", "user.name", "Bridge Lock Test")
+        git(core, "config", "user.email", "bridge-lock@example.invalid")
+        File(core, "core.txt").writeText("published core\n")
+        git(core, "add", "core.txt")
+        git(core, "commit", "-m", "test core")
+        git(remote, "init", "--bare")
+        git(core, "remote", "add", "origin", remote.absolutePath)
+        val sha = git(core, "rev-parse", "HEAD").output.trim()
+        val lock = temporaryFolder.newFile(
+            "bridge-${temporaryFolder.root.listFiles()?.size}-${sha.take(8)}.lock",
+        ).apply {
+            writeText("coreCommit=$sha\nbridgeApiVersion=1\n")
+        }
+        return RemotePreflightFixture(root, core, lock)
+    }
+
+    private fun releasePreflight(fixture: RemotePreflightFixture): Int = ProcessBuilder(
+        "bash",
+        File(fixture.root, "scripts/build-androidbridge.sh").absolutePath,
+        "--verify-release",
+    ).redirectErrorStream(true).apply {
+        environment()["TCPTUN_GO_DIR"] = fixture.core.absolutePath
+        environment()["BRIDGE_LOCK_FILE"] = fixture.lock.absolutePath
+    }.start().let { process ->
+        process.inputStream.bufferedReader().readText()
+        process.waitFor()
+    }
+
+    private data class CommandResult(val exitCode: Int, val output: String)
+
+    private fun git(directory: File, vararg arguments: String): CommandResult {
+        val process = ProcessBuilder(listOf("git", "-C", directory.absolutePath) + arguments)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().readText()
+        val exitCode = process.waitFor()
+        check(exitCode == 0) { "git ${arguments.joinToString(" ")} failed: $output" }
+        return CommandResult(exitCode, output)
     }
 
     private fun loadLock(root: File): Properties = Properties().apply {

@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERIFY_LOCK_ONLY=false
-if [ "${1:-}" = "--verify-lock" ]; then
-  VERIFY_LOCK_ONLY=true
-  shift
-fi
-[ "$#" -eq 0 ] || { echo "usage: scripts/build-androidbridge.sh [--verify-lock]" >&2; exit 2; }
+PREFLIGHT_MODE=none
+case "${1:-}" in
+  --verify-lock) PREFLIGHT_MODE=local; shift ;;
+  --verify-release) PREFLIGHT_MODE=release; shift ;;
+esac
+[ "$#" -eq 0 ] || {
+  echo "usage: scripts/build-androidbridge.sh [--verify-lock|--verify-release]" >&2
+  exit 2
+}
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TCPTUN_GO_DIR="${TCPTUN_GO_DIR:-"$ROOT_DIR/../tcptun-go"}"
 OUT="${ANDROIDBRIDGE_AAR_OUT:-"$ROOT_DIR/app/libs/androidbridge.aar"}"
-LOCK_FILE="$ROOT_DIR/bridge.lock"
+LOCK_FILE="${BRIDGE_LOCK_FILE:-$ROOT_DIR/bridge.lock}"
 
 lock_property() {
   local key="$1"
@@ -50,6 +53,10 @@ CORE_COMMIT="$(git -C "$TCPTUN_GO_DIR" rev-parse HEAD)"
 CORE_STATUS="$(git -C "$TCPTUN_GO_DIR" status --porcelain --untracked-files=normal)"
 CORE_DIRTY=false
 [ -z "$CORE_STATUS" ] || CORE_DIRTY=true
+if [ "$PREFLIGHT_MODE" = release ] && [ "${ALLOW_UNPINNED_BRIDGE:-0}" = "1" ]; then
+  echo "ALLOW_UNPINNED_BRIDGE is forbidden for release verification" >&2
+  exit 1
+fi
 if [ "${ALLOW_UNPINNED_BRIDGE:-0}" != "1" ]; then
   [ "$CORE_COMMIT" = "$PINNED_CORE_COMMIT" ] || {
     echo "tcptun-go HEAD $CORE_COMMIT does not match bridge.lock $PINNED_CORE_COMMIT" >&2
@@ -72,7 +79,31 @@ if [ "${ALLOW_UNPINNED_BRIDGE:-0}" != "1" ] && [ "$BRIDGE_API_VERSION" != "$PINN
   exit 1
 fi
 
-if [ "$VERIFY_LOCK_ONLY" = true ]; then
+if [ "$PREFLIGHT_MODE" = release ]; then
+  CORE_REMOTE="${TCPTUN_GO_REMOTE:-origin}"
+  [[ "$CORE_REMOTE" =~ ^[A-Za-z0-9._-]+$ ]] || {
+    echo "TCPTUN_GO_REMOTE must name a configured Git remote" >&2
+    exit 1
+  }
+  git -C "$TCPTUN_GO_DIR" fetch --quiet --prune "$CORE_REMOTE" || {
+    echo "tcptun-go remote $CORE_REMOTE is unavailable; release cannot verify bridge.lock" >&2
+    exit 1
+  }
+  REMOTE_CONTAINS_PIN=false
+  while IFS= read -r remote_ref; do
+    if git -C "$TCPTUN_GO_DIR" merge-base --is-ancestor "$PINNED_CORE_COMMIT" "$remote_ref"; then
+      REMOTE_CONTAINS_PIN=true
+      break
+    fi
+  done < <(git -C "$TCPTUN_GO_DIR" for-each-ref \
+    --format='%(refname)' "refs/remotes/$CORE_REMOTE/")
+  [ "$REMOTE_CONTAINS_PIN" = true ] || {
+    echo "bridge.lock coreCommit $PINNED_CORE_COMMIT is not published on remote $CORE_REMOTE" >&2
+    exit 1
+  }
+fi
+
+if [ "$PREFLIGHT_MODE" != none ]; then
   echo "Verified tcptun-go checkout: core=$CORE_COMMIT dirty=$CORE_DIRTY api=$BRIDGE_API_VERSION"
   exit 0
 fi

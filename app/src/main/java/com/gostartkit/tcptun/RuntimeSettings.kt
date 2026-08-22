@@ -71,6 +71,15 @@ internal fun requireSafeRuntimeSettings(settings: RuntimeSettings) {
     }
 }
 
+/** Preserves a restored non-secret draft while hydrating credentials from encrypted storage. */
+internal fun hydrateRuntimeSettingsCredentials(
+    restoredDraft: RuntimeSettings,
+    persisted: RuntimeSettings,
+): RuntimeSettings = restoredDraft.copy(
+    socksUsername = persisted.socksUsername,
+    socksPassword = persisted.socksPassword,
+)
+
 internal fun normalizeFlowAnalysisApp(value: String): String {
     if (value.length > MaxFlowAnalysisAppLength) return ""
     return value.trim().takeIf(AndroidPackageNamePattern::matches).orEmpty()
