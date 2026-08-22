@@ -75,6 +75,7 @@ object ProfileStore {
     private data class EncodedState(
         val profiles: String,
         val activeIds: String,
+        val secrets: String,
     )
 
     private const val PREFS = "tcptun"
@@ -83,7 +84,9 @@ object ProfileStore {
     private const val KEY_SELECTED = "selectedProfileId"
     private const val KEY_ENABLED = "enabledProfileIds"
     private const val KEY_ACTIVE = "activeProfileIds"
+    private const val KEY_SECRETS_ID = "profileSecretsId"
     private const val STATE_VERSION_INDEPENDENT_OUTBOUNDS = 2
+    private const val STATE_VERSION_ENCRYPTED_SECRETS = 3
     private val mutationRevision = AtomicLong()
 
     internal fun currentMutationRevision(): Long = mutationRevision.get()
@@ -138,6 +141,29 @@ object ProfileStore {
             requireSafeJsonNesting(raw)
             val arr = JSONArray(raw)
             require(arr.length() <= MaxStoredProfileCount) { "too many stored profiles" }
+            val stateVersion = prefs.getInt(KEY_STATE_VERSION, 0)
+            val secretsById = if (stateVersion >= STATE_VERSION_ENCRYPTED_SECRETS) {
+                val secretsId = prefs.getString(KEY_SECRETS_ID, null)
+                    ?: throw IllegalStateException("encrypted profile data reference is missing")
+                val encrypted = EncryptedSecretStore(context).read(secretsId)
+                    ?: throw IllegalStateException("encrypted profile data is missing")
+                require(encrypted.length <= MaxStoredProfilesLength) { "encrypted profile data is too large" }
+                requireSafeJsonNesting(encrypted)
+                val secrets = JSONArray(encrypted)
+                require(secrets.length() <= MaxStoredProfileCount) { "too many encrypted profiles" }
+                require(secrets.length() == arr.length()) { "encrypted profile count does not match public data" }
+                buildMap {
+                    for (index in 0 until secrets.length()) {
+                        val value = secrets.optJSONObject(index)
+                            ?: throw IllegalStateException("encrypted profile entry is malformed")
+                        val id = value.optString("id").takeIf(String::isNotBlank)
+                            ?: throw IllegalStateException("encrypted profile ID is missing")
+                        require(put(id, value) == null) { "encrypted profile IDs are duplicated" }
+                    }
+                }
+            } else {
+                emptyMap()
+            }
             var repaired = false
             val seenIds = mutableSetOf<String>()
             val profiles = buildList {
@@ -147,7 +173,15 @@ object ProfileStore {
                         repaired = true
                         continue
                     }
-                    val decoded = runRecoverableCatching { AppConfig.fromJson(json) }.getOrNull()
+                    val secrets = if (stateVersion >= STATE_VERSION_ENCRYPTED_SECRETS) {
+                        secretsById[json.optString("id")]
+                            ?: throw IllegalStateException("encrypted profile entry is missing")
+                    } else {
+                        null
+                    }
+                    val decoded = runRecoverableCatching {
+                        AppConfig.fromJson(json).withStorageSecrets(secrets)
+                    }.getOrNull()
                     if (decoded == null || !decoded.hasSafeStorageSize() ||
                         (decoded.serverHost.isBlank() && decoded.rawConfigJson.isBlank())
                     ) {
@@ -162,7 +196,6 @@ object ProfileStore {
                     add(decoded.copy(id = normalizedId))
                 }
             }
-            val stateVersion = prefs.getInt(KEY_STATE_VERSION, 0)
             val storedActive = if (stateVersion >= STATE_VERSION_INDEPENDENT_OUTBOUNDS) {
                 val encoded = prefs.getString(KEY_ACTIVE, null)
                     ?: throw IllegalStateException("active profile data is missing")
@@ -197,7 +230,7 @@ object ProfileStore {
             if (
                 repaired ||
                 profiles.size != arr.length() ||
-                stateVersion < STATE_VERSION_INDEPENDENT_OUTBOUNDS ||
+                stateVersion < STATE_VERSION_ENCRYPTED_SECRETS ||
                 !prefs.contains(KEY_ACTIVE)
             ) {
                 save(context, state).getOrThrow()
@@ -228,12 +261,18 @@ object ProfileStore {
         val knownIds = normalizedProfiles.mapTo(mutableSetOf(), AppConfig::id)
         val normalizedActiveIds = state.activeIds.filterTo(linkedSetOf()) { it in knownIds }
         val arr = JSONArray()
-        normalizedProfiles.forEach { arr.put(it.toJson()) }
+        val secrets = JSONArray()
+        normalizedProfiles.forEach {
+            arr.put(it.toPublicStorageJson())
+            secrets.put(it.toSecretStorageJson())
+        }
         val active = JSONArray()
         normalizedProfiles.filter { it.id in normalizedActiveIds }.forEach { active.put(it.id) }
         val encodedProfiles = arr.toString()
         require(encodedProfiles.length <= MaxStoredProfilesLength) { "stored profile data is too large" }
-        return EncodedState(encodedProfiles, active.toString())
+        val encodedSecrets = secrets.toString()
+        require(encodedSecrets.length <= MaxStoredProfilesLength) { "encrypted profile data is too large" }
+        return EncodedState(encodedProfiles, active.toString(), encodedSecrets)
     }
 
     private fun writeState(context: Context, state: ProfilesState) {
@@ -241,15 +280,40 @@ object ProfileStore {
     }
 
     private fun writeEncodedState(context: Context, encoded: EncodedState) {
-        val committed = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putInt(KEY_STATE_VERSION, STATE_VERSION_INDEPENDENT_OUTBOUNDS)
-            .putString(KEY_PROFILES, encoded.profiles)
-            .putString(KEY_ACTIVE, encoded.activeIds)
-            .remove(KEY_SELECTED)
-            .remove(KEY_ENABLED)
-            .commit()
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val previousSecretsId = prefs.getString(KEY_SECRETS_ID, null).orEmpty()
+        val secretsId = "profiles.${UUID.randomUUID()}"
+        val secretStore = EncryptedSecretStore(context)
+        // The public pointer changes only after ciphertext has been written and read back.
+        val committed = afterVerifiedSecretWrite(
+            writeAndVerify = { secretStore.writeVerified(secretsId, encoded.secrets) },
+            replacePlaintext = {
+                prefs.edit()
+                    .putInt(KEY_STATE_VERSION, STATE_VERSION_ENCRYPTED_SECRETS)
+                    .putString(KEY_PROFILES, encoded.profiles)
+                    .putString(KEY_ACTIVE, encoded.activeIds)
+                    .putString(KEY_SECRETS_ID, secretsId)
+                    .remove(KEY_SELECTED)
+                    .remove(KEY_ENABLED)
+                    .commit()
+            },
+        )
         check(committed) { "failed to persist profile state" }
+        removeLegacySingleProfilePlaintext(prefs)
+        if (previousSecretsId.isNotBlank() && previousSecretsId != secretsId) {
+            runRecoverableCatching { secretStore.remove(previousSecretsId) }
+        }
         mutationRevision.incrementAndGet()
+    }
+
+    private fun removeLegacySingleProfilePlaintext(prefs: android.content.SharedPreferences) {
+        val legacyKeys = listOf(
+            "serverHost", "serverPort", "protocol", "transport", "token", "sni", "path", "tls", "mux",
+        )
+        if (legacyKeys.none(prefs::contains)) return
+        val editor = prefs.edit()
+        legacyKeys.forEach(editor::remove)
+        check(editor.commit()) { "legacy profile plaintext could not be removed" }
     }
 
     @Synchronized
@@ -417,4 +481,3 @@ object ProfileStore {
         return id
     }
 }
-

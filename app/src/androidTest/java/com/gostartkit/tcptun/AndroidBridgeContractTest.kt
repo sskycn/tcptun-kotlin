@@ -40,6 +40,16 @@ class AndroidBridgeContractTest {
     }
 
     @Test
+    fun reflectionBridgeResolvesTheCompleteEngineApiAtFirstUse() {
+        val bridge = ReflectionTcptunBridge()
+        try {
+            assertEquals("Stopped", bridge.status())
+        } finally {
+            bridge.close()
+        }
+    }
+
+    @Test
     fun currentBridgeExposesOptionalApplicationIdentityProvider() {
         val engine = Androidbridge.newEngine()
         try {

@@ -135,7 +135,7 @@ grep -Fx "releaseVersionCode=${version_code}" gradle.properties >/dev/null || \
 
 if [ "$run_tests" -eq 1 ]; then
 	run ./scripts/build-androidbridge.sh
-	run ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+	run ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:bundleRelease
 fi
 
 run git add gradle.properties

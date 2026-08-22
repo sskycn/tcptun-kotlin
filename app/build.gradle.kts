@@ -59,6 +59,7 @@ android {
         versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("boolean", "BENCHMARK", "false")
         ndk {
             abiFilters += targetAbi?.let(::listOf) ?: supportedAbis
         }
@@ -94,6 +95,13 @@ android {
                 "src/main/keepRules/rules.keep",
             )
         }
+        create("benchmark") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+            isDebuggable = false
+            buildConfigField("boolean", "BENCHMARK", "true")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
@@ -112,6 +120,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -131,6 +140,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.mlkit.barcode.scanning)
+    implementation(libs.androidx.profileinstaller)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
@@ -173,4 +183,39 @@ val maintainabilityCheck = tasks.register<Exec>("maintainabilityCheck") {
 
 tasks.named("check").configure {
     dependsOn(maintainabilityCheck, "compileDebugAndroidTestKotlin")
+}
+
+val bridgeAar = layout.projectDirectory.file("libs/androidbridge.aar")
+val expectedBridgeApiVersion = 1
+val expectedCoreCommit = providers.gradleProperty("expectedCoreCommit")
+    .orElse(providers.environmentVariable("EXPECTED_CORE_COMMIT"))
+
+fun registerBridgeVerification(name: String, strict: Boolean) = tasks.register<Exec>(name) {
+    group = "verification"
+    description = if (strict) {
+        "Verifies androidbridge.aar provenance and API compatibility."
+    } else {
+        "Warns when the debug androidbridge.aar has unverifiable provenance."
+    }
+    inputs.file(bridgeAar).optional()
+    inputs.property("expectedBridgeApiVersion", expectedBridgeApiVersion)
+    inputs.property("expectedCoreCommit", expectedCoreCommit.orNull.orEmpty())
+    commandLine(
+        "bash",
+        rootProject.layout.projectDirectory.file("scripts/verify-androidbridge.sh").asFile.absolutePath,
+        if (strict) "strict" else "warning",
+        bridgeAar.asFile.absolutePath,
+        expectedBridgeApiVersion.toString(),
+        expectedCoreCommit.orNull.orEmpty(),
+    )
+}
+
+val verifyAndroidBridge = registerBridgeVerification("verifyAndroidBridge", strict = true)
+val verifyAndroidBridgeDebug = registerBridgeVerification("verifyAndroidBridgeDebug", strict = false)
+
+tasks.configureEach {
+    when (name) {
+        "assembleRelease", "bundleRelease" -> dependsOn(verifyAndroidBridge)
+        "assembleDebug", "testDebugUnitTest", "lintDebug" -> dependsOn(verifyAndroidBridgeDebug)
+    }
 }

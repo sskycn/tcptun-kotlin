@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.math.roundToLong
 
 data class TcptunDiagnostics(
@@ -53,9 +55,12 @@ data class TcptunRuntimeState(
     val profileHealth: Map<String, ProfileHealth> = emptyMap(),
     val logs: List<String> = emptyList(),
     val flowAnalysisApp: String = "",
-    val flowEvents: List<FlowAnalysisEvent> = emptyList(),
-    val flowDroppedEvents: Long = 0,
     val profileStateRevision: Long = 0,
+)
+
+data class FlowAnalysisState(
+    val events: List<FlowAnalysisEvent> = emptyList(),
+    val droppedEvents: Long = 0,
 )
 
 enum class ProfileHealthStatus {
@@ -131,10 +136,13 @@ object TcptunState {
     private const val MAX_STATUS_EVENT_JSON_LENGTH = 64 * 1024
     private const val MAX_STATUS_FIELD_LENGTH = 4 * 1024
     private const val MAX_FLOW_EVENTS = 256
+    private const val FLOW_PUBLISH_INTERVAL_MILLIS = 100L
     private const val LOG_TAG = "TcpTun"
 
     private val _state = MutableStateFlow(TcptunRuntimeState())
     val state: StateFlow<TcptunRuntimeState> = _state.asStateFlow()
+    private val _flowAnalysis = MutableStateFlow(FlowAnalysisState())
+    val flowAnalysis: StateFlow<FlowAnalysisState> = _flowAnalysis.asStateFlow()
 
     val status: VpnStatus get() = state.value.status
     val lastError: String get() = state.value.lastError
@@ -146,6 +154,12 @@ object TcptunState {
     private var bridgeSequence = -1L
     private var flowSessionId = -1L
     private var flowSequence = -1L
+    private var bridgeDroppedFlowEvents = 0L
+    private val flowEvents = BoundedRingBuffer<FlowAnalysisEvent>(MAX_FLOW_EVENTS)
+    private val flowPublishScheduled = AtomicBoolean()
+    private val flowPublishExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
+        Thread(runnable, "tcptun-flow-publisher").apply { isDaemon = true }
+    }
     private var tcpingRequestId = 0L
     private val uiVisibility = UiVisibilityTracker()
 
@@ -202,11 +216,10 @@ object TcptunState {
         if (normalized == current.flowAnalysisApp) return
         flowSessionId = -1L
         flowSequence = -1L
-        _state.value = current.copy(
-            flowAnalysisApp = normalized,
-            flowEvents = emptyList(),
-            flowDroppedEvents = 0,
-        )
+        flowEvents.clear()
+        bridgeDroppedFlowEvents = 0L
+        _flowAnalysis.value = FlowAnalysisState()
+        _state.value = current.copy(flowAnalysisApp = normalized)
     }
 
     @Synchronized
@@ -223,17 +236,35 @@ object TcptunState {
         }
         flowSessionId = event.sessionId
         flowSequence = event.sequence
-        _state.value = current.copy(
-            flowEvents = (current.flowEvents + event).takeLast(MAX_FLOW_EVENTS),
-            flowDroppedEvents = maxOf(current.flowDroppedEvents, event.droppedEvents),
-        )
+        flowEvents.append(event)
+        bridgeDroppedFlowEvents = maxOf(bridgeDroppedFlowEvents, event.droppedEvents)
+        scheduleFlowSnapshot()
         return event
+    }
+
+    private fun scheduleFlowSnapshot() {
+        if (!flowPublishScheduled.compareAndSet(false, true)) return
+        flowPublishExecutor.schedule(
+            { publishFlowEventsNow() },
+            FLOW_PUBLISH_INTERVAL_MILLIS,
+            TimeUnit.MILLISECONDS,
+        )
+    }
+
+    @Synchronized
+    internal fun publishFlowEventsNow() {
+        _flowAnalysis.value = FlowAnalysisState(
+            events = flowEvents.snapshot(),
+            droppedEvents = maxOf(bridgeDroppedFlowEvents, flowEvents.droppedCount),
+        )
+        flowPublishScheduled.set(false)
     }
 
     @Synchronized
     fun clearFlowEvents() {
-        val current = _state.value
-        _state.value = current.copy(flowEvents = emptyList(), flowDroppedEvents = 0)
+        flowEvents.clear()
+        bridgeDroppedFlowEvents = 0L
+        _flowAnalysis.value = FlowAnalysisState()
     }
 
     @Synchronized

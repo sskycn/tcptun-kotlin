@@ -2,6 +2,9 @@ package com.tcptun.client
 
 import android.content.Context
 import android.content.SharedPreferences
+import org.json.JSONObject
+import java.security.SecureRandom
+import java.util.UUID
 
 internal object RuntimeSettingsDefaults {
     const val LocalSocksHost = "127.0.0.1"
@@ -27,6 +30,46 @@ data class RuntimeSettings(
 
 private val AndroidPackageNamePattern = Regex("^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+$")
 private const val MaxFlowAnalysisAppLength = 255
+private const val GeneratedLanProxyPasswordLength = 32
+private const val LanProxyPasswordAlphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+/** Generates 192 bits of entropy without modulo bias (the alphabet contains exactly 64 symbols). */
+internal fun generateLanProxyPassword(random: SecureRandom = SecureRandom()): String {
+    val entropy = ByteArray(GeneratedLanProxyPasswordLength)
+    random.nextBytes(entropy)
+    return buildString(GeneratedLanProxyPasswordLength) {
+        entropy.forEach { byte -> append(LanProxyPasswordAlphabet[byte.toInt() and 0x3f]) }
+    }
+}
+
+internal data class SecuredRuntimeSettings(
+    val settings: RuntimeSettings,
+    val generatedLanProxyPassword: Boolean,
+)
+
+/** The local mixed and SOCKS5 listeners share this fail-closed authentication policy. */
+internal fun secureRuntimeSettings(
+    settings: RuntimeSettings,
+    passwordGenerator: () -> String = ::generateLanProxyPassword,
+): SecuredRuntimeSettings {
+    if (!settings.socksListenAll || settings.socksPassword.isNotEmpty()) {
+        return SecuredRuntimeSettings(settings, generatedLanProxyPassword = false)
+    }
+    val password = passwordGenerator()
+    require(password.isNotEmpty()) { "LAN proxy password generation failed" }
+    require(hasValidSocksCredentialSize(password)) { "generated LAN proxy password is too long" }
+    return SecuredRuntimeSettings(
+        settings.copy(socksPassword = password),
+        generatedLanProxyPassword = true,
+    )
+}
+
+internal fun requireSafeRuntimeSettings(settings: RuntimeSettings) {
+    require(!settings.socksListenAll || settings.socksPassword.isNotEmpty()) {
+        "LAN proxy authentication requires a non-empty password"
+    }
+}
 
 internal fun normalizeFlowAnalysisApp(value: String): String {
     if (value.length > MaxFlowAnalysisAppLength) return ""
@@ -47,6 +90,9 @@ object RuntimeSettingsRepository {
     private const val KeyRouteLocalProxyTraffic = "runtimeRouteLocalProxyTraffic"
     private const val KeyDefaultOutbound = "runtimeDefaultOutbound"
     private const val KeyFlowAnalysisApp = "runtimeFlowAnalysisApp"
+    private const val KeyStorageVersion = "runtimeStorageVersion"
+    private const val KeySecretsId = "runtimeSecretsId"
+    private const val StorageVersionEncryptedSecrets = 2
     private const val MaxRuntimeCredentialLength = 4_096
 
     fun read(context: Context): RuntimeSettings {
@@ -72,7 +118,25 @@ object RuntimeSettingsRepository {
         val socksPort = prefs.readOrDefault(KeySocksPort, RuntimeSettingsDefaults.SocksPort) {
             getInt(KeySocksPort, RuntimeSettingsDefaults.SocksPort)
         }.coerceIn(1, 65535)
-        return RuntimeSettings(
+        val storageVersion = prefs.readOrDefault(KeyStorageVersion, 0) { getInt(KeyStorageVersion, 0) }
+        val storedCredentials = if (storageVersion >= StorageVersionEncryptedSecrets) {
+            val secretsId = prefs.getString(KeySecretsId, null)
+                ?: throw IllegalStateException("encrypted runtime settings reference is missing")
+            val plaintext = EncryptedSecretStore(appContext).read(secretsId)
+                ?: throw IllegalStateException("encrypted runtime settings are missing")
+            require(plaintext.length <= MaxRuntimeCredentialLength * 3) {
+                "encrypted runtime settings are too large"
+            }
+            val secrets = JSONObject(plaintext)
+            secrets.optString("username") to secrets.optString("password")
+        } else {
+            prefs.readOrDefault(KeySocksUsername, "") {
+                getString(KeySocksUsername, "").orEmpty()
+            } to prefs.readOrDefault(KeySocksPassword, "") {
+                getString(KeySocksPassword, "").orEmpty()
+            }
+        }
+        val stored = RuntimeSettings(
             mtu = mtu,
             powerSavingMode = powerSavingMode,
             logLevel = logLevel,
@@ -85,12 +149,8 @@ object RuntimeSettingsRepository {
             socksListenAll = prefs.readOrDefault(KeySocksListenAll, false) {
                 getBoolean(KeySocksListenAll, false)
             },
-            socksUsername = prefs.readOrDefault(KeySocksUsername, "") {
-                getString(KeySocksUsername, "").orEmpty()
-            }.take(MaxRuntimeCredentialLength).let(::truncateSocksCredential),
-            socksPassword = prefs.readOrDefault(KeySocksPassword, "") {
-                getString(KeySocksPassword, "").orEmpty()
-            }.take(MaxRuntimeCredentialLength).let(::truncateSocksCredential),
+            socksUsername = storedCredentials.first.take(MaxRuntimeCredentialLength).let(::truncateSocksCredential),
+            socksPassword = storedCredentials.second.take(MaxRuntimeCredentialLength).let(::truncateSocksCredential),
             routeLocalProxyTraffic = prefs.readOrDefault(KeyRouteLocalProxyTraffic, false) {
                 getBoolean(KeyRouteLocalProxyTraffic, false)
             },
@@ -105,6 +165,16 @@ object RuntimeSettingsRepository {
                 },
             ),
         )
+        val secured = secureRuntimeSettings(stored)
+        if (storageVersion < StorageVersionEncryptedSecrets || secured.generatedLanProxyPassword) {
+            // Persist before returning so process restoration/background starts cannot reuse
+            // legacy listen-all settings without authentication.
+            write(context, secured.settings)
+            if (secured.generatedLanProxyPassword) {
+                TcptunState.appendLog("legacy LAN proxy settings repaired; authentication is now required")
+            }
+        }
+        return secured.settings
     }
 
     fun write(context: Context, settings: RuntimeSettings) {
@@ -121,30 +191,48 @@ object RuntimeSettingsRepository {
         require(hasValidSocksCredentialSize(settings.socksPassword)) {
             "SOCKS password exceeds $MaxSocksCredentialUtf8Bytes UTF-8 bytes"
         }
-        val normalizedSettings = settings.copy(
+        val normalizedSettings = secureRuntimeSettings(settings.copy(
             mtu = settings.mtu.coerceIn(1280, 1500),
             logLevel = normalizedLogLevel,
             socksPort = normalizedSocksPort,
             localProxyProtocol = normalizedLocalProxyProtocol,
             defaultOutbound = normalizedDefaultOutbound,
             flowAnalysisApp = normalizedFlowAnalysisApp,
-        )
+        )).settings
+        requireSafeRuntimeSettings(normalizedSettings)
         val appContext = context.applicationContext ?: context
-        val saved = appContext.getSharedPreferences(Prefs, Context.MODE_PRIVATE)
-            .edit()
-            .putInt(KeyMtu, normalizedSettings.mtu)
-            .putBoolean(KeyPowerSaving, normalizedSettings.powerSavingMode)
-            .putString(KeyLogLevel, normalizedSettings.logLevel)
-            .putInt(KeySocksPort, normalizedSettings.socksPort)
-            .putString(KeyLocalProxyProtocol, normalizedSettings.localProxyProtocol)
-            .putBoolean(KeySocksListenAll, normalizedSettings.socksListenAll)
-            .putString(KeySocksUsername, normalizedSettings.socksUsername)
-            .putString(KeySocksPassword, normalizedSettings.socksPassword)
-            .putBoolean(KeyRouteLocalProxyTraffic, normalizedSettings.routeLocalProxyTraffic)
-            .putString(KeyDefaultOutbound, normalizedSettings.defaultOutbound)
-            .putString(KeyFlowAnalysisApp, normalizedSettings.flowAnalysisApp)
-            .commit()
+        val prefs = appContext.getSharedPreferences(Prefs, Context.MODE_PRIVATE)
+        val previousSecretsId = prefs.getString(KeySecretsId, null).orEmpty()
+        val secretsId = "runtime.${UUID.randomUUID()}"
+        val secretStore = EncryptedSecretStore(appContext)
+        val encodedSecrets = JSONObject()
+            .put("username", normalizedSettings.socksUsername)
+            .put("password", normalizedSettings.socksPassword)
+            .toString()
+        val saved = afterVerifiedSecretWrite(
+            writeAndVerify = { secretStore.writeVerified(secretsId, encodedSecrets) },
+            replacePlaintext = {
+                prefs.edit()
+                    .putInt(KeyStorageVersion, StorageVersionEncryptedSecrets)
+                    .putInt(KeyMtu, normalizedSettings.mtu)
+                    .putBoolean(KeyPowerSaving, normalizedSettings.powerSavingMode)
+                    .putString(KeyLogLevel, normalizedSettings.logLevel)
+                    .putInt(KeySocksPort, normalizedSettings.socksPort)
+                    .putString(KeyLocalProxyProtocol, normalizedSettings.localProxyProtocol)
+                    .putBoolean(KeySocksListenAll, normalizedSettings.socksListenAll)
+                    .putString(KeySecretsId, secretsId)
+                    .remove(KeySocksUsername)
+                    .remove(KeySocksPassword)
+                    .putBoolean(KeyRouteLocalProxyTraffic, normalizedSettings.routeLocalProxyTraffic)
+                    .putString(KeyDefaultOutbound, normalizedSettings.defaultOutbound)
+                    .putString(KeyFlowAnalysisApp, normalizedSettings.flowAnalysisApp)
+                    .commit()
+            },
+        )
         check(saved) { "runtime settings could not be persisted" }
+        if (previousSecretsId.isNotBlank() && previousSecretsId != secretsId) {
+            runRecoverableCatching { secretStore.remove(previousSecretsId) }
+        }
         publish(normalizedSettings)
     }
 

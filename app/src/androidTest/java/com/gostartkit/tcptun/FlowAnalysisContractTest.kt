@@ -70,7 +70,8 @@ class FlowAnalysisContractTest {
         assertEquals(2L, accepted?.sequence)
         assertNull(stale)
         assertNull(other)
-        assertEquals(listOf(2L), TcptunState.state.value.flowEvents.map(FlowAnalysisEvent::sequence))
+        TcptunState.publishFlowEventsNow()
+        assertEquals(listOf(2L), TcptunState.flowAnalysis.value.events.map(FlowAnalysisEvent::sequence))
         TcptunState.clearFlowEvents()
     }
 

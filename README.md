@@ -51,6 +51,7 @@ See [docs/device-testing.md](docs/device-testing.md) for repeatable device valid
 - [URI and QR import](docs/uri-qr-import.md)
 - [App routing](docs/app-routing.md)
 - [Traffic analysis](docs/traffic-analysis.md)
+- [Performance baselines](docs/performance.md)
 - [Diagnostics and redaction](docs/diagnostics.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Release process](docs/release.md)

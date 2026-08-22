@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "TcpTun"
 include(":app")
+include(":benchmark")

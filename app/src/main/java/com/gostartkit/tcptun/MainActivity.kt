@@ -367,9 +367,15 @@ class MainActivity : ComponentActivity() {
                 ?.let { value -> pendingProfileUri = PendingProfileUri(profileIntentSequence, value) }
         }
         enableEdgeToEdge()
+        val benchmarkDestination = if (BuildConfig.BENCHMARK && intent.getStringExtra("benchmarkDestination") == "flow") {
+            MainDestination.FlowAnalysis
+        } else {
+            MainDestination.Profiles
+        }
         setContent {
             TcpTunTheme {
                 TcptunScreen(
+                    initialDestination = benchmarkDestination,
                     pendingProfileUri = pendingProfileUri,
                     onProfileUriConsumed = { sequence ->
                         if (pendingProfileUri?.sequence == sequence) pendingProfileUri = null

@@ -182,7 +182,7 @@ internal fun FlowAnalysisPage(onBack: () -> Unit) {
     val appContext = context.applicationContext
     val resources = LocalResources.current
     val startFailedMessage = stringResource(R.string.start_failed)
-    val runtimeState by TcptunState.state.collectAsStateWithLifecycle()
+    val flowState by TcptunState.flowAnalysis.collectAsStateWithLifecycle()
     var settings by remember { mutableStateOf(RuntimeSettings()) }
     var installedApps by remember { mutableStateOf<List<InstalledRouteApp>>(emptyList()) }
     var selectionSaving by remember { mutableStateOf(false) }
@@ -199,7 +199,7 @@ internal fun FlowAnalysisPage(onBack: () -> Unit) {
     val selectedPackage = settings.flowAnalysisApp
     val selectedAppLabel = installedApps.firstOrNull { it.packageName == selectedPackage }?.displayName
         ?: selectedPackage.ifBlank { flowAnalysisDisabled }
-    val events = runtimeState.flowEvents.asReversed()
+    val events = flowState.events.asReversed()
     val routeRuleSuggestions = remember(events, routeRuleOutbound) {
         buildFlowRouteRuleSuggestions(events, routeRuleOutbound)
     }
@@ -374,9 +374,9 @@ internal fun FlowAnalysisPage(onBack: () -> Unit) {
                                 color = MaterialTheme.colorScheme.error,
                             )
                         }
-                        if (runtimeState.flowDroppedEvents > 0) {
+                        if (flowState.droppedEvents > 0) {
                             Text(
-                                stringResource(R.string.flow_analysis_dropped, runtimeState.flowDroppedEvents),
+                                stringResource(R.string.flow_analysis_dropped, flowState.droppedEvents),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error,
                             )

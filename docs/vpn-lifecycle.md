@@ -1,5 +1,12 @@
 # VPN lifecycle and ownership
 
+Runtime mutations enter the serialized lifecycle executor through `VpnRuntimeCoordinator`
+commands (`Start`, `Stop`, outbound update, runtime-settings apply, Bridge recovery, and focused
+auxiliary commands). This is a first ownership extraction: Android framework callbacks remain in
+`TcptunVpnService`, while the coordinator owns mutation admission and in-flight accounting.
+Delayed recovery still uses the same existing scheduler and all safety checks below remain
+authoritative.
+
 ## Resource state machine
 
 ```text

@@ -859,6 +859,14 @@ data class AppConfig(
         private const val AndroidVpnInboundTag = "android-vpn"
         private val WildcardHosts = setOf("0.0.0.0", "::", "*")
         private val LoopbackHosts = setOf("127.0.0.1", "::1", "localhost")
+        private val SensitiveStorageFields = listOf(
+            "token",
+            "realityPublicKey",
+            "realityShortId",
+            "realitySpiderX",
+            "echPublicKey",
+            "rawConfigJson",
+        )
 
         fun load(context: Context): AppConfig {
             return context.profileRepository().load(context).profiles.firstOrNull()
@@ -1040,7 +1048,34 @@ data class AppConfig(
             .put("rawConfigJson", rawConfigJson)
     }
 
+    /** Durable non-sensitive profile shape. External JSON/URI schemas continue to use [toJson]. */
+    internal fun toPublicStorageJson(): JSONObject = toJson().apply {
+        SensitiveStorageFields.forEach(::remove)
+    }
+
+    internal fun toSecretStorageJson(): JSONObject = JSONObject()
+        .put("id", id)
+        .put("token", token)
+        .put("realityPublicKey", realityPublicKey)
+        .put("realityShortId", realityShortId)
+        .put("realitySpiderX", realitySpiderX)
+        .put("echPublicKey", echPublicKey)
+        .put("rawConfigJson", rawConfigJson)
+
+    internal fun withStorageSecrets(secrets: JSONObject?): AppConfig {
+        if (secrets == null) return this
+        return copy(
+            token = secrets.optString("token"),
+            realityPublicKey = secrets.optString("realityPublicKey"),
+            realityShortId = secrets.optString("realityShortId"),
+            realitySpiderX = secrets.optString("realitySpiderX"),
+            echPublicKey = secrets.optString("echPublicKey"),
+            rawConfigJson = secrets.optString("rawConfigJson"),
+        )
+    }
+
     fun shareText(): String {
         return ProfileUriCodec.encode(this).orEmpty()
     }
+
 }

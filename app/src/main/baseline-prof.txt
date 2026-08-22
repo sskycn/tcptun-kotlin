@@ -1,0 +1,6 @@
+HSPLcom/tcptun/client/TcptunApplication;-><init>()V
+HSPLcom/tcptun/client/MainActivity;-><init>()V
+HSPLcom/tcptun/client/MainActivity;->onCreate(Landroid/os/Bundle;)V
+HSPLcom/tcptun/client/ProfileStore;->load(Landroid/content/Context;)Lcom/tcptun/client/ProfilesState;
+HSPLcom/tcptun/client/RuntimeSettingsRepository;->read(Landroid/content/Context;)Lcom/tcptun/client/RuntimeSettings;
+HSPLcom/tcptun/client/TcptunScreenKt;->TcptunScreen(Lcom/tcptun/client/MainDestination;Lcom/tcptun/client/PendingProfileUri;Lkotlin/jvm/functions/Function1;Landroidx/compose/runtime/Composer;II)V

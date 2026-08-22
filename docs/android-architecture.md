@@ -20,7 +20,8 @@ processing, mux sessions, and native runtime cleanup. Android calls it through t
 App traffic -> Android VpnService TUN -> native tcptun inbound
                                          -> route rules/default outbound
 Local client -> Android mixed/SOCKS inbound -> same outbound set
-Bridge callbacks -> TcptunState StateFlow -> Material 3 Compose UI
+Bridge status callbacks -> TcptunState StateFlow -> Material 3 Compose UI
+Bridge flow callbacks -> bounded ring -> batched flowAnalysis StateFlow -> Flow Analysis UI
 ```
 
 The service installs IPv4/IPv6 default routes. The Go core receives a duplicate of the
@@ -29,7 +30,9 @@ ownership is confirmed released.
 
 ## Concurrency boundaries
 
-- Service lifecycle work is serialized by the lifecycle executor and service-owner lock.
+- `VpnRuntimeCoordinator` admits runtime mutation commands to the single lifecycle lane;
+  the existing service-owner lock, generations, epochs, leases, and Bridge ownership state
+  machines still validate each operation.
 - Native calls are serialized by `bridgeLock` where required by the engine contract.
 - UI-originated durable mutations are owned by `TcptunApplication` process scopes.
 - Status, flow, and network callbacks use epochs/generations to reject stale work.
@@ -37,9 +40,10 @@ ownership is confirmed released.
 
 ## State and persistence
 
-`TcptunState` is an in-memory immutable `StateFlow`. Profiles and runtime settings use the
-existing local persistence layer. Flow events and diagnostics are not persisted as profile
-data. No protocol, profile, or URI schema is defined in this Android architecture document;
+`TcptunState.state` is the low-frequency in-memory runtime `StateFlow`. High-frequency flow
+events use a separate `flowAnalysis` StateFlow backed by a 256-entry O(1) ring buffer; snapshots
+are coalesced at 100 ms so they do not copy or recompose unrelated runtime state per event.
+Flow events and diagnostics are not persisted as profile data. No protocol, profile, or URI schema is defined in this Android architecture document;
 see the focused documents below.
 
 Application lifecycle state is represented by `VpnStatus`; bridge wire states are converted
@@ -70,6 +74,10 @@ refresh flags and hands requests to only the currently installed Service callbac
 `BridgeStatusJson` is the single bounded parser for callback events, reconciled snapshots,
 client-IP refreshes, and per-outbound health records; it preserves field-presence semantics
 when a partial snapshot must not erase newer diagnostics.
+
+`EncryptedSecretStore` owns AES-GCM envelopes. Its 256-bit AES key is non-exportable and
+Android-Keystore-backed; profile/runtime public preferences contain only non-sensitive fields
+and opaque encrypted-payload references.
 
 ## Testing boundaries
 

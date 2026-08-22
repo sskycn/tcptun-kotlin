@@ -31,6 +31,20 @@ TCPTUN_GO_DIR=/path/to/tcptun-go ./scripts/build-androidbridge.sh
 
 The wrapper defaults to `armeabi-v7a`, `arm64-v8a`, and `x86_64`, matching Gradle filters.
 The generated file is `app/libs/androidbridge.aar` and is ignored by Git.
+The wrapper embeds `bridge-version.properties` in the AAR after a successful build. It records
+the full tcptun-go commit, `git describe` version, and integer Bridge API version; no wall-clock
+timestamp is included so identical inputs remain reproducible.
+
+Verify a locally built artifact with:
+
+```bash
+./gradlew :app:verifyAndroidBridge
+./gradlew :app:verifyAndroidBridge -PexpectedCoreCommit=<full-tcptun-go-commit>
+```
+
+`assembleRelease` and `bundleRelease` depend on strict verification. Debug quality gates use a
+warning-only verifier so Android-only CI can test the Kotlin control plane without manufacturing a
+fake native artifact. Bridge and managed-device CI build the real AAR in a separate job.
 
 ## Compatibility rules
 
@@ -39,6 +53,8 @@ The generated file is `app/libs/androidbridge.aar` and is ignored by Git.
 - Keep callback proxies strongly reachable until native cleanup completes.
 - Keep reflection error messages actionable: missing AAR, missing Engine method, and
   validation failure are distinct user-visible failure classes.
+- Increment the Android expected Bridge API version and the build script's `BRIDGE_API_VERSION`
+  together whenever the required Java contract changes incompatibly.
 
 ## Contract tests
 

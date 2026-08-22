@@ -178,6 +178,7 @@ import kotlin.math.roundToInt
 
 @Composable
 internal fun TcptunScreen(
+    initialDestination: MainDestination = MainDestination.Profiles,
     pendingProfileUri: PendingProfileUri? = null,
     onProfileUriConsumed: (Long) -> Unit = {},
 ) {
@@ -201,7 +202,7 @@ internal fun TcptunScreen(
     var editingProfile by rememberSaveable(stateSaver = PendingProfileSaver) {
         mutableStateOf<AppConfig?>(null)
     }
-    var destination by rememberSaveable { mutableStateOf(MainDestination.Profiles) }
+    var destination by rememberSaveable { mutableStateOf(initialDestination) }
     var scannerSessionGeneration by rememberSaveable { mutableIntStateOf(0) }
     var scannerImportJob by remember { mutableStateOf<Job?>(null) }
     var showLogs by rememberSaveable { mutableStateOf(false) }
@@ -1022,4 +1023,3 @@ internal fun TcptunScreen(
     }
 
 }
-

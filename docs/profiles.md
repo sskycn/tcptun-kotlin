@@ -17,6 +17,10 @@ rule target and becomes usable again when that profile is started.
 ## Persistence rules
 
 - Profile IDs and active IDs are persisted by the existing store.
+- Storage version 3 keeps public profile JSON separate from encrypted secret payloads. Tokens,
+  raw core JSON, and Reality/ECH secret-like values never appear in public preferences.
+- Legacy plaintext is replaced only after the new AES-GCM payload is written and read back.
+  A failed migration leaves the old authoritative data intact for retry.
 - Mutation revisions protect concurrent UI/service updates.
 - Import and delete operations are bounded and recoverable.
 - Credentials are not included in diagnostics or ordinary logs.
