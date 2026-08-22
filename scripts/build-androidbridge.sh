@@ -1,9 +1,37 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+VERIFY_LOCK_ONLY=false
+if [ "${1:-}" = "--verify-lock" ]; then
+  VERIFY_LOCK_ONLY=true
+  shift
+fi
+[ "$#" -eq 0 ] || { echo "usage: scripts/build-androidbridge.sh [--verify-lock]" >&2; exit 2; }
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TCPTUN_GO_DIR="${TCPTUN_GO_DIR:-"$ROOT_DIR/../tcptun-go"}"
 OUT="${ANDROIDBRIDGE_AAR_OUT:-"$ROOT_DIR/app/libs/androidbridge.aar"}"
+LOCK_FILE="$ROOT_DIR/bridge.lock"
+
+lock_property() {
+  local key="$1"
+  local count
+  count="$(awk -F= -v key="$key" '$1 == key { count++ } END { print count + 0 }' "$LOCK_FILE")"
+  [ "$count" -eq 1 ] || { echo "bridge.lock must contain exactly one $key property" >&2; exit 1; }
+  awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print }' "$LOCK_FILE"
+}
+
+[ -f "$LOCK_FILE" ] || { echo "bridge.lock is required" >&2; exit 1; }
+PINNED_CORE_COMMIT="$(lock_property coreCommit)"
+PINNED_BRIDGE_API="$(lock_property bridgeApiVersion)"
+[[ "$PINNED_CORE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "bridge.lock coreCommit must be a full lowercase 40-character Git SHA" >&2
+  exit 1
+}
+[[ "$PINNED_BRIDGE_API" =~ ^[1-9][0-9]*$ ]] || {
+  echo "bridge.lock bridgeApiVersion must be a positive integer" >&2
+  exit 1
+}
 
 if [ ! -d "$TCPTUN_GO_DIR" ]; then
   cat >&2 <<MSG
@@ -15,6 +43,38 @@ Expected sibling checkout:
 Set TCPTUN_GO_DIR=/path/to/tcptun-go and retry.
 MSG
   exit 1
+fi
+
+command -v git >/dev/null 2>&1 || { echo "git is required to verify Bridge provenance" >&2; exit 1; }
+CORE_COMMIT="$(git -C "$TCPTUN_GO_DIR" rev-parse HEAD)"
+CORE_STATUS="$(git -C "$TCPTUN_GO_DIR" status --porcelain --untracked-files=normal)"
+CORE_DIRTY=false
+[ -z "$CORE_STATUS" ] || CORE_DIRTY=true
+if [ "${ALLOW_UNPINNED_BRIDGE:-0}" != "1" ]; then
+  [ "$CORE_COMMIT" = "$PINNED_CORE_COMMIT" ] || {
+    echo "tcptun-go HEAD $CORE_COMMIT does not match bridge.lock $PINNED_CORE_COMMIT" >&2
+    echo "Checkout the locked commit or deliberately set ALLOW_UNPINNED_BRIDGE=1 for a local-only build." >&2
+    exit 1
+  }
+  [ "$CORE_DIRTY" = false ] || {
+    echo "tcptun-go working tree is dirty; Bridge builds require a clean locked checkout" >&2
+    exit 1
+  }
+fi
+
+BRIDGE_API_VERSION="${BRIDGE_API_VERSION:-$PINNED_BRIDGE_API}"
+[[ "$BRIDGE_API_VERSION" =~ ^[1-9][0-9]*$ ]] || {
+  echo "BRIDGE_API_VERSION must be a positive integer" >&2
+  exit 1
+}
+if [ "${ALLOW_UNPINNED_BRIDGE:-0}" != "1" ] && [ "$BRIDGE_API_VERSION" != "$PINNED_BRIDGE_API" ]; then
+  echo "BRIDGE_API_VERSION $BRIDGE_API_VERSION does not match bridge.lock $PINNED_BRIDGE_API" >&2
+  exit 1
+fi
+
+if [ "$VERIFY_LOCK_ONLY" = true ]; then
+  echo "Verified tcptun-go checkout: core=$CORE_COMMIT dirty=$CORE_DIRTY api=$BRIDGE_API_VERSION"
+  exit 0
 fi
 
 if command -v go >/dev/null 2>&1; then
@@ -40,22 +100,16 @@ ANDROIDBRIDGE_AAR_OUT="$OUT" \
   exit 1
 }
 
-command -v git >/dev/null 2>&1 || { echo "git is required to record Bridge provenance" >&2; exit 1; }
 command -v zip >/dev/null 2>&1 || { echo "zip is required to embed Bridge provenance" >&2; exit 1; }
 
-CORE_COMMIT="$(git -C "$TCPTUN_GO_DIR" rev-parse HEAD)"
 CORE_VERSION="$(git -C "$TCPTUN_GO_DIR" describe --tags --always --dirty)"
-BRIDGE_API_VERSION="${BRIDGE_API_VERSION:-1}"
-case "$BRIDGE_API_VERSION" in
-  ''|*[!0-9]*) echo "BRIDGE_API_VERSION must be a positive integer" >&2; exit 1 ;;
-esac
-[ "$BRIDGE_API_VERSION" -gt 0 ] || { echo "BRIDGE_API_VERSION must be positive" >&2; exit 1; }
 
 METADATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tcptun-bridge-metadata.XXXXXX")"
 trap 'rm -rf "$METADATA_DIR"' EXIT
 {
   printf 'coreCommit=%s\n' "$CORE_COMMIT"
   printf 'coreVersion=%s\n' "$CORE_VERSION"
+  printf 'coreDirty=%s\n' "$CORE_DIRTY"
   printf 'bridgeApiVersion=%s\n' "$BRIDGE_API_VERSION"
 } > "$METADATA_DIR/bridge-version.properties"
 (
@@ -63,4 +117,4 @@ trap 'rm -rf "$METADATA_DIR"' EXIT
   zip -q -u "$OUT" bridge-version.properties
 )
 
-echo "Embedded Bridge metadata: core=$CORE_COMMIT version=$CORE_VERSION api=$BRIDGE_API_VERSION"
+echo "Embedded Bridge metadata: core=$CORE_COMMIT version=$CORE_VERSION dirty=$CORE_DIRTY api=$BRIDGE_API_VERSION"

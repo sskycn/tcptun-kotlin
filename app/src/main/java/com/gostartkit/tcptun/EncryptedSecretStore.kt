@@ -16,13 +16,41 @@ internal interface SecretCipher {
     fun decrypt(envelope: String, associatedData: String): String
 }
 
-/** Plaintext replacement is deliberately unreachable until encrypted read-back succeeds. */
-internal inline fun <T> afterVerifiedSecretWrite(
-    writeAndVerify: () -> Unit,
-    replacePlaintext: () -> T,
-): T {
-    writeAndVerify()
-    return replacePlaintext()
+internal interface SecretStorage {
+    fun writeVerified(key: String, plaintext: String)
+    fun read(key: String): String?
+    fun remove(key: String)
+}
+
+/**
+ * Publishes a fresh encrypted blob only after read-back verification. If either the encrypted
+ * write or the public pointer commit fails, the unreferenced fresh blob is removed. The caller
+ * remains responsible for deleting the previous blob, and must do that only after this returns
+ * true.
+ */
+internal fun replaceWithVerifiedSecret(
+    secretStore: SecretStorage,
+    newSecretId: String,
+    plaintext: String,
+    commitPointer: () -> Boolean,
+): Boolean {
+    try {
+        secretStore.writeVerified(newSecretId, plaintext)
+        val committed = commitPointer()
+        if (!committed) bestEffortRemoveSecret(secretStore, newSecretId)
+        return committed
+    } catch (error: Throwable) {
+        bestEffortRemoveSecret(secretStore, newSecretId)
+        throw error
+    }
+}
+
+private fun bestEffortRemoveSecret(secretStore: SecretStorage, secretId: String) {
+    try {
+        secretStore.remove(secretId)
+    } catch (cleanupError: Throwable) {
+        if (cleanupError.isFatalProcessError()) throw cleanupError
+    }
 }
 
 /** AES-GCM envelope shared by the Android Keystore implementation and JVM tests. */
@@ -111,11 +139,11 @@ internal object AndroidKeystoreSecretCipher : SecretCipher {
 internal class EncryptedSecretStore(
     context: Context,
     private val cipher: SecretCipher = AndroidKeystoreSecretCipher,
-) {
+) : SecretStorage {
     private val preferences = (context.applicationContext ?: context)
         .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
-    fun writeVerified(key: String, plaintext: String) {
+    override fun writeVerified(key: String, plaintext: String) {
         require(key.isNotBlank()) { "secret key must not be blank" }
         val encrypted = cipher.encrypt(plaintext, key)
         check(preferences.edit().putString(key, encrypted).commit()) {
@@ -124,11 +152,11 @@ internal class EncryptedSecretStore(
         check(read(key) == plaintext) { "encrypted data read-back verification failed" }
     }
 
-    fun read(key: String): String? = preferences.getString(key, null)?.let {
+    override fun read(key: String): String? = preferences.getString(key, null)?.let {
         cipher.decrypt(it, key)
     }
 
-    fun remove(key: String) {
+    override fun remove(key: String) {
         if (key.isNotBlank()) check(preferences.edit().remove(key).commit()) {
             "obsolete encrypted data could not be removed"
         }

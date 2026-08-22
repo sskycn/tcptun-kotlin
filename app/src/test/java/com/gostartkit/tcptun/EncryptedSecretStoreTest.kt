@@ -40,16 +40,43 @@ class EncryptedSecretStoreTest {
     }
 
     @Test
-    fun failedEncryptedWriteNeverDeletesLegacyPlaintext() {
-        var plaintextPresent = true
+    fun failedEncryptedWriteNeverCommitsPublicReplacement() {
+        val store = RecordingSecretStorage(failWrite = true)
+        var replacementCommitted = false
+        var legacyPlaintext: String? = "legacy-plan"
 
         assertThrows(IllegalStateException::class.java) {
-            afterVerifiedSecretWrite(
-                writeAndVerify = { throw IllegalStateException("keystore unavailable") },
-                replacePlaintext = { plaintextPresent = false },
+            replaceWithVerifiedSecret(
+                secretStore = store,
+                newSecretId = "new",
+                plaintext = "secret",
+                commitPointer = {
+                    replacementCommitted = true
+                    legacyPlaintext = null
+                    true
+                },
             )
         }
 
-        assertTrue(plaintextPresent)
+        assertFalse(replacementCommitted)
+        assertEquals("legacy-plan", legacyPlaintext)
+        assertFalse(store.values.containsKey("new"))
+    }
+
+    private class RecordingSecretStorage(
+        private val failWrite: Boolean,
+    ) : SecretStorage {
+        val values = mutableMapOf<String, String>()
+
+        override fun writeVerified(key: String, plaintext: String) {
+            values[key] = plaintext
+            if (failWrite) throw IllegalStateException("keystore unavailable")
+        }
+
+        override fun read(key: String): String? = values[key]
+
+        override fun remove(key: String) {
+            values.remove(key)
+        }
     }
 }

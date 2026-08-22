@@ -285,9 +285,11 @@ object ProfileStore {
         val secretsId = "profiles.${UUID.randomUUID()}"
         val secretStore = EncryptedSecretStore(context)
         // The public pointer changes only after ciphertext has been written and read back.
-        val committed = afterVerifiedSecretWrite(
-            writeAndVerify = { secretStore.writeVerified(secretsId, encoded.secrets) },
-            replacePlaintext = {
+        val committed = replaceWithVerifiedSecret(
+            secretStore = secretStore,
+            newSecretId = secretsId,
+            plaintext = encoded.secrets,
+            commitPointer = {
                 prefs.edit()
                     .putInt(KEY_STATE_VERSION, STATE_VERSION_ENCRYPTED_SECRETS)
                     .putString(KEY_PROFILES, encoded.profiles)
@@ -295,25 +297,23 @@ object ProfileStore {
                     .putString(KEY_SECRETS_ID, secretsId)
                     .remove(KEY_SELECTED)
                     .remove(KEY_ENABLED)
+                    .remove("serverHost")
+                    .remove("serverPort")
+                    .remove("protocol")
+                    .remove("transport")
+                    .remove("token")
+                    .remove("sni")
+                    .remove("path")
+                    .remove("tls")
+                    .remove("mux")
                     .commit()
             },
         )
         check(committed) { "failed to persist profile state" }
-        removeLegacySingleProfilePlaintext(prefs)
         if (previousSecretsId.isNotBlank() && previousSecretsId != secretsId) {
             runRecoverableCatching { secretStore.remove(previousSecretsId) }
         }
         mutationRevision.incrementAndGet()
-    }
-
-    private fun removeLegacySingleProfilePlaintext(prefs: android.content.SharedPreferences) {
-        val legacyKeys = listOf(
-            "serverHost", "serverPort", "protocol", "transport", "token", "sni", "path", "tls", "mux",
-        )
-        if (legacyKeys.none(prefs::contains)) return
-        val editor = prefs.edit()
-        legacyKeys.forEach(editor::remove)
-        check(editor.commit()) { "legacy profile plaintext could not be removed" }
     }
 
     @Synchronized

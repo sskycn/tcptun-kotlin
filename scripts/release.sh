@@ -82,6 +82,9 @@ done
 	exit 2
 }
 
+[ "${ALLOW_UNPINNED_BRIDGE:-0}" != "1" ] || \
+	die "ALLOW_UNPINNED_BRIDGE is forbidden for releases"
+
 [[ $version =~ ^v([0-9]+)[.]([0-9]+)[.]([0-9]+)([-][0-9A-Za-z.-]+)?([+][0-9A-Za-z.-]+)?$ ]] || \
 	die "version must look like vX.Y.Z, for example v0.2.4"
 
@@ -110,6 +113,8 @@ current_branch=$(git rev-parse --abbrev-ref HEAD) || die "failed to read current
 [ "$current_branch" = "$branch" ] || die "current branch is $current_branch, expected $branch"
 
 [ -z "$(git status --porcelain)" ] || die "working tree is dirty; commit or stash changes first"
+
+run ./scripts/build-androidbridge.sh --verify-lock
 
 run git fetch "$remote" --tags
 

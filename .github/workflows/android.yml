@@ -32,10 +32,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Require private core read token
+        env:
+          TCPTUN_GO_READ_TOKEN: ${{ secrets.TCPTUN_GO_READ_TOKEN }}
+        run: |
+          [ -n "$TCPTUN_GO_READ_TOKEN" ] || {
+            echo "TCPTUN_GO_READ_TOKEN is required for private tcptun-go checkout" >&2
+            exit 1
+          }
+      - name: Read locked core revision
+        id: bridge-lock
+        shell: bash
+        run: |
+          sha="$(sed -n 's/^coreCommit=//p' bridge.lock)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "bridge.lock must contain a full 40-character coreCommit" >&2
+            exit 1
+          }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
           repository: gostartkit/tcptun-go
+          ref: ${{ steps.bridge-lock.outputs.sha }}
           path: tcptun-go
+          token: ${{ secrets.TCPTUN_GO_READ_TOKEN }}
+          persist-credentials: false
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -53,11 +74,12 @@ jobs:
       - name: Build traceable AAR
         env:
           TCPTUN_GO_DIR: ${{ github.workspace }}/tcptun-go
+          ALLOW_UNPINNED_BRIDGE: '0'
         run: ./scripts/build-androidbridge.sh
       - name: Verify Bridge metadata and Android contract compilation
-        run: |
-          EXPECTED_CORE_COMMIT="$(git -C tcptun-go rev-parse HEAD)" \
-            ./gradlew :app:verifyAndroidBridge :app:compileDebugAndroidTestKotlin
+        env:
+          EXPECTED_CORE_COMMIT: ${{ steps.bridge-lock.outputs.sha }}
+        run: ./gradlew :app:verifyAndroidBridge :app:compileDebugAndroidTestKotlin
       - uses: actions/upload-artifact@v4
         with:
           name: androidbridge-aar
@@ -85,4 +107,4 @@ jobs:
       - name: Run critical instrumentation tests
         run: >-
           ./gradlew :app:tcptunCiApi35DebugAndroidTest
-          -Pandroid.testInstrumentationRunnerArguments.class=com.tcptun.client.VpnServiceLifecycleTest,com.tcptun.client.AndroidBridgeContractTest,com.tcptun.client.BridgeStatusJsonAndroidTest,com.tcptun.client.ProfileSecretSerializationAndroidTest
+          -Pandroid.testInstrumentationRunnerArguments.class=com.tcptun.client.VpnServiceLifecycleTest,com.tcptun.client.AndroidBridgeContractTest,com.tcptun.client.BridgeStatusJsonAndroidTest,com.tcptun.client.ProfileSecretSerializationAndroidTest,com.tcptun.client.DesiredRunningPlanStoreEncryptionTest,com.tcptun.client.DesiredRunningPlanMigrationAndroidTest,com.tcptun.client.SecretAtRestAndroidTest

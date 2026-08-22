@@ -3,8 +3,8 @@ set -euo pipefail
 
 MODE="${1:?verification mode is required}"
 AAR="${2:?AAR path is required}"
-EXPECTED_API="${3:?expected API version is required}"
-EXPECTED_COMMIT="${4:-}"
+LOCK_FILE="${3:?bridge.lock path is required}"
+ASSERTED_COMMIT="${4:-}"
 
 reject() {
   if [ "$MODE" = "strict" ]; then
@@ -16,7 +16,21 @@ reject() {
 }
 
 [ -f "$AAR" ] || reject "androidbridge.aar is missing; run ./scripts/build-androidbridge.sh"
+[ -f "$LOCK_FILE" ] || reject "bridge.lock is missing"
 command -v unzip >/dev/null 2>&1 || reject "unzip is required to verify androidbridge.aar"
+
+lock_property() {
+  local key="$1"
+  local count
+  count="$(awk -F= -v key="$key" '$1 == key { count++ } END { print count + 0 }' "$LOCK_FILE")"
+  [ "$count" -eq 1 ] || reject "bridge.lock must contain exactly one $key property"
+  awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print }' "$LOCK_FILE"
+}
+
+EXPECTED_COMMIT="$(lock_property coreCommit)"
+EXPECTED_API="$(lock_property bridgeApiVersion)"
+[[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]] || reject "bridge.lock coreCommit must be a full lowercase 40-character Git SHA"
+[[ "$EXPECTED_API" =~ ^[1-9][0-9]*$ ]] || reject "bridge.lock bridgeApiVersion must be a positive integer"
 
 if ! METADATA="$(unzip -p "$AAR" bridge-version.properties 2>/dev/null)" || [ -z "$METADATA" ]; then
   reject "androidbridge.aar has no bridge-version.properties; rebuild it from a known tcptun-go checkout"
@@ -28,13 +42,19 @@ property() {
 
 CORE_COMMIT="$(property coreCommit)"
 CORE_VERSION="$(property coreVersion)"
+CORE_DIRTY="$(property coreDirty)"
 BRIDGE_API="$(property bridgeApiVersion)"
 
-[[ "$CORE_COMMIT" =~ ^[0-9a-f]{12,40}$ ]] || reject "Bridge metadata coreCommit is missing or malformed"
+[[ "$CORE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || reject "Bridge metadata coreCommit must be a full lowercase 40-character Git SHA"
 [ -n "$CORE_VERSION" ] || reject "Bridge metadata coreVersion is missing"
+[[ "$CORE_VERSION" != *-dirty* ]] || reject "Bridge metadata reports a dirty core version"
+[ "$CORE_DIRTY" = false ] || reject "Bridge metadata coreDirty must be false"
 [[ "$BRIDGE_API" =~ ^[0-9]+$ ]] || reject "Bridge metadata bridgeApiVersion is malformed"
 [ "$BRIDGE_API" = "$EXPECTED_API" ] || reject "Bridge API mismatch: app expects $EXPECTED_API but AAR reports $BRIDGE_API"
-[ -z "$EXPECTED_COMMIT" ] || [ "$CORE_COMMIT" = "$EXPECTED_COMMIT" ] || \
+[ "$CORE_COMMIT" = "$EXPECTED_COMMIT" ] || \
   reject "Bridge core commit mismatch: expected $EXPECTED_COMMIT but AAR reports $CORE_COMMIT"
+[ -z "$ASSERTED_COMMIT" ] || [ "$CORE_COMMIT" = "$ASSERTED_COMMIT" ] || \
+  reject "Bridge core commit does not match the additional assertion $ASSERTED_COMMIT"
 
-printf 'Verified androidbridge: core=%s version=%s api=%s\n' "$CORE_COMMIT" "$CORE_VERSION" "$BRIDGE_API"
+printf 'Verified androidbridge: core=%s version=%s dirty=%s api=%s\n' \
+  "$CORE_COMMIT" "$CORE_VERSION" "$CORE_DIRTY" "$BRIDGE_API"

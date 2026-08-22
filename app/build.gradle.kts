@@ -186,7 +186,7 @@ tasks.named("check").configure {
 }
 
 val bridgeAar = layout.projectDirectory.file("libs/androidbridge.aar")
-val expectedBridgeApiVersion = 1
+val bridgeLock = rootProject.layout.projectDirectory.file("bridge.lock")
 val expectedCoreCommit = providers.gradleProperty("expectedCoreCommit")
     .orElse(providers.environmentVariable("EXPECTED_CORE_COMMIT"))
 
@@ -198,14 +198,14 @@ fun registerBridgeVerification(name: String, strict: Boolean) = tasks.register<E
         "Warns when the debug androidbridge.aar has unverifiable provenance."
     }
     inputs.file(bridgeAar).optional()
-    inputs.property("expectedBridgeApiVersion", expectedBridgeApiVersion)
+    inputs.file(bridgeLock)
     inputs.property("expectedCoreCommit", expectedCoreCommit.orNull.orEmpty())
     commandLine(
         "bash",
         rootProject.layout.projectDirectory.file("scripts/verify-androidbridge.sh").asFile.absolutePath,
         if (strict) "strict" else "warning",
         bridgeAar.asFile.absolutePath,
-        expectedBridgeApiVersion.toString(),
+        bridgeLock.asFile.absolutePath,
         expectedCoreCommit.orNull.orEmpty(),
     )
 }

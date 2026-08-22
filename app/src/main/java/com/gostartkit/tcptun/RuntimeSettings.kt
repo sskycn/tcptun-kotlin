@@ -209,9 +209,11 @@ object RuntimeSettingsRepository {
             .put("username", normalizedSettings.socksUsername)
             .put("password", normalizedSettings.socksPassword)
             .toString()
-        val saved = afterVerifiedSecretWrite(
-            writeAndVerify = { secretStore.writeVerified(secretsId, encodedSecrets) },
-            replacePlaintext = {
+        val saved = replaceWithVerifiedSecret(
+            secretStore = secretStore,
+            newSecretId = secretsId,
+            plaintext = encodedSecrets,
+            commitPointer = {
                 prefs.edit()
                     .putInt(KeyStorageVersion, StorageVersionEncryptedSecrets)
                     .putInt(KeyMtu, normalizedSettings.mtu)

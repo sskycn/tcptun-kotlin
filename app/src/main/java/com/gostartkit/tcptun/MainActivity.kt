@@ -201,6 +201,8 @@ internal const val MaxProfileChoiceInputLength = 256
 internal const val MaxRealityKeyInputLength = 4_096
 internal const val MaxEchKeyInputLength = 4_096
 
+// TODO(security): replace pending plan/profile SavedState payloads with in-memory IDs so profile
+// credentials are not serialized by Android during process recreation.
 internal val PendingRunPlanSaver = Saver<ProfileRunPlan?, String>(
     save = { plan -> encodePendingRunPlan(plan) },
     restore = { encoded -> decodePendingRunPlan(encoded) },
@@ -222,8 +224,6 @@ internal val RuntimeSettingsSaver = Saver<RuntimeSettings, String>(
             .put("socksPort", settings.socksPort)
             .put("localProxyProtocol", settings.localProxyProtocol)
             .put("socksListenAll", settings.socksListenAll)
-            .put("socksUsername", settings.socksUsername)
-            .put("socksPassword", settings.socksPassword)
             .put("routeLocalProxyTraffic", settings.routeLocalProxyTraffic)
             .put("defaultOutbound", settings.defaultOutbound)
             .put("flowAnalysisApp", settings.flowAnalysisApp)
@@ -240,8 +240,6 @@ internal val RuntimeSettingsSaver = Saver<RuntimeSettings, String>(
                 socksPort = json.optInt("socksPort", RuntimeSettingsDefaults.SocksPort),
                 localProxyProtocol = json.optString("localProxyProtocol", DefaultLocalProxyProtocol),
                 socksListenAll = json.optBoolean("socksListenAll", false),
-                socksUsername = json.optString("socksUsername"),
-                socksPassword = json.optString("socksPassword"),
                 routeLocalProxyTraffic = json.optBoolean("routeLocalProxyTraffic", false),
                 defaultOutbound = json.optString("defaultOutbound", DefaultOutboundDynamicPool),
                 flowAnalysisApp = json.optString("flowAnalysisApp"),

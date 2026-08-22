@@ -54,6 +54,7 @@ class ProfileSecretSerializationAndroidTest {
                 .putInt("profileStateVersion", 2)
                 .putString("profiles", JSONArray().put(legacy.toJson()).toString())
                 .putString("activeProfileIds", "[]")
+                .putString("token", "obsolete-legacy-plaintext-token")
                 .commit()
 
             val migrated = ProfileStore.load(context)
@@ -63,6 +64,7 @@ class ProfileSecretSerializationAndroidTest {
 
             assertEquals("legacy-profile-token", migrated.profiles.single().token)
             assertFalse(publicProfiles.contains("legacy-profile-token"))
+            assertFalse(preferences.contains("token"))
             assertFalse(encryptedValues.any { it.contains("legacy-profile-token") })
             assertEquals(3, preferences.getInt("profileStateVersion", 0))
         } finally {
