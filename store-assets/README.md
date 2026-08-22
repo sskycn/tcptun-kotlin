@@ -11,6 +11,7 @@
 - `screenshots/en/`：英文界面截图
 - `screenshots/play/en/`：符合 Play 9:16 上传比例的英文手机截图
 - `screenshots/play/zh/`：符合 Play 9:16 上传比例的中文手机截图
+- `promo/tcptun-promo-zh-1080p.mp4`：中文 16:9 宣传片（约 34 秒）。上传到 YouTube 后，把链接填进 Play Console 的宣传视频字段
 
 ## 文案和审核资料
 
