@@ -11,7 +11,7 @@ internal class UnderlyingNetworkCoordinator(
     private val canHandleCallback: () -> Boolean,
     private val onSelectionChanged: (Network?, RankedSelectionClaim<Network>, String) -> Unit,
     private val log: (String) -> Unit,
-) {
+) : UnderlyingNetworkSelectionSource<Network> {
     private val registrationLock = Any()
     private val callbackEpochGate = CallbackEpochGate()
     private val selection = RankedSelectionTracker<Network>()
@@ -19,7 +19,7 @@ internal class UnderlyingNetworkCoordinator(
     private var callbackEpoch = 0L
     private var registered = false
 
-    fun register() {
+    override fun register() {
         synchronized(registrationLock) {
             if (registered || !canHandleCallback()) return
             val epoch = callbackEpochGate.activateNext()
@@ -43,7 +43,7 @@ internal class UnderlyingNetworkCoordinator(
         }
     }
 
-    fun unregister(): Boolean {
+    override fun unregister(): Boolean {
         val networkCallback = synchronized(registrationLock) {
             if (!registered) return false
             registered = false
@@ -66,7 +66,7 @@ internal class UnderlyingNetworkCoordinator(
     }
 
     /** Rebinds the selected network after the Bridge creates a replacement epoch. */
-    fun republishCurrent(reason: String) {
+    override fun republishCurrent(reason: String) {
         if (!canHandleCallback()) return
         val claim = selection.currentClaim() ?: return
         onSelectionChanged(claim.value, claim, reason)

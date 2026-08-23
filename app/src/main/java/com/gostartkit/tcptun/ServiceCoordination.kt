@@ -24,33 +24,6 @@ internal fun VpnRuntimeOwnership.isCurrent(
     activeServiceInstance: Boolean,
 ): Boolean = runtimeTokenCurrent && activeServiceInstance && bridgeEpoch == activeBridgeEpoch
 
-internal data class UnderlyingNetworkUpdate<K>(
-    val network: K?,
-    val selection: RankedSelectionClaim<K>,
-    val reason: String,
-    val ownership: VpnRuntimeOwnership,
-    val sequence: Long,
-)
-
-/** Coalesces callback results while preserving the runtime which selected them. */
-internal class UnderlyingNetworkUpdateGate<K> {
-    private var sequence = 0L
-
-    @Synchronized
-    fun request(
-        network: K?,
-        selection: RankedSelectionClaim<K>,
-        reason: String,
-        ownership: VpnRuntimeOwnership,
-    ): UnderlyingNetworkUpdate<K> {
-        sequence = if (sequence == Long.MAX_VALUE) 1L else sequence + 1L
-        return UnderlyingNetworkUpdate(network, selection, reason, ownership, sequence)
-    }
-
-    @Synchronized
-    fun isLatest(request: UnderlyingNetworkUpdate<K>): Boolean = request.sequence == sequence
-}
-
 /**
  * Owns ranked candidate state and rejects stale selections computed by an
  * earlier callback. All mutations are serialized behind one private monitor.
