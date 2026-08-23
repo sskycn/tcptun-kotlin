@@ -28,6 +28,15 @@ For a local release-script dry run without pushing:
 ./scripts/release.sh vX.Y.Z --no-push
 ```
 
+The device-install helper can rebuild the bridge from the latest `tcptun-go` main branch:
+
+```bash
+BUILD_BRIDGE=1 sh release.bash
+```
+
+This fetches `origin/main` (override with `TCPTUN_GO_REMOTE` or `TCPTUN_GO_BRANCH`), builds
+the AAR from a temporary worktree, and updates `bridge.lock` to the exact embedded commit.
+
 The release script validates the branch/remote, updates Android version metadata, rebuilds
 the bridge, runs the quality gates, and performs the requested commit/tag operations. Review
 the generated native symbols and the final manifest before distribution.
