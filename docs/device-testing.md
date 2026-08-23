@@ -87,7 +87,9 @@ It only force-stops and clears `com.tcptun.client.debug` and its debug test pack
 touches release app data in `com.tcptun.client`. Before any mutation, the host records Wi-Fi
 and mobile-data state and installs `EXIT`, `INT`, and `TERM` traps. The trap force-stops the
 debug target, resets its AppOps, clears both debug packages, and restores both radios even if
-instrumentation crashes. Debug data is therefore disposable and is not backed up.
+instrumentation crashes. If an OEM denies shell `pm clear`, the runner uninstalls that exact
+debug package instead; failure of both cleanup paths fails the run. Debug data is therefore
+disposable and is not backed up.
 
 The default lifecycle matrix uses self-contained single-profile raw direct configs. It does
 not claim to test in-place membership. That proof is a separate device-lab opt-in requiring

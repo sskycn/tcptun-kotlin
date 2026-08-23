@@ -59,9 +59,11 @@ internal class AesGcmSecretCipher(
     private val secureRandom: SecureRandom = SecureRandom(),
 ) : SecretCipher {
     override fun encrypt(plaintext: String, associatedData: String): String {
-        val iv = ByteArray(IV_BYTES).also(secureRandom::nextBytes)
         val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, keyProvider(), GCMParameterSpec(TAG_BITS, iv))
+        cipher.init(Cipher.ENCRYPT_MODE, keyProvider(), secureRandom)
+        val iv = requireNotNull(cipher.iv).also {
+            require(it.size == IV_BYTES) { "invalid generated encryption IV" }
+        }
         cipher.updateAAD(associatedData.toByteArray(StandardCharsets.UTF_8))
         val ciphertext = cipher.doFinal(plaintext.toByteArray(StandardCharsets.UTF_8))
         return "$ENVELOPE_VERSION:${iv.toHex()}:${ciphertext.toHex()}"

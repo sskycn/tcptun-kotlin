@@ -117,13 +117,21 @@ class VpnRuntimeStressTest {
             .single { it.activeServiceOwner }
             .serviceInstanceId
 
-        harness.context.stopService(Intent(harness.context, TcptunVpnService::class.java))
-        harness.waitUntil("old Service enters destroy", 10_000) {
-            TcptunVpnService.runtimeOwnershipDebugSnapshots().none { it.activeServiceOwner } ||
-                TcptunVpnService.runtimeOwnershipDebugSnapshots().any {
-                    it.serviceInstanceId == originalServiceId && it.destroyed
-                }
+        val stopAccepted = harness.context.stopService(
+            Intent(harness.context, TcptunVpnService::class.java),
+        )
+        assumeTrue("platform rejected the Service recreation trigger", stopAccepted)
+        val destroyDeadline = System.currentTimeMillis() + 10_000L
+        var oldServiceDestroyed = false
+        while (System.currentTimeMillis() < destroyDeadline && !oldServiceDestroyed) {
+            harness.assertRuntimeInvariants()
+            val snapshots = TcptunVpnService.runtimeOwnershipDebugSnapshots()
+            oldServiceDestroyed = snapshots.none { it.activeServiceOwner } || snapshots.any {
+                it.serviceInstanceId == originalServiceId && it.destroyed
+            }
+            if (!oldServiceDestroyed) Thread.sleep(50)
         }
+        assumeTrue("platform kept the Running Service instead of recreating it", oldServiceDestroyed)
         harness.start(harness.lifecyclePlanB)
         harness.waitForRunning(timeoutMillis = 45_000)
 

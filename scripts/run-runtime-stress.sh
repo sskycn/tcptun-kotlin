@@ -44,7 +44,25 @@ else
 fi
 
 cleanup_started="false"
+package_is_installed() {
+    adb -s "$serial" shell pm path "$1" 2>/dev/null | grep -q '^package:'
+}
+
+clear_disposable_package() {
+    local package_name="$1"
+    if ! package_is_installed "$package_name"; then
+        return 0
+    fi
+    if adb -s "$serial" shell pm clear "$package_name" >/dev/null 2>&1; then
+        return 0
+    fi
+    echo "pm clear denied for $package_name; uninstalling disposable debug package" >&2
+    adb -s "$serial" uninstall "$package_name" >/dev/null
+}
+
 cleanup() {
+    local runner_status=$?
+    local cleanup_failed="false"
     if [[ "$cleanup_started" == "true" ]]; then
         return
     fi
@@ -53,10 +71,10 @@ cleanup() {
     trap '' INT TERM
     set +e
     adb -s "$serial" shell am force-stop "$debug_package"
-    adb -s "$serial" shell appops reset "$debug_package"
-    adb -s "$serial" shell appops reset "$debug_test_package"
-    adb -s "$serial" shell pm clear "$debug_package"
-    adb -s "$serial" shell pm clear "$debug_test_package"
+    adb -s "$serial" shell appops reset "$debug_package" >/dev/null 2>&1
+    adb -s "$serial" shell appops reset "$debug_test_package" >/dev/null 2>&1
+    clear_disposable_package "$debug_package" || cleanup_failed="true"
+    clear_disposable_package "$debug_test_package" || cleanup_failed="true"
     if [[ "$wifi_was_enabled" == "true" ]]; then
         adb -s "$serial" shell svc wifi enable
     else
@@ -67,6 +85,11 @@ cleanup() {
     else
         adb -s "$serial" shell svc data disable
     fi
+    if [[ "$cleanup_failed" == "true" ]]; then
+        echo "runtime stress could not clear all disposable debug data" >&2
+        runner_status=1
+    fi
+    exit "$runner_status"
 }
 
 trap cleanup EXIT
@@ -87,8 +110,8 @@ fi
 adb -s "$serial" shell am force-stop "$debug_package" >/dev/null 2>&1 || true
 adb -s "$serial" shell appops reset "$debug_package" >/dev/null 2>&1 || true
 adb -s "$serial" shell appops reset "$debug_test_package" >/dev/null 2>&1 || true
-adb -s "$serial" shell pm clear "$debug_package" >/dev/null 2>&1 || true
-adb -s "$serial" shell pm clear "$debug_test_package" >/dev/null 2>&1 || true
+clear_disposable_package "$debug_package"
+clear_disposable_package "$debug_test_package"
 
 gradle_args=(
     :app:connectedDebugAndroidTest

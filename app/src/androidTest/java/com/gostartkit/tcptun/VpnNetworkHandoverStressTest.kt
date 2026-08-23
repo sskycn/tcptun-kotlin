@@ -228,6 +228,6 @@ class VpnNetworkHandoverStressTest {
     private companion object {
         const val NetworkControlArgument = "runtimeStressNetworkControl"
         const val SystemEventsArgument = "runtimeStressSystemEvents"
-        val TaskIdPattern = Regex("Task\\{[^}]*#(\\d+)[^}]*[^}]*(?:com\\.tcptun\\.client[^}]*)}")
+        val TaskIdPattern = Regex("Task\\{[^}]*#(\\d+)[^}]*com\\.tcptun\\.client[^}]*\\}")
     }
 }
