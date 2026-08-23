@@ -37,6 +37,12 @@ import java.util.concurrent.atomic.AtomicReference
 
 
 class TcptunVpnService : VpnService() {
+    private data class RecoveryRollbackCleanup(
+        val token: VpnRuntimeRecoveryToken,
+        val request: VpnRuntimeRecoveryRequest,
+        val failure: Throwable,
+    )
+
     private val serviceInstanceId = nextServiceInstanceId.incrementAndGet()
     private val notificationController by lazy(LazyThreadSafetyMode.NONE) {
         VpnNotificationController(this)
@@ -633,13 +639,14 @@ class TcptunVpnService : VpnService() {
     )
 
     private fun rollbackRecoveryStart(
-        request: VpnRuntimeStartRequest,
+        startRequest: VpnRuntimeStartRequest,
+        recoveryRequest: VpnRuntimeRecoveryRequest,
         token: VpnRuntimeRecoveryToken,
         error: Throwable,
         superseded: Boolean,
-    ) {
+    ): VpnPlatformStopResult =
         rollbackStartCleanup(
-            request = request,
+            request = startRequest,
             error = error,
             superseded = superseded,
             commandOwner = {
@@ -648,6 +655,25 @@ class TcptunVpnService : VpnService() {
                     isActiveServiceOwner()
             },
             startRollbackToken = null,
+            recoveryRollback = RecoveryRollbackCleanup(
+                token = token,
+                request = recoveryRequest,
+                failure = error,
+            ),
+        )
+
+    private fun rollbackBridgeRecovery(
+        request: VpnRuntimeRecoveryRequest,
+        token: VpnRuntimeRecoveryToken,
+        error: Throwable,
+        superseded: Boolean,
+    ): VpnPlatformStopResult {
+        if (superseded || !runtimeCoordinator.isCurrent(token)) {
+            TcptunState.appendLog("VPN recovery cancelled")
+            return releaseSupersededRuntime()
+        }
+        return releaseSupersededRuntime(
+            recoveryRollback = RecoveryRollbackCleanup(token, request, error),
         )
     }
 
@@ -657,6 +683,7 @@ class TcptunVpnService : VpnService() {
         superseded: Boolean,
         commandOwner: () -> Boolean,
         startRollbackToken: VpnRuntimeCommandToken?,
+        recoveryRollback: RecoveryRollbackCleanup? = null,
     ): VpnPlatformStopResult {
         if (superseded || !commandOwner()) {
             TcptunState.appendLog("VPN start cancelled")
@@ -682,7 +709,10 @@ class TcptunVpnService : VpnService() {
                 }
             }
         }
-        val cleanupResult = releaseSupersededRuntime(startRollbackToken = startRollbackToken)
+        val cleanupResult = releaseSupersededRuntime(
+            startRollbackToken = startRollbackToken,
+            recoveryRollback = recoveryRollback,
+        )
         if (request.preserveDesiredStateOnFailure) return cleanupResult
         synchronized(lifecycleCommandLock) {
             if (commandOwner()) {
@@ -835,6 +865,7 @@ class TcptunVpnService : VpnService() {
 
     private fun releaseSupersededRuntime(
         startRollbackToken: VpnRuntimeCommandToken? = null,
+        recoveryRollback: RecoveryRollbackCleanup? = null,
     ): VpnPlatformStopResult =
         stopVpn(
             setStopped = false,
@@ -842,6 +873,7 @@ class TcptunVpnService : VpnService() {
             stopSelfService = false,
             globalStateOwner = { false },
             coordinatorStartRollbackToken = startRollbackToken,
+            coordinatorRecoveryRollback = recoveryRollback,
         )
 
     private fun requestOutboundUpdate(intent: Intent, token: VpnRuntimeCommandToken) {
@@ -1370,9 +1402,16 @@ class TcptunVpnService : VpnService() {
         globalStateCommitLock: Any? = null,
         coordinatorStopToken: VpnRuntimeCommandToken? = null,
         coordinatorStartRollbackToken: VpnRuntimeCommandToken? = null,
+        coordinatorRecoveryRollback: RecoveryRollbackCleanup? = null,
     ): VpnPlatformStopResult {
-        check(coordinatorStopToken == null || coordinatorStartRollbackToken == null) {
-            "platform cleanup cannot complete both Stop and Start rollback"
+        check(
+            listOfNotNull(
+                coordinatorStopToken,
+                coordinatorStartRollbackToken,
+                coordinatorRecoveryRollback,
+            ).size <= 1,
+        ) {
+            "platform cleanup cannot complete multiple coordinator owners"
         }
         return synchronized(teardownLock) {
             fun cleanupGlobalStep(label: String, action: () -> Unit) {
@@ -1516,6 +1555,7 @@ class TcptunVpnService : VpnService() {
                         globalStateCommitLock = globalStateCommitLock,
                         coordinatorStopToken = coordinatorStopToken,
                         coordinatorStartRollbackToken = coordinatorStartRollbackToken,
+                        coordinatorRecoveryRollback = coordinatorRecoveryRollback,
                     )
                 }
             }
@@ -1540,6 +1580,7 @@ class TcptunVpnService : VpnService() {
         globalStateCommitLock: Any?,
         coordinatorStopToken: VpnRuntimeCommandToken?,
         coordinatorStartRollbackToken: VpnRuntimeCommandToken?,
+        coordinatorRecoveryRollback: RecoveryRollbackCleanup?,
     ) {
         if (destroyed.get() || !bridgeResources.hasOwnedResources) return
         val retry = bridgeTeardownRetryCoordinator.next()
@@ -1561,7 +1602,35 @@ class TcptunVpnService : VpnService() {
                 }
             },
         ) {
-            if (destroyed.get() || !bridgeResources.hasOwnedResources) return@scheduleCrashGuardedFuture
+            fun completeOwnedCleanup(result: VpnPlatformStopResult) {
+                if (coordinatorStopToken != null) {
+                    runtimeCoordinator.completePlatformStop(coordinatorStopToken, result)
+                }
+                if (coordinatorStartRollbackToken != null) {
+                    runtimeCoordinator.completeStartRollbackCleanup(
+                        coordinatorStartRollbackToken,
+                        result,
+                    )
+                }
+                if (coordinatorRecoveryRollback != null) {
+                    runtimeCoordinator.completeRecoveryRollbackCleanup(
+                        coordinatorRecoveryRollback.token,
+                        result,
+                    )?.let { retryToken ->
+                        scheduleBridgeRecovery(
+                            recoveryToken = retryToken,
+                            request = coordinatorRecoveryRollback.request,
+                            failure = coordinatorRecoveryRollback.failure,
+                        )
+                    }
+                }
+            }
+
+            if (destroyed.get()) return@scheduleCrashGuardedFuture
+            if (!bridgeResources.hasOwnedResources) {
+                completeOwnedCleanup(VpnPlatformStopResult.Released)
+                return@scheduleCrashGuardedFuture
+            }
             TcptunState.appendLog(
                 "retrying tcptun cleanup (${retry.attempt}/${retry.maxAttempts})",
             )
@@ -1574,16 +1643,9 @@ class TcptunVpnService : VpnService() {
                     globalStateCommitLock = globalStateCommitLock,
                     coordinatorStopToken = coordinatorStopToken,
                     coordinatorStartRollbackToken = coordinatorStartRollbackToken,
+                    coordinatorRecoveryRollback = coordinatorRecoveryRollback,
                 )
-                if (coordinatorStopToken != null) {
-                    runtimeCoordinator.completePlatformStop(coordinatorStopToken, result)
-                }
-                if (coordinatorStartRollbackToken != null) {
-                    runtimeCoordinator.completeStartRollbackCleanup(
-                        coordinatorStartRollbackToken,
-                        result,
-                    )
-                }
+                completeOwnedCleanup(result)
             }
         }
         if (future == null) {
@@ -1971,50 +2033,38 @@ class TcptunVpnService : VpnService() {
                 it.copy(lastRestartReason = reason, bridgeStatus = "Restarting")
             }
         }
-        try {
-            stopBridge()
-            if (!commandOwner()) return
-            closeTunAfterBridgeStopAttempt()
-            Thread.sleep(BRIDGE_RESTART_DELAY_MS)
-            if (!commandOwner()) return
-            claimBridgeRuntimeLease(commandOwner)
-            check(commandOwner()) { "tcptun restart was superseded" }
-            val replacementTun = buildTun(tunMtu)
-            ownTun(replacementTun)
-            startBridge(
-                configJson,
-                plan,
-                replacementTun,
-                tunMtu,
-                commandOwner,
-            )
-            val replacementEpoch = bridgeResources.activeEpoch
-            synchronized(lifecycleCommandLock) {
-                if (
-                    commandOwner() && replacementEpoch == bridgeResources.activeEpoch &&
-                    tun === replacementTun
-                ) {
-                    TcptunState.appendLog("tcptun bridge transaction restarted")
-                    TcptunState.setConnectionsReady(true)
-                    startBridgeMonitor()
-                    // The previous runtime's balance observations were discarded
-                    // by the restart, so seed health after the replacement settles.
-                    requestMemberHealthProbe(
-                        reason = "bridge restarted: $reason",
-                        delayMs = BridgeHealthPolicy.MEMBER_HEALTH_STARTUP_DELAY_MS,
-                    )
-                }
+        stopBridge()
+        if (!commandOwner()) return
+        closeTunAfterBridgeStopAttempt()
+        Thread.sleep(BRIDGE_RESTART_DELAY_MS)
+        if (!commandOwner()) return
+        claimBridgeRuntimeLease(commandOwner)
+        check(commandOwner()) { "tcptun restart was superseded" }
+        val replacementTun = buildTun(tunMtu)
+        ownTun(replacementTun)
+        startBridge(
+            configJson,
+            plan,
+            replacementTun,
+            tunMtu,
+            commandOwner,
+        )
+        val replacementEpoch = bridgeResources.activeEpoch
+        synchronized(lifecycleCommandLock) {
+            if (
+                commandOwner() && replacementEpoch == bridgeResources.activeEpoch &&
+                tun === replacementTun
+            ) {
+                TcptunState.appendLog("tcptun bridge transaction restarted")
+                TcptunState.setConnectionsReady(true)
+                startBridgeMonitor()
+                // The previous runtime's balance observations were discarded
+                // by the restart, so seed health after the replacement settles.
+                requestMemberHealthProbe(
+                    reason = "bridge restarted: $reason",
+                    delayMs = BridgeHealthPolicy.MEMBER_HEALTH_STARTUP_DELAY_MS,
+                )
             }
-        } catch (error: Throwable) {
-            if (error.isFatalProcessError()) throw error
-            stopVpn(
-                setStopped = false,
-                clearSavedConfig = false,
-                stopSelfService = false,
-                globalStateOwner = { false },
-                globalStateCommitLock = lifecycleCommandLock,
-            )
-            throw error
         }
     }
 
@@ -2163,7 +2213,7 @@ class TcptunVpnService : VpnService() {
                         restartBridge(request.reason, commandOwner)
                         check(commitRunning(request.plan)) { "bridge restart was superseded while committing" }
                     },
-                    rollbackRecovery = { _, _, _, _ -> },
+                    rollbackRecovery = ::rollbackBridgeRecovery,
                     onRetryRequired = ::scheduleBridgeRecovery,
                 )
         }
@@ -2251,8 +2301,14 @@ class TcptunVpnService : VpnService() {
                         commitRunning,
                     )
                 },
-                rollbackRecovery = { _, commandToken, retryError, superseded ->
-                    rollbackRecoveryStart(startRequest, commandToken, retryError, superseded)
+                rollbackRecovery = { recoveryRequest, commandToken, retryError, superseded ->
+                    rollbackRecoveryStart(
+                        startRequest,
+                        recoveryRequest,
+                        commandToken,
+                        retryError,
+                        superseded,
+                    )
                 },
                 onRetryRequired = ::scheduleBridgeRecovery,
             )
