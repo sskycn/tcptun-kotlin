@@ -100,8 +100,15 @@ internal class OutboundTcpingRuntime(
             executor = executor,
             taskName = "TCPing",
             onFailure = { error ->
-                publish(claim) {
-                    state.fail(request.requestId, failureDescription(error))
+                try {
+                    publish(claim) {
+                        state.fail(request.requestId, failureDescription(error))
+                    }
+                } finally {
+                    // A rejected submission and an unexpected task failure both
+                    // release only the claim that failed. A newer request may
+                    // already have replaced it while this callback was pending.
+                    currentClaim.compareAndSet(claim, null)
                 }
             },
         ) {
@@ -113,6 +120,8 @@ internal class OutboundTcpingRuntime(
         currentClaim.set(null)
         executor.shutdownNow()
     }
+
+    internal fun hasCurrentClaim(): Boolean = currentClaim.get() != null
 
     private fun run(claim: RequestClaim) {
         if (!requireActiveSession(claim)) return

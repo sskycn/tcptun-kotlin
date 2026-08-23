@@ -24,7 +24,6 @@ import org.json.JSONObject
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.ArrayBlockingQueue
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Callable
 import java.util.concurrent.CancellationException
 import java.util.concurrent.Executor
@@ -75,11 +74,6 @@ internal data class MemberHealthProbeResult(
     val error: String = "",
 )
 
-internal data class BridgeReadyWaiter(
-    val epoch: Long,
-    val future: CompletableFuture<Unit> = CompletableFuture(),
-)
-
 internal data class BridgeRuntimeSnapshot(
     val epoch: Long,
     val activeConnections: Int,
@@ -102,4 +96,3 @@ internal fun underlyingNetworkScore(
     if (cellular) score += 20
     return score
 }
-

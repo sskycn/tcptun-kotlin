@@ -1,5 +1,7 @@
 package com.tcptun.client
 
+import java.util.concurrent.CopyOnWriteArrayList
+
 /**
  * Small fault-injecting test double for the existing Android bridge seam.
  * Production continues to use ReflectionTcptunBridge; this class deliberately
@@ -10,6 +12,7 @@ internal class FakeTcptunBridge(
     private val session: Long = 41L,
     private var currentStatus: String = "Running",
     private var currentStatusReason: String = "",
+    private val onStart: (() -> Unit)? = null,
 ) : TcptunBridge {
     data class Failures(
         val configure: Throwable? = null,
@@ -21,7 +24,7 @@ internal class FakeTcptunBridge(
         val close: Throwable? = null,
     )
 
-    val calls = mutableListOf<String>()
+    val calls = CopyOnWriteArrayList<String>()
     var configuredJson: String? = null
         private set
     var tunFd: Int? = null
@@ -34,6 +37,8 @@ internal class FakeTcptunBridge(
         private set
     var abortCalled = false
         private set
+    private var statusCallback: ((String) -> Unit)? = null
+    private val statusCallbackHistory = mutableListOf<(String) -> Unit>()
 
     override fun configure(configJson: String) {
         calls += "configure"
@@ -49,6 +54,7 @@ internal class FakeTcptunBridge(
 
     override fun start(disabledOutboundTags: List<String>): Long {
         calls += "start"
+        onStart?.invoke()
         failures.start?.let { throw it }
         currentStatus = "Running"
         return session
@@ -91,6 +97,8 @@ internal class FakeTcptunBridge(
     override fun setStatusCallback(onStatus: (String) -> Unit) {
         calls += "setStatusCallback"
         callbacksInstalled = true
+        statusCallback = onStatus
+        statusCallbackHistory += onStatus
     }
 
     override fun clearLogCallback() {
@@ -101,6 +109,7 @@ internal class FakeTcptunBridge(
     override fun clearStatusCallback() {
         calls += "clearStatusCallback"
         callbacksCleared = true
+        statusCallback = null
     }
 
     override fun registerEvent(event: String) {
@@ -138,4 +147,12 @@ internal class FakeTcptunBridge(
     override fun probeOutbound(tag: String, host: String, port: Int, timeoutMillis: Long): Long = 0L
     override fun probeOutboundHealth(tag: String, host: String, port: Int, timeoutMillis: Long): Long = 0L
     override fun outboundsStatusJson(): String = "[]"
+
+    fun emitStatus(json: String) {
+        statusCallback?.invoke(json)
+    }
+
+    fun emitStatusFromInstallation(index: Int, json: String) {
+        statusCallbackHistory[index](json)
+    }
 }

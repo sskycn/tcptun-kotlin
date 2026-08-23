@@ -7,6 +7,8 @@ internal class LockedHealthBridgePort(
     private val isOwnershipCurrent: (VpnRuntimeOwnership) -> Boolean,
     private val hasActiveConfig: () -> Boolean,
 ) : HealthBridgePort {
+    internal fun sharesBridgeLock(candidate: Any): Boolean = lock === candidate
+
     override fun statusJson(ownership: VpnRuntimeOwnership): String = synchronized(lock) {
         check(isOwnershipCurrent(ownership) && hasActiveConfig()) {
             "tcptun session is unavailable"
@@ -45,6 +47,8 @@ internal class LockedTcpingBridgePort(
     private val bridge: () -> TcptunBridge,
     private val isOwnershipCurrent: (VpnRuntimeOwnership) -> Boolean,
 ) : TcpingBridgePort {
+    internal fun sharesBridgeLock(candidate: Any): Boolean = lock === candidate
+
     override fun probeOutbound(
         ownership: VpnRuntimeOwnership,
         tag: String,

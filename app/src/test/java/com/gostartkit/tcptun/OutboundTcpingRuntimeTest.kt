@@ -1,6 +1,7 @@
 package com.tcptun.client
 
 import java.util.concurrent.AbstractExecutorService
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -8,6 +9,51 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OutboundTcpingRuntimeTest {
+    @Test
+    fun rejectedSubmissionFailsAndReleasesItsClaim() {
+        val harness = Harness()
+        harness.state.currentRequestId = 1L
+        harness.executor.submissionFailure = RejectedExecutionException("full")
+
+        assertFalse(harness.runtime.request(request()))
+
+        assertEquals(1L, harness.state.failures.single().first)
+        assertFalse(harness.runtime.hasCurrentClaim())
+    }
+
+    @Test
+    fun unexpectedTaskFailureFailsAndReleasesItsClaim() {
+        val harness = Harness()
+        harness.state.beginFailure = IllegalStateException("publication crashed")
+        harness.start(request())
+
+        harness.executor.runNext()
+
+        assertEquals(1L, harness.state.failures.single().first)
+        assertFalse(harness.runtime.hasCurrentClaim())
+    }
+
+    @Test
+    fun oldFailureCallbackCannotClearOrFailTheNewerClaim() {
+        val harness = Harness()
+        harness.state.beforeBegin = {
+            harness.state.beforeBegin = {}
+            harness.state.currentRequestId = 2L
+            assertTrue(harness.runtime.request(request(id = 2L)))
+        }
+        harness.state.beginFailure = IllegalStateException("unexpected task failure")
+        harness.start(request(id = 1L))
+
+        harness.executor.runNext()
+
+        assertTrue(harness.runtime.hasCurrentClaim())
+        assertTrue(harness.state.failures.none { it.first == 2L })
+        harness.state.beginFailure = null
+        harness.executor.runNext()
+        assertEquals(listOf(2L), harness.state.finished)
+        assertFalse(harness.runtime.hasCurrentClaim())
+    }
+
     @Test
     fun invalidRequestIsRejectedWithoutAProbe() {
         val harness = Harness()
@@ -216,6 +262,8 @@ class OutboundTcpingRuntimeTest {
         val finished = mutableListOf<Long>()
         val failures = mutableListOf<Pair<Long, String>>()
         var afterComplete: () -> Unit = {}
+        var beforeBegin: () -> Unit = {}
+        var beginFailure: Throwable? = null
 
         override fun isCurrent(requestId: Long): Boolean =
             currentRequestId == requestId && finished.lastOrNull() != requestId &&
@@ -223,7 +271,10 @@ class OutboundTcpingRuntimeTest {
 
         override fun isLatest(requestId: Long): Boolean = currentRequestId == requestId
 
-        override fun beginStep(requestId: Long, index: Int, total: Int, profileName: String) = Unit
+        override fun beginStep(requestId: Long, index: Int, total: Int, profileName: String) {
+            beforeBegin()
+            beginFailure?.let { throw it }
+        }
 
         override fun completeStep(requestId: Long, result: TcpingLinkResult) {
             resultRequestIds += requestId
@@ -247,8 +298,10 @@ class OutboundTcpingRuntimeTest {
     private class ManualExecutorService : AbstractExecutorService() {
         val tasks = ArrayDeque<Runnable>()
         private var shutdown = false
+        var submissionFailure: RuntimeException? = null
 
         override fun execute(command: Runnable) {
+            submissionFailure?.let { throw it }
             check(!shutdown) { "executor is shut down" }
             tasks.addLast(command)
         }
