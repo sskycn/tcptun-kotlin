@@ -72,30 +72,6 @@ internal data class AppliedRuntimeSettings(
     }
 }
 
-internal data class AppliedRuntimeState(
-    val ownership: VpnRuntimeOwnership,
-    val settings: AppliedRuntimeSettings,
-)
-
-/** Atomically publishes only state owned by the caller's current runtime snapshot. */
-internal class AppliedRuntimeStateSlot {
-    @Volatile
-    var current: AppliedRuntimeState? = null
-        private set
-
-    @Synchronized
-    fun publish(candidate: AppliedRuntimeState, activeOwnership: VpnRuntimeOwnership?): Boolean {
-        if (candidate.ownership != activeOwnership) return false
-        current = candidate
-        return true
-    }
-
-    @Synchronized
-    fun clear() {
-        current = null
-    }
-}
-
 private val AndroidPackageNamePattern = Regex("^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+$")
 private const val MaxFlowAnalysisAppLength = 255
 private const val GeneratedLanProxyPasswordLength = 32
@@ -326,16 +302,17 @@ object RuntimeSettingsRepository {
     fun defaultLocalSocksConnectAddress(): String =
         "${RuntimeSettingsDefaults.LocalSocksHost}:${RuntimeSettingsDefaults.SocksPort}"
 
+    fun publishHotApplied(settings: RuntimeSettings) {
+        publishDiagnostics(settings)
+        TcptunState.appendLog(
+            "runtime settings applied without VPN restart: " +
+                "log-level=${settings.logLevel} power-saving=${settings.powerSavingMode}",
+        )
+    }
+
     private fun publish(settings: RuntimeSettings) {
         TcptunState.setFlowAnalysisApp(settings.flowAnalysisApp)
-        TcptunState.updateDiagnostics {
-            it.copy(
-                mtu = settings.mtu,
-                powerSavingMode = settings.powerSavingMode,
-                localProxyAddress = localSocksConnectAddress(settings),
-                localProxyPort = settings.socksPort,
-            )
-        }
+        publishDiagnostics(settings)
         TcptunState.appendLog(
             "runtime settings saved: proxy=${settings.localProxyProtocol}://" +
                 "${localSocksListenAddress(settings)} mtu=${settings.mtu} " +
@@ -344,6 +321,17 @@ object RuntimeSettingsRepository {
                 "default-outbound=${settings.defaultOutbound.ifBlank { "profile-pool" }} " +
                 "flow-analysis=${settings.flowAnalysisApp.ifBlank { "disabled" }}",
         )
+    }
+
+    private fun publishDiagnostics(settings: RuntimeSettings) {
+        TcptunState.updateDiagnostics {
+            it.copy(
+                mtu = settings.mtu,
+                powerSavingMode = settings.powerSavingMode,
+                localProxyAddress = localSocksConnectAddress(settings),
+                localProxyPort = settings.socksPort,
+            )
+        }
     }
 }
 

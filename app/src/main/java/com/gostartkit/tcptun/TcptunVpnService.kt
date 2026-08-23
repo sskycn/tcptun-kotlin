@@ -13,7 +13,6 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.VpnService
 import android.os.Build
-import android.os.IBinder
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -41,12 +40,6 @@ class TcptunVpnService : VpnService() {
         val failure: Throwable,
     )
 
-    private data class BridgeRestartPreparation(
-        val configJson: String,
-        val plan: ProfileRunPlan,
-        val settings: AppliedRuntimeSettings,
-        val reason: String,
-    )
     private val serviceInstanceId = nextServiceInstanceId.incrementAndGet()
     private val notificationController by lazy(LazyThreadSafetyMode.NONE) {
         VpnNotificationController(this)
@@ -105,7 +98,7 @@ class TcptunVpnService : VpnService() {
         failureLimit = HEALTH_FAILURE_LIMIT,
         nextCheckDelayMillis = { confirmingFailure ->
             BridgeHealthPolicy.nextCheckDelayMs(
-                powerSaving = powerSavingMode,
+                powerSaving = runtimeSettingsState.effectiveSettings.powerSavingMode,
                 confirmingFailure = confirmingFailure,
             )
         },
@@ -153,17 +146,9 @@ class TcptunVpnService : VpnService() {
     private val underlyingNetworkCoordinator: UnderlyingNetworkCoordinator
         get() = underlyingNetworkCoordinatorDelegate.value
     private val underlyingNetworkUpdateGate = UnderlyingNetworkUpdateGate<Network>()
-    private val appliedRuntimeState = AppliedRuntimeStateSlot()
-    private val appliedSettings: AppliedRuntimeSettings get() = appliedRuntimeState.current?.settings ?: AppliedRuntimeSettings()
-    private val tunMtu: Int get() = appliedSettings.mtu
-    private val activeSocksPort: Int get() = appliedSettings.socksPort
-    private val activeSocksUsername: String get() = appliedSettings.socksUsername
-    private val activeSocksPassword: String get() = appliedSettings.socksPassword
-    private val powerSavingMode: Boolean get() = appliedSettings.powerSavingMode
+    private val runtimeSettingsState = RuntimeSettingsRuntimeState()
     private val localProxyHealthProbe = LocalProxyHealthProbe()
     @Volatile private var lastMemberHealthProbeAtElapsedMs = 0L
-    private val runtimeSettingsDesiredGate = RuntimeSettingsDesiredGate()
-    private val runtimeSettingsApplyTask = LatestTaskSlot()
     private val bridgeRestartTask = LatestTaskSlot()
     private val bridgeRestartContinuationTask = LatestTaskSlot()
     private val bridgeRestartScheduleLock = Any()
@@ -221,10 +206,6 @@ class TcptunVpnService : VpnService() {
         }
     }
 
-    override fun onBind(intent: Intent?): IBinder? {
-        return super.onBind(intent)
-    }
-
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         val command = VpnServiceCommand.fromAction(action)
@@ -237,14 +218,11 @@ class TcptunVpnService : VpnService() {
                 // any other blocking operation so stale cleanup cannot stop it.
                 if (command.policyKind == ServiceCommandKind.StartOrRestore) {
                     runtimeCoordinator.claimStart(serviceInstanceId, persistent = true).also {
-                        appliedRuntimeState.clear()
+                        runtimeSettingsState.clearApplied()
                     }
                 } else {
                     runtimeCoordinator.claimAuxiliaryCommand(serviceInstanceId, persistent = true).also { token ->
-                        appliedRuntimeState.current?.settings?.let { settings ->
-                            val ownership = VpnRuntimeOwnership(token, bridgeResources.activeEpoch)
-                            appliedRuntimeState.publish(AppliedRuntimeState(ownership, settings), ownership)
-                        }
+                        runtimeSettingsState.rebindAppliedOwnership(token, currentRuntimeOwnership())
                     }
                 }
             } else null
@@ -324,7 +302,8 @@ class TcptunVpnService : VpnService() {
                     },
                     forceRestart = intent?.getBooleanExtra(EXTRA_FORCE_RUNTIME_RESTART, false) == true,
                 )
-                VpnServiceCommand.UpdateFlowAnalysis -> requestFlowAnalysisUpdate()
+                VpnServiceCommand.UpdateFlowAnalysis ->
+                    requestRuntimeSettingsApply("flow analysis changed", forceRestart = false)
                 VpnServiceCommand.RefreshClientIps -> requestBridgeClientIpsRefresh()
                 VpnServiceCommand.Restore,
                 VpnServiceCommand.Unknown,
@@ -353,8 +332,7 @@ class TcptunVpnService : VpnService() {
                     }
                     TcptunState.error(message)
                     val token = runtimeCoordinator.claimStop(serviceInstanceId, "failed command cleanup")
-                    appliedRuntimeState.clear()
-                    runtimeSettingsDesiredGate.clear()
+                    runtimeSettingsState.clearForStop()
                     token to runtimeCoordinator.dispatchStop(
                         token = token,
                         reason = "failed command cleanup",
@@ -550,7 +528,7 @@ class TcptunVpnService : VpnService() {
                 val json = startCommand.configJson
                 val plan = startCommand.plan
                 val runtimeSettings = startCommand.runtimeSettings
-                val desiredSequenceAtPreparation = runtimeSettingsDesiredGate.latestSequence
+                val desiredSequenceAtPreparation = runtimeSettingsState.latestSequence
                 val runtimeAppliedSettings = AppliedRuntimeSettings.from(runtimeSettings)
                 val desiredPlanJson = startCommand.desiredPlanJson
                 val startingPublished = synchronized(lifecycleCommandLock) {
@@ -565,7 +543,7 @@ class TcptunVpnService : VpnService() {
                                 localProxyReachable = false,
                                 mtu = runtimeSettings.mtu,
                                 powerSavingMode = runtimeSettings.powerSavingMode,
-                                localProxyAddress = localSocksConnectAddr(runtimeSettings),
+                                localProxyAddress = RuntimeSettingsRepository.localSocksConnectAddress(runtimeSettings),
                                 localProxyPort = runtimeSettings.socksPort,
                                 socketProtectEnabled = true,
                             )
@@ -807,12 +785,11 @@ class TcptunVpnService : VpnService() {
                 null
             } else if (replacementIntent == null) {
                 runtimeCoordinator.claimStop(serviceInstanceId, "profile reconciliation removed runtime").also {
-                    appliedRuntimeState.clear()
-                    runtimeSettingsDesiredGate.clear()
+                    runtimeSettingsState.clearForStop()
                 }
             } else {
                 runtimeCoordinator.claimReplacement(serviceInstanceId).also {
-                    appliedRuntimeState.clear()
+                    runtimeSettingsState.clearApplied()
                 }
             }
         }
@@ -1023,7 +1000,7 @@ class TcptunVpnService : VpnService() {
                 if (!attempted) markConnectionsReadyAfterUpdate(lifecycleGeneration, updateGeneration)
             },
             onReplacementRequired = { replacementToken, plan, failure ->
-                appliedRuntimeState.clear()
+                runtimeSettingsState.clearApplied()
                 if (failure == null) {
                     TcptunState.appendLog("reloading VPN connection configuration")
                 } else {
@@ -1058,7 +1035,7 @@ class TcptunVpnService : VpnService() {
                 if (!stopping && tun != null && TcptunState.status == VpnStatus.Running) {
                     TcptunState.setConnectionsReady(true)
                     startBridgeMonitor()
-                    appliedRuntimeState.current?.ownership?.let { reconcileDesiredSettingsAfterRunning(it) }
+                    runtimeSettingsState.applied?.ownership?.let { reconcileDesiredSettingsAfterRunning(it) }
                 }
             }
         }
@@ -1282,61 +1259,71 @@ class TcptunVpnService : VpnService() {
         }
     }
 
-    private fun ownsRuntime(ownership: VpnRuntimeOwnership): Boolean {
-        return !destroyed.get() && !stopping && tun != null && ownership.isCurrent(
+    private fun ownsRuntime(ownership: VpnRuntimeOwnership): Boolean =
+        !destroyed.get() && !stopping && tun != null && ownership.isCurrent(
             runtimeTokenCurrent = runtimeCoordinator.isCurrent(ownership.runtimeToken),
             activeBridgeEpoch = bridgeResources.activeEpoch,
             activeServiceInstance = isActiveServiceOwner(),
         )
-    }
 
     private fun currentRuntimeOwnership(): VpnRuntimeOwnership? =
         synchronized(lifecycleCommandLock) {
             val epoch = bridgeResources.activeEpoch
-            if (
-                destroyed.get() || stopping || tun == null || !isActiveServiceOwner() || epoch <= 0L
-            ) null else VpnRuntimeOwnership(runtimeCoordinator.currentToken(serviceInstanceId), epoch)
+            if (epoch <= 0L || destroyed.get() || stopping || tun == null || !isActiveServiceOwner()) {
+                return@synchronized null
+            }
+            VpnRuntimeOwnership(runtimeCoordinator.currentToken(serviceInstanceId), epoch)
         }
 
     private fun publishAppliedRuntimeState(
         token: VpnRuntimeCommandToken,
         settings: AppliedRuntimeSettings,
     ): VpnRuntimeOwnership? = synchronized(lifecycleCommandLock) {
-        val active = currentRuntimeOwnership() ?: return@synchronized null
-        val candidate = AppliedRuntimeState(VpnRuntimeOwnership(token, active.bridgeEpoch), settings)
-        candidate.ownership.takeIf { appliedRuntimeState.publish(candidate, active) }
+        runtimeSettingsState.publishFreshRuntime(token, settings, currentRuntimeOwnership())
     }
 
-    private fun publishAppliedRuntimeState(
+    private fun checkpointHotApplied(
         ownership: VpnRuntimeOwnership,
-        settings: AppliedRuntimeSettings,
+        transform: (AppliedRuntimeSettings) -> AppliedRuntimeSettings,
     ): Boolean = synchronized(lifecycleCommandLock) {
-        appliedRuntimeState.publish(
-            AppliedRuntimeState(ownership, settings),
+        runtimeSettingsState.checkpointHotAppliedOrRejectCurrent(
+            ownership,
             currentRuntimeOwnership(),
+            transform,
         )
     }
+
+    private fun applyRuntimeLogLevel(ownership: VpnRuntimeOwnership, logLevel: String) =
+        synchronized(bridgeLock) {
+            check(ownsRuntime(ownership)) { "runtime settings apply was superseded" }
+            bridge.setLogLevel(logLevel)
+            check(bridge.logLevel() == logLevel) {
+                "tcptun bridge did not apply log.level=$logLevel"
+            }
+        }
+
+    private fun applyRuntimeFlowAnalysis(ownership: VpnRuntimeOwnership, packageName: String) =
+        synchronized(bridgeLock) {
+            check(ownsRuntime(ownership)) { "flow analysis update was superseded" }
+            configureFlowAnalysis(
+                packageName,
+                ownership.bridgeEpoch,
+                requireNotNull(bridgeResources.activeConfigJson),
+            )
+        }
 
     private fun reconcileDesiredSettingsAfterRunning(
         ownership: VpnRuntimeOwnership,
         freshRuntimeDesiredSequence: Long? = null,
     ) {
-        val pending = runtimeSettingsDesiredGate.pending ?: return
-        if (!ownsRuntime(ownership)) return
-        val desired = AppliedRuntimeSettings.from(readRuntimeSettings(this))
-        val applied = appliedRuntimeState.current?.takeIf { it.ownership == ownership } ?: return
-        if (desiredRuntimeSettingsAction(
-                applied.settings,
-                desired,
-                pending.forceRestart,
-                freshRuntimeDesiredSequence == pending.sequence,
-            ) == RuntimeSettingsReconciliationAction.Satisfied
-        ) {
-            runtimeSettingsDesiredGate.acknowledge(pending.sequence)
-            return
-        }
-        runtimeSettingsDesiredGate.bindLatest(ownership)?.let {
-            scheduleRuntimeSettingsApply("pending runtime settings reconciliation", it)
+        if (runtimeSettingsState.pending == null) return
+        synchronized(lifecycleCommandLock) {
+            runtimeSettingsState.reconcileFreshRuntime(
+                ownership,
+                AppliedRuntimeSettings.from(RuntimeSettingsRepository.read(this)),
+                freshRuntimeDesiredSequence,
+                currentRuntimeOwnership(),
+            ) { scheduleRuntimeSettingsApply("pending runtime settings reconciliation", it) }
         }
     }
 
@@ -1344,9 +1331,7 @@ class TcptunVpnService : VpnService() {
         cleanupStep("clear TCPing") { TcptunState.clearTcping() }
         val (command, accepted) = synchronized(lifecycleCommandLock) {
             val token = runtimeCoordinator.claimStop(serviceInstanceId, "explicit VPN stop")
-            appliedRuntimeState.clear()
-            runtimeSettingsDesiredGate.clear()
-            runtimeSettingsApplyTask.cancel()
+            runtimeSettingsState.clearForStop()
             // Claiming the generation and persisting desired=false share the
             // same lock as successful-start publication, so an older start
             // cannot write desired=true after this stop request.
@@ -1588,7 +1573,7 @@ class TcptunVpnService : VpnService() {
             if (appIdentityProviderDelegate.isInitialized()) {
                 cleanupStep("clear app identity cache") { appIdentityProvider.clear() }
             }
-            appliedRuntimeState.clear()
+            runtimeSettingsState.clearApplied()
             lastMemberHealthProbeAtElapsedMs = 0L
             memberHealthBatchSelector.clear()
             memberHealthProbeScheduler.reset()
@@ -1606,7 +1591,7 @@ class TcptunVpnService : VpnService() {
                             bridgeMuxSessions = 0,
                             bridgeMuxStreams = 0,
                             localProxyReachable = false,
-                            localProxyAddress = defaultLocalSocksConnectAddr(),
+                            localProxyAddress = RuntimeSettingsRepository.defaultLocalSocksConnectAddress(),
                             localProxyPort = DEFAULT_SOCKS_PORT,
                             healthCheckEventDriven = true,
                             healthCheckIntervalSeconds = 0,
@@ -1801,8 +1786,7 @@ class TcptunVpnService : VpnService() {
             VpnHealthCheckRequests.uninstall(monitorWakeCallback, memberHealthProbeCallback)
             synchronized(lifecycleCommandLock) {
                 runtimeCoordinator.destroy(serviceInstanceId)
-                appliedRuntimeState.clear()
-                runtimeSettingsDesiredGate.clear()
+                runtimeSettingsState.clearForStop()
                 if (isActiveServiceOwner()) TcptunState.clearTcping()
             }
             cancelPendingBridgeRestart()
@@ -1812,7 +1796,6 @@ class TcptunVpnService : VpnService() {
                 IllegalStateException("tcptun service destroyed"),
             )
             bridgeRecoveryTask.cancel()
-            runtimeSettingsApplyTask.cancel()
             memberHealthProbeScheduler.cancel()
             lifecycleExecutor.shutdownNow()
             tcpingExecutor.shutdownNow()
@@ -1958,11 +1941,10 @@ class TcptunVpnService : VpnService() {
         )
     }
 
-    private fun initiallyDisabledOutboundTags(plan: ProfileRunPlan): List<String> {
-        return plan.profiles
+    private fun initiallyDisabledOutboundTags(plan: ProfileRunPlan): List<String> =
+        plan.profiles
             .filterNot { it.id in plan.activeIds }
             .map(AppConfig::runtimeOutboundTag)
-    }
 
     private fun startBridgeSession(
         configJson: String,
@@ -2120,10 +2102,10 @@ class TcptunVpnService : VpnService() {
     private fun prepareBridgeRestart(
         reason: String,
         commandOwner: () -> Boolean,
-    ): BridgeRestartPreparation {
+    ): RuntimeSettingsRecoveryInput {
         val configJson = checkNotNull(bridgeResources.activeConfigJson) { "tcptun bridge is unavailable" }
         val plan = checkNotNull(runningPlan) { "tcptun running plan is unavailable" }
-        val settings = checkNotNull(appliedRuntimeState.current?.settings) {
+        val settings = checkNotNull(runtimeSettingsState.applied?.settings) {
             "tcptun applied runtime settings are unavailable"
         }
         check(tun != null && commandOwner()) { "tcptun restart was superseded" }
@@ -2136,15 +2118,15 @@ class TcptunVpnService : VpnService() {
             }
         }
         stopBridge()
-        appliedRuntimeState.clear()
+        runtimeSettingsState.clearApplied()
         check(commandOwner()) { "tcptun restart was superseded" }
         closeTunAfterBridgeStopAttempt()
         check(commandOwner()) { "tcptun restart was superseded" }
-        return BridgeRestartPreparation(configJson, plan, settings, reason)
+        return RuntimeSettingsRecoveryInput(configJson, plan, settings, reason)
     }
 
     private fun continueBridgeRestart(
-        preparation: BridgeRestartPreparation,
+        preparation: RuntimeSettingsRecoveryInput,
         lifecycleToken: VpnRuntimeCommandToken,
         commandOwner: () -> Boolean,
     ): VpnRuntimeOwnership {
@@ -2348,7 +2330,7 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun scheduleBridgeRestartContinuation(
-        preparation: BridgeRestartPreparation,
+        preparation: RuntimeSettingsRecoveryInput,
         request: VpnRuntimeRecoveryRequest,
         bridgeToken: BridgeRestartToken,
         recoveryToken: VpnRuntimeRecoveryToken,
@@ -2508,63 +2490,42 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun requestRuntimeSettingsApply(reason: String, forceRestart: Boolean) {
-        val mutation = runtimeSettingsDesiredGate.request(forceRestart)
         TcptunState.appendLog("runtime settings apply requested: $reason")
-        val ownership = currentRuntimeOwnership() ?: run {
-            TcptunState.appendLog("runtime settings retained until a VPN runtime is available")
-            return
-        }
-        val future = scheduleCrashGuardedFuture(
+        runtimeSettingsState.requestDesiredDebounced(
+            forceRestart = forceRestart,
+            ownership = currentRuntimeOwnership(),
             executor = lifecycleExecutor,
-            delay = RUNTIME_SETTINGS_APPLY_DEBOUNCE_MS,
-            unit = TimeUnit.MILLISECONDS,
-            taskName = "runtime settings debounce",
+            delayMillis = RUNTIME_SETTINGS_APPLY_DEBOUNCE_MS,
+            canRun = { !destroyed.get() },
             onFailure = { error ->
                 if (!destroyed.get()) TcptunState.appendLog(failureDescription(error))
             },
-        ) runtimeApply@{
-            if (destroyed.get()) return@runtimeApply
-            val claim = runtimeSettingsDesiredGate.bindLatest(ownership) ?: return@runtimeApply
-            if (claim.mutation.sequence != mutation.sequence) return@runtimeApply
-            scheduleRuntimeSettingsApply(reason, claim)
-        }
-        if (future == null) {
-            if (!destroyed.get()) TcptunState.appendLog("runtime settings apply could not be scheduled")
-            return
-        }
-        runtimeSettingsApplyTask.replace(future)
+            onReady = { scheduleRuntimeSettingsApply(reason, it) },
+            onUnavailable = { retained ->
+                val message = if (retained) "retained until a VPN runtime is available" else "could not be scheduled"
+                TcptunState.appendLog("runtime settings $message")
+            },
+        )
     }
 
-    /**
-     * Queue the debounced apply behind every lifecycle command already accepted.
-     * The snapshots prevent a delayed settings thread from restarting over a
-     * newer start/stop/outbound update.
-     */
     private fun scheduleRuntimeSettingsApply(
         reason: String,
         request: RuntimeSettingsApplyClaim,
     ) {
         val accepted = synchronized(lifecycleCommandLock) {
-            if (
-                destroyed.get() ||
-                explicitStopRequested ||
-                !runtimeSettingsDesiredGate.isLatest(request) ||
-                !ownsRuntime(request.ownership)
+            runtimeSettingsState.dispatchLatest(
+                request,
+                currentRuntimeOwnership(),
+                blocked = destroyed.get() || explicitStopRequested,
             ) {
-                return@synchronized null
-            }
-            executeLifecycleTask(
-                command = VpnRuntimeCommand.ApplyRuntimeSettings(request),
-                onFailure = { error ->
-                    if (!destroyed.get() && runtimeSettingsDesiredGate.isLatest(request)) {
-                        TcptunState.appendLog(failureDescription(error))
-                    }
-                },
-            ) {
-                applyRuntimeSettingsNow(
-                    reason = reason,
-                    request = request,
-                )
+                executeLifecycleTask(
+                    command = VpnRuntimeCommand.ApplyRuntimeSettings(request),
+                    onFailure = { error ->
+                        if (!destroyed.get() && runtimeSettingsState.isLatest(request)) {
+                            TcptunState.appendLog(failureDescription(error))
+                        }
+                    },
+                ) { applyRuntimeSettingsNow(reason, request) }
             }
         }
         if (accepted == false && !destroyed.get()) {
@@ -2576,94 +2537,45 @@ class TcptunVpnService : VpnService() {
         reason: String,
         request: RuntimeSettingsApplyClaim,
     ) {
-        if (!runtimeSettingsDesiredGate.isLatest(request) || !ownsRuntime(request.ownership)) return
+        if (!runtimeSettingsState.isLatest(request) || !ownsRuntime(request.ownership)) return
         val plan = runningPlan ?: readDesiredRunningPlan(this) ?: run {
             TcptunState.appendLog("runtime settings apply skipped: no running profile")
             return
         }
-        val settings = readRuntimeSettings(this)
-        val previous = appliedRuntimeState.current
-            ?.takeIf { it.ownership == request.ownership }
-            ?.settings ?: return
-        var restartRequired = desiredRuntimeSettingsAction(
-            previous,
-            AppliedRuntimeSettings.from(settings),
-            request.mutation.forceRestart,
-            freshRuntimeSatisfiesForce = false,
-        ) == RuntimeSettingsReconciliationAction.Replace
-        if (!restartRequired) {
-            val stillCurrent = synchronized(lifecycleCommandLock) {
-                runtimeSettingsDesiredGate.isLatest(request) && ownsRuntime(request.ownership)
-            }
-            if (!stillCurrent) return
-            if (settings.logLevel != previous.logLevel) {
-                try {
-                    synchronized(bridgeLock) {
-                        check(ownsRuntime(request.ownership)) { "runtime settings apply was superseded" }
-                        bridge.setLogLevel(settings.logLevel)
-                        check(bridge.logLevel() == settings.logLevel) {
-                            "tcptun bridge did not apply log.level=${settings.logLevel}"
-                        }
-                        check(ownsRuntime(request.ownership)) { "runtime settings apply was superseded" }
-                    }
-                } catch (error: Throwable) {
-                    if (error.isFatalProcessError()) throw error
-                    restartRequired = true
-                    TcptunState.appendLog(
-                        "dynamic log.level update unavailable; restarting VPN: ${failureDescription(error)}",
-                    )
-                }
-            }
-            if (!restartRequired && settings.flowAnalysisApp != previous.flowAnalysisApp) {
-                try {
-                    synchronized(bridgeLock) {
-                        check(ownsRuntime(request.ownership)) { "flow analysis update was superseded" }
-                        configureFlowAnalysis(
-                            settings.flowAnalysisApp,
-                            request.ownership.bridgeEpoch,
-                            requireNotNull(bridgeResources.activeConfigJson),
-                        )
-                        check(ownsRuntime(request.ownership)) { "flow analysis update was superseded" }
-                    }
-                } catch (error: Throwable) {
-                    if (error.isFatalProcessError()) throw error
-                    restartRequired = true
-                    TcptunState.appendLog(
-                        "dynamic flow analysis update unavailable; restarting VPN: ${failureDescription(error)}",
-                    )
-                }
-            }
-        }
-        if (!restartRequired) {
-            if (!runtimeSettingsDesiredGate.isLatest(request)) return
-            if (!publishAppliedRuntimeState(request.ownership, AppliedRuntimeSettings.from(settings))) return
-            runtimeSettingsDesiredGate.acknowledge(request.mutation.sequence)
-            TcptunState.updateDiagnostics {
-                it.copy(
-                    mtu = settings.mtu,
-                    powerSavingMode = settings.powerSavingMode,
-                    localProxyAddress = localSocksConnectAddr(settings),
-                    localProxyPort = settings.socksPort,
-                )
-            }
-            TcptunState.appendLog(
-                "runtime settings applied without VPN restart: " +
-                    "log-level=${settings.logLevel} power-saving=${settings.powerSavingMode}",
-            )
-            wakeBridgeMonitor()
-            return
-        }
+        val settings = RuntimeSettingsRepository.read(this)
+        runtimeSettingsState.reconcile(
+            claim = request,
+            desired = AppliedRuntimeSettings.from(settings),
+            applyLogLevel = { applyRuntimeLogLevel(request.ownership, it) },
+            applyFlowAnalysis = { applyRuntimeFlowAnalysis(request.ownership, it) },
+            checkpoint = { checkpointHotApplied(request.ownership, it) },
+            onApplied = {
+                RuntimeSettingsRepository.publishHotApplied(settings)
+                wakeBridgeMonitor()
+            },
+            onReplacementRequired = {
+                requestRuntimeSettingsReplacement(reason, request, plan, it)
+            },
+        )
+    }
 
+    private fun requestRuntimeSettingsReplacement(
+        reason: String,
+        request: RuntimeSettingsApplyClaim,
+        plan: ProfileRunPlan,
+        hotFailure: RuntimeSettingsHotApplyResult.RestartRequired?,
+    ) {
+        hotFailure?.let {
+            TcptunState.appendLog(
+                "dynamic ${it.mutation.description} update unavailable; restarting VPN: " +
+                    failureDescription(it.failure),
+            )
+        }
         val restartIntent = startIntent(this, plan)
         val restartClaim = synchronized(lifecycleCommandLock) {
-            if (
-                !runtimeSettingsDesiredGate.isLatest(request) ||
-                !ownsRuntime(request.ownership)
-            ) {
-                null
-            } else {
+            runtimeSettingsState.runIfLatestOwned(request, currentRuntimeOwnership()) {
                 runtimeCoordinator.claimReplacement(serviceInstanceId).also {
-                    appliedRuntimeState.clear()
+                    runtimeSettingsState.clearApplied()
                 } to
                     profileRepository.currentMutationRevision()
             }
@@ -2680,10 +2592,6 @@ class TcptunVpnService : VpnService() {
                 restartReason = restartReason,
             ),
         )
-    }
-
-    private fun requestFlowAnalysisUpdate() {
-        requestRuntimeSettingsApply("flow analysis changed", forceRestart = false)
     }
 
     private fun onBridgeStatusEvent(epoch: Long, eventJson: String) {
@@ -2883,14 +2791,14 @@ class TcptunVpnService : VpnService() {
             uiVisible ||
             previous.localProxyReachable != nextLocalProxyReachable ||
             previous.localProxyAddress != localProxyAddress ||
-            previous.localProxyPort != activeSocksPort
+            previous.localProxyPort != runtimeSettingsState.effectiveSettings.socksPort
         ) {
             if (!ownsRuntime(ownership)) return null
             TcptunState.updateDiagnosticsForBridgeEpoch(sessionEpoch) {
                 it.copy(
                     localProxyReachable = nextLocalProxyReachable,
                     localProxyAddress = localProxyAddress,
-                    localProxyPort = activeSocksPort,
+                    localProxyPort = runtimeSettingsState.effectiveSettings.socksPort,
                 )
             }
         }
@@ -3271,7 +3179,7 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun canConnectLocalProxy(): Boolean {
-        return localProxyHealthProbe.canConnect(activeSocksPort)
+        return localProxyHealthProbe.canConnect(runtimeSettingsState.effectiveSettings.socksPort)
     }
 
     private fun shouldRunUpstreamProbe(): Boolean {
@@ -3327,15 +3235,15 @@ class TcptunVpnService : VpnService() {
     private fun upstreamProbeFailure(targets: List<UpstreamProbeTarget>): String? {
         return localProxyHealthProbe.upstreamFailure(
             orderedTargets = targets,
-            localPort = activeSocksPort,
-            username = activeSocksUsername,
-            password = activeSocksPassword,
+            localPort = runtimeSettingsState.effectiveSettings.socksPort,
+            username = runtimeSettingsState.effectiveSettings.socksUsername,
+            password = runtimeSettingsState.effectiveSettings.socksPassword,
             onSuccess = { target -> TcptunState.appendLog("upstream probe ${target.label} succeeded") },
         )
     }
 
     private fun activeLocalSocksConnectAddr(): String {
-        return localProxyHealthProbe.connectAddress(activeSocksPort)
+        return localProxyHealthProbe.connectAddress(runtimeSettingsState.effectiveSettings.socksPort)
     }
 
     private fun startVpnForeground(state: String) = notificationController.startForeground(state)
@@ -3418,13 +3326,11 @@ class TcptunVpnService : VpnService() {
             return VpnServiceIntents.updateOutbounds(context, plan)
         }
 
-        fun applyRuntimeSettingsIntent(context: Context, forceRestart: Boolean = false): Intent {
-            return VpnServiceIntents.applyRuntimeSettings(context, forceRestart)
-        }
+        fun applyRuntimeSettingsIntent(context: Context, forceRestart: Boolean = false): Intent =
+            VpnServiceIntents.applyRuntimeSettings(context, forceRestart)
 
-        fun updateFlowAnalysisIntent(context: Context): Intent {
-            return VpnServiceIntents.updateFlowAnalysis(context)
-        }
+        fun updateFlowAnalysisIntent(context: Context): Intent =
+            VpnServiceIntents.updateFlowAnalysis(context)
 
         fun tcpingOutboundsIntent(
             context: Context,
@@ -3471,14 +3377,6 @@ class TcptunVpnService : VpnService() {
 
         fun writeRuntimeSettings(context: Context, settings: RuntimeSettings) =
             RuntimeSettingsRepository.write(context, settings)
-
-        fun localSocksListenAddr(settings: RuntimeSettings): String =
-            RuntimeSettingsRepository.localSocksListenAddress(settings)
-
-        fun localSocksConnectAddr(settings: RuntimeSettings): String =
-            RuntimeSettingsRepository.localSocksConnectAddress(settings)
-
-        fun defaultLocalSocksConnectAddr(): String = RuntimeSettingsRepository.defaultLocalSocksConnectAddress()
 
         private fun encodeDesiredRunningPlan(plan: ProfileRunPlan): String {
             return DesiredRunningPlanStore.encode(plan)

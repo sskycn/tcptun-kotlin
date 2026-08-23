@@ -54,18 +54,18 @@ class ServiceCoordinationTest {
 
     @Test
     fun runtimeSettingsGateCoalescesForceAndRejectsOlderGeneration() {
-        val gate = RuntimeSettingsDesiredGate()
+        val state = RuntimeSettingsRuntimeState()
         val ownership = ownership(generation = 1, epoch = 10)
-        val first = gate.request(forceRestart = true)
-        val second = gate.request(forceRestart = false)
-        val claim = requireNotNull(gate.bindLatest(ownership))
+        val first = state.requestDesired(forceRestart = true)
+        val second = state.requestDesired(forceRestart = false)
+        val claim = requireNotNull(state.bindLatest(ownership))
 
-        assertFalse(gate.isLatest(RuntimeSettingsApplyClaim(first, ownership)))
-        assertTrue(gate.isLatest(claim))
+        assertFalse(state.isLatest(RuntimeSettingsApplyClaim(first, ownership)))
+        assertTrue(state.isLatest(claim))
         assertEquals(second.sequence, claim.mutation.sequence)
         assertTrue(claim.mutation.forceRestart)
-        assertTrue(gate.acknowledge(second.sequence))
-        assertNull(gate.pending)
+        assertTrue(state.acknowledge(second.sequence))
+        assertNull(state.pending)
     }
 
     @Test

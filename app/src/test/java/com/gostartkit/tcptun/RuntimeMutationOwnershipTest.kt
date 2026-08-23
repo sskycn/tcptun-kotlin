@@ -44,14 +44,14 @@ class RuntimeMutationOwnershipTest {
 
     @Test
     fun rapidSettingsRequestsKeepLatestAuthoritativeOwnershipAndForce() {
-        val gate = RuntimeSettingsDesiredGate()
+        val state = RuntimeSettingsRuntimeState()
         val runtimeA = ownership(generation = 1, epoch = 10)
         val runtimeB = ownership(generation = 2, epoch = 11)
-        val first = gate.request(forceRestart = true)
-        val second = gate.request(forceRestart = false)
+        val first = state.requestDesired(forceRestart = true)
+        val second = state.requestDesired(forceRestart = false)
 
-        assertFalse(gate.isLatest(RuntimeSettingsApplyClaim(first, runtimeA)))
-        val claim = gate.bindLatest(runtimeB)
+        assertFalse(state.isLatest(RuntimeSettingsApplyClaim(first, runtimeA)))
+        val claim = state.bindLatest(runtimeB)
         assertEquals(runtimeB, claim?.ownership)
         assertTrue(claim?.mutation?.forceRestart == true)
         assertEquals(second.sequence, claim?.mutation?.sequence)
@@ -77,16 +77,16 @@ class RuntimeMutationOwnershipTest {
 
     @Test
     fun rapidStructuralSettingsCoalesceToOneReplacement() {
-        val gate = RuntimeSettingsDesiredGate()
+        val state = RuntimeSettingsRuntimeState()
         val runtime = ownership(generation = 1, epoch = 10)
-        val first = gate.request(forceRestart = false)
-        val second = gate.request(forceRestart = false)
-        val latest = gate.request(forceRestart = false)
+        val first = state.requestDesired(forceRestart = false)
+        val second = state.requestDesired(forceRestart = false)
+        val latest = state.requestDesired(forceRestart = false)
         var replacements = 0
 
         listOf(first, second, latest).forEach { request ->
             val claim = RuntimeSettingsApplyClaim(request, runtime)
-            if (!gate.isLatest(claim)) return@forEach
+            if (!state.isLatest(claim)) return@forEach
             if (BridgeHealthPolicy.requiresRuntimeRestart(
                     forceRestart = claim.mutation.forceRestart,
                     previous = RuntimeSettings(mtu = 1400),

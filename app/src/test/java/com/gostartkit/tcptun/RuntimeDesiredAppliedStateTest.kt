@@ -9,64 +9,63 @@ import org.junit.Test
 class RuntimeDesiredAppliedStateTest {
     @Test
     fun settingsUpdateDuringRecoveryGapIsRetainedWithoutRuntimeOwnership() {
-        val gate = RuntimeSettingsDesiredGate()
+        val state = RuntimeSettingsRuntimeState()
 
-        val mutation = gate.request(forceRestart = false)
+        val mutation = state.requestDesired(forceRestart = false)
 
-        assertEquals(mutation, gate.pending)
+        assertEquals(mutation, state.pending)
     }
 
     @Test
     fun multipleGapUpdatesCoalesceToLatest() {
-        val gate = RuntimeSettingsDesiredGate()
-        val first = gate.request(false)
-        gate.request(false)
-        val latest = gate.request(false)
+        val state = RuntimeSettingsRuntimeState()
+        val first = state.requestDesired(false)
+        state.requestDesired(false)
+        val latest = state.requestDesired(false)
 
         assertTrue(latest.sequence > first.sequence)
-        assertEquals(latest, gate.pending)
+        assertEquals(latest, state.pending)
     }
 
     @Test
     fun forceRestartSurvivesGapCoalescing() {
-        val gate = RuntimeSettingsDesiredGate()
-        gate.request(true)
+        val state = RuntimeSettingsRuntimeState()
+        state.requestDesired(true)
 
-        val latest = gate.request(false)
+        val latest = state.requestDesired(false)
 
         assertTrue(latest.forceRestart)
     }
 
     @Test
     fun newRunningRuntimeDrainsPendingExactlyOnce() {
-        val gate = RuntimeSettingsDesiredGate()
-        val mutation = gate.request(false)
-        val claim = requireNotNull(gate.bindLatest(ownership(2, 20)))
+        val state = RuntimeSettingsRuntimeState()
+        val mutation = state.requestDesired(false)
+        val claim = requireNotNull(state.bindLatest(ownership(2, 20)))
 
-        assertTrue(gate.isLatest(claim))
-        assertTrue(gate.acknowledge(mutation.sequence))
-        assertFalse(gate.acknowledge(mutation.sequence))
-        assertNull(gate.pending)
+        assertTrue(state.isLatest(claim))
+        assertTrue(state.acknowledge(mutation.sequence))
+        assertFalse(state.acknowledge(mutation.sequence))
+        assertNull(state.pending)
     }
 
     @Test
     fun pendingBoundToRecoveryACannotPublishOverStartB() {
-        val gate = RuntimeSettingsDesiredGate()
-        val slot = AppliedRuntimeStateSlot()
-        gate.request(false)
-        val recoveryA = requireNotNull(gate.bindLatest(ownership(1, 10)))
+        val state = RuntimeSettingsRuntimeState()
+        state.requestDesired(false)
+        val recoveryA = requireNotNull(state.bindLatest(ownership(1, 10)))
         val startB = ownership(2, 20)
-        val candidateA = AppliedRuntimeState(recoveryA.ownership, applied(mtu = 1280))
+        val desired = applied(mtu = 1280)
 
-        assertFalse(slot.publish(candidateA, activeOwnership = startB))
-        val rebound = requireNotNull(gate.bindLatest(startB))
-        assertTrue(slot.publish(AppliedRuntimeState(rebound.ownership, candidateA.settings), startB))
+        assertFalse(state.publishFreshRuntime(recoveryA.ownership, desired, activeOwnership = startB))
+        val rebound = requireNotNull(state.bindLatest(startB))
+        assertTrue(state.publishFreshRuntime(rebound.ownership, desired, startB))
     }
 
     @Test
     fun structuralPendingCausesAtMostOneReplacement() {
-        val gate = RuntimeSettingsDesiredGate()
-        val mutation = gate.request(false)
+        val state = RuntimeSettingsRuntimeState()
+        val mutation = state.requestDesired(false)
         val old = applied(mtu = 1400)
         val desired = applied(mtu = 1280)
         var replacements = 0
@@ -81,11 +80,11 @@ class RuntimeDesiredAppliedStateTest {
             freshRuntimeSatisfiesForce = true,
         )
         if (afterReplacement == RuntimeSettingsReconciliationAction.Satisfied) {
-            gate.acknowledge(mutation.sequence)
+            state.acknowledge(mutation.sequence)
         }
 
         assertEquals(1, replacements)
-        assertNull(gate.pending)
+        assertNull(state.pending)
     }
 
     @Test
@@ -101,7 +100,7 @@ class RuntimeDesiredAppliedStateTest {
 
     @Test
     fun flowPendingPublishesLatestPackageOnNewEpoch() {
-        val slot = AppliedRuntimeStateSlot()
+        val state = RuntimeSettingsRuntimeState()
         val epochTwo = ownership(1, 20)
         val old = applied(flowAnalysisApp = "")
         val desired = applied(flowAnalysisApp = "com.example.capture")
@@ -110,32 +109,31 @@ class RuntimeDesiredAppliedStateTest {
             RuntimeSettingsReconciliationAction.ApplyHot,
             desiredRuntimeSettingsAction(old, desired, false, false),
         )
-        assertTrue(slot.publish(AppliedRuntimeState(epochTwo, desired), epochTwo))
-        assertEquals("com.example.capture", slot.current?.settings?.flowAnalysisApp)
-        assertEquals(20L, slot.current?.ownership?.bridgeEpoch)
+        assertTrue(state.publishFreshRuntime(epochTwo, desired, epochTwo))
+        assertEquals("com.example.capture", state.applied?.settings?.flowAnalysisApp)
+        assertEquals(20L, state.applied?.ownership?.bridgeEpoch)
     }
 
     @Test
     fun stopClearsPendingRuntimeApplication() {
-        val gate = RuntimeSettingsDesiredGate()
-        gate.request(true)
+        val state = RuntimeSettingsRuntimeState()
+        state.requestDesired(true)
 
-        gate.clear()
+        state.clearForStop()
 
-        assertNull(gate.pending)
-        assertNull(gate.bindLatest(ownership(2, 20)))
+        assertNull(state.pending)
+        assertNull(state.bindLatest(ownership(2, 20)))
     }
 
     @Test
     fun destroyRejectsPendingDrainAndAppliedPublication() {
-        val gate = RuntimeSettingsDesiredGate()
-        val slot = AppliedRuntimeStateSlot()
+        val state = RuntimeSettingsRuntimeState()
         val runtime = ownership(1, 10)
-        gate.request(false)
-        gate.clear()
+        state.requestDesired(false)
+        state.clearForStop()
 
-        assertNull(gate.bindLatest(runtime))
-        assertFalse(slot.publish(AppliedRuntimeState(runtime, applied()), activeOwnership = null))
+        assertNull(state.bindLatest(runtime))
+        assertFalse(state.publishFreshRuntime(runtime, applied(), activeOwnership = null))
     }
 
     @Test
@@ -155,25 +153,25 @@ class RuntimeDesiredAppliedStateTest {
 
     @Test
     fun stopRejectsLateAppliedRuntimePublication() {
-        val slot = AppliedRuntimeStateSlot()
+        val state = RuntimeSettingsRuntimeState()
         val stale = ownership(1, 10)
-        assertTrue(slot.publish(AppliedRuntimeState(stale, applied()), stale))
-        slot.clear()
+        assertTrue(state.publishFreshRuntime(stale, applied(), stale))
+        state.clearForStop()
 
-        assertFalse(slot.publish(AppliedRuntimeState(stale, applied()), activeOwnership = null))
-        assertNull(slot.current)
+        assertFalse(state.publishFreshRuntime(stale, applied(), activeOwnership = null))
+        assertNull(state.applied)
     }
 
     private fun assertStalePublicationRejected(
         stale: VpnRuntimeOwnership,
         active: VpnRuntimeOwnership,
     ) {
-        val slot = AppliedRuntimeStateSlot()
+        val state = RuntimeSettingsRuntimeState()
         val activeState = AppliedRuntimeState(active, applied(mtu = 1280))
-        assertTrue(slot.publish(activeState, active))
+        assertTrue(state.publishFreshRuntime(active, activeState.settings, active))
 
-        assertFalse(slot.publish(AppliedRuntimeState(stale, applied()), active))
-        assertEquals(activeState, slot.current)
+        assertFalse(state.publishFreshRuntime(stale, applied(), active))
+        assertEquals(activeState, state.applied)
     }
 
     private fun applied(
