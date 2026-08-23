@@ -44,16 +44,17 @@ class RuntimeMutationOwnershipTest {
 
     @Test
     fun rapidSettingsRequestsKeepLatestAuthoritativeOwnershipAndForce() {
-        val gate = RuntimeSettingsApplyGate()
+        val gate = RuntimeSettingsDesiredGate()
         val runtimeA = ownership(generation = 1, epoch = 10)
         val runtimeB = ownership(generation = 2, epoch = 11)
-        val first = gate.request(forceRestart = true, runtimeA)
-        val second = gate.request(forceRestart = false, runtimeB)
+        val first = gate.request(forceRestart = true)
+        val second = gate.request(forceRestart = false)
 
-        assertFalse(gate.isLatest(first.generation))
-        val claim = gate.claim(second)
+        assertFalse(gate.isLatest(RuntimeSettingsApplyClaim(first, runtimeA)))
+        val claim = gate.bindLatest(runtimeB)
         assertEquals(runtimeB, claim?.ownership)
-        assertFalse(claim?.forceRestart ?: true)
+        assertTrue(claim?.mutation?.forceRestart == true)
+        assertEquals(second.sequence, claim?.mutation?.sequence)
     }
 
     @Test
@@ -76,17 +77,18 @@ class RuntimeMutationOwnershipTest {
 
     @Test
     fun rapidStructuralSettingsCoalesceToOneReplacement() {
-        val gate = RuntimeSettingsApplyGate()
+        val gate = RuntimeSettingsDesiredGate()
         val runtime = ownership(generation = 1, epoch = 10)
-        val first = gate.request(forceRestart = false, runtime)
-        val second = gate.request(forceRestart = false, runtime)
-        val latest = gate.request(forceRestart = false, runtime)
+        val first = gate.request(forceRestart = false)
+        val second = gate.request(forceRestart = false)
+        val latest = gate.request(forceRestart = false)
         var replacements = 0
 
         listOf(first, second, latest).forEach { request ->
-            val claim = gate.claim(request) ?: return@forEach
+            val claim = RuntimeSettingsApplyClaim(request, runtime)
+            if (!gate.isLatest(claim)) return@forEach
             if (BridgeHealthPolicy.requiresRuntimeRestart(
-                    forceRestart = claim.forceRestart,
+                    forceRestart = claim.mutation.forceRestart,
                     previous = RuntimeSettings(mtu = 1400),
                     next = RuntimeSettings(mtu = 1280),
                 )

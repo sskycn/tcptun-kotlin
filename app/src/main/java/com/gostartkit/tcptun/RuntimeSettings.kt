@@ -72,6 +72,30 @@ internal data class AppliedRuntimeSettings(
     }
 }
 
+internal data class AppliedRuntimeState(
+    val ownership: VpnRuntimeOwnership,
+    val settings: AppliedRuntimeSettings,
+)
+
+/** Atomically publishes only state owned by the caller's current runtime snapshot. */
+internal class AppliedRuntimeStateSlot {
+    @Volatile
+    var current: AppliedRuntimeState? = null
+        private set
+
+    @Synchronized
+    fun publish(candidate: AppliedRuntimeState, activeOwnership: VpnRuntimeOwnership?): Boolean {
+        if (candidate.ownership != activeOwnership) return false
+        current = candidate
+        return true
+    }
+
+    @Synchronized
+    fun clear() {
+        current = null
+    }
+}
+
 private val AndroidPackageNamePattern = Regex("^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+$")
 private const val MaxFlowAnalysisAppLength = 255
 private const val GeneratedLanProxyPasswordLength = 32

@@ -16,16 +16,11 @@ internal sealed interface VpnRuntimeCommand {
         override val description = "underlying network update"
     }
     data class ApplyRuntimeSettings(
-        val request: RuntimeSettingsApplyGate.Claim,
+        val request: RuntimeSettingsApplyClaim,
     ) : VpnRuntimeCommand {
         override val description = "runtime settings apply"
     }
     data object BridgeRecovery : VpnRuntimeCommand { override val description = "Bridge recovery" }
-    data class UpdateFlowAnalysis(
-        val ownership: VpnRuntimeOwnership,
-    ) : VpnRuntimeCommand {
-        override val description = "flow analysis update"
-    }
     data object RefreshDiagnostics : VpnRuntimeCommand { override val description = "Bridge diagnostics refresh" }
     data class Internal(override val description: String) : VpnRuntimeCommand
 }

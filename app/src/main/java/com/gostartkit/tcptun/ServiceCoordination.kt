@@ -101,46 +101,76 @@ internal class RankedSelectionTracker<K> {
     private fun selectedLocked(): K? = scores.maxByOrNull { it.value }?.key
 }
 
-/** Coalesces debounced runtime-setting requests without exposing its lock. */
-internal class RuntimeSettingsApplyGate {
-    private var generation = 0
-    private var forceRestartPending = false
+internal data class RuntimeSettingsDesiredMutation(
+    val sequence: Long,
+    val forceRestart: Boolean,
+)
 
-    private var ownership: VpnRuntimeOwnership? = null
+internal data class RuntimeSettingsApplyClaim(
+    val mutation: RuntimeSettingsDesiredMutation,
+    val ownership: VpnRuntimeOwnership,
+)
 
-    internal data class Request(
-        val generation: Int,
-        val ownership: VpnRuntimeOwnership,
-    )
+/** Keeps authoritative desired mutations independent from disposable scheduler/runtime claims. */
+internal class RuntimeSettingsDesiredGate {
+    private var sequence = 0L
+    private var pendingMutation: RuntimeSettingsDesiredMutation? = null
 
-    internal data class Claim(
-        val generation: Int,
-        val forceRestart: Boolean,
-        val ownership: VpnRuntimeOwnership,
-    )
+    val latestSequence: Long
+        @Synchronized get() = sequence
+
+    val pending: RuntimeSettingsDesiredMutation?
+        @Synchronized get() = pendingMutation
 
     @Synchronized
-    fun request(forceRestart: Boolean, ownership: VpnRuntimeOwnership): Request {
-        generation += 1
-        forceRestartPending = if (this.ownership == ownership) {
-            forceRestartPending || forceRestart
-        } else {
-            forceRestart
-        }
-        this.ownership = ownership
-        return Request(generation, ownership)
+    fun request(forceRestart: Boolean): RuntimeSettingsDesiredMutation {
+        sequence = if (sequence == Long.MAX_VALUE) 1L else sequence + 1L
+        return RuntimeSettingsDesiredMutation(
+            sequence = sequence,
+            forceRestart = pendingMutation?.forceRestart == true || forceRestart,
+        ).also { pendingMutation = it }
     }
 
     @Synchronized
-    fun claim(request: Request): Claim? {
-        val currentOwnership = ownership ?: return null
-        if (request.generation != generation || request.ownership != currentOwnership) return null
-        return Claim(request.generation, forceRestartPending, currentOwnership)
-            .also { forceRestartPending = false }
+    fun bindLatest(ownership: VpnRuntimeOwnership): RuntimeSettingsApplyClaim? =
+        pendingMutation?.let { RuntimeSettingsApplyClaim(it, ownership) }
+
+    @Synchronized
+    fun isLatest(claim: RuntimeSettingsApplyClaim): Boolean =
+        pendingMutation?.sequence == claim.mutation.sequence
+
+    @Synchronized
+    fun acknowledge(sequence: Long): Boolean {
+        if (pendingMutation?.sequence != sequence) return false
+        pendingMutation = null
+        return true
     }
 
     @Synchronized
-    fun isLatest(requestGeneration: Int): Boolean = requestGeneration == generation
+    fun clear() {
+        pendingMutation = null
+    }
+}
+
+internal enum class RuntimeSettingsReconciliationAction {
+    Satisfied,
+    ApplyHot,
+    Replace,
+}
+
+internal fun desiredRuntimeSettingsAction(
+    applied: AppliedRuntimeSettings,
+    desired: AppliedRuntimeSettings,
+    forceRestart: Boolean,
+    freshRuntimeSatisfiesForce: Boolean,
+): RuntimeSettingsReconciliationAction = when {
+    applied == desired && (!forceRestart || freshRuntimeSatisfiesForce) ->
+        RuntimeSettingsReconciliationAction.Satisfied
+    forceRestart || BridgeHealthPolicy.isStructuralRuntimeChange(
+        applied.structuralSettings(),
+        desired.structuralSettings(),
+    ) -> RuntimeSettingsReconciliationAction.Replace
+    else -> RuntimeSettingsReconciliationAction.ApplyHot
 }
 
 internal data class BridgeRestartToken(
