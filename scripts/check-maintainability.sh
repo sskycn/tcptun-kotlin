@@ -16,7 +16,7 @@ while IFS= read -r -d '' file; do
 done < <(find app/src/main/java -type f -name '*.kt' -print0)
 
 service_file="app/src/main/java/com/gostartkit/tcptun/TcptunVpnService.kt"
-max_service_function_lines=180
+max_service_function_lines=149
 while IFS='|' read -r signature lines; do
   if (( lines > max_service_function_lines )); then
     violations+=(
