@@ -1066,31 +1066,27 @@ class VpnRuntimeCoordinatorTest {
     }
 
     @Test
-    fun retryAdmissionCompletesStopWhenResourcesReleasedBeforeFutureCreation() {
+    fun releasedRetryCompletionFinishesCurrentStopOwner() {
         val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
         val token = coordinator.claimStop(ServiceId, "released before retry")
         coordinator.completePlatformStop(token, VpnPlatformStopResult.RetainedForRetry)
 
-        assertTrue(completeReleasedBeforeRetry(resourcesOwned = false) {
-            coordinator.completePlatformStop(token, VpnPlatformStopResult.Released)
-        })
+        assertTrue(coordinator.completePlatformStop(token, VpnPlatformStopResult.Released))
         assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Idle)
     }
 
     @Test
-    fun retryAdmissionCompletesStartRollbackWhenResourcesReleasedBeforeFutureCreation() {
+    fun releasedRetryCompletionFinishesCurrentStartRollbackOwner() {
         val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
         val token = coordinator.claimStart(ServiceId, persistent = true)
         failStartWithRetainedRollback(coordinator, token)
 
-        assertTrue(completeReleasedBeforeRetry(resourcesOwned = false) {
-            coordinator.completeStartRollbackCleanup(token, VpnPlatformStopResult.Released)
-        })
+        assertTrue(coordinator.completeStartRollbackCleanup(token, VpnPlatformStopResult.Released))
         assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Idle)
     }
 
     @Test
-    fun retryAdmissionCompletesRecoveryRollbackBeforeSchedulingFreshRecovery() {
+    fun releasedRetryCompletionCreatesFreshRecoveryGeneration() {
         val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
         val running = plan("A")
         startImmediately(coordinator, coordinator.claimStart(ServiceId, true), running)
@@ -1098,12 +1094,10 @@ class VpnRuntimeCoordinatorTest {
         dispatchRetainedRecovery(coordinator, failed, running)
         var scheduled: VpnRuntimeRecoveryToken? = null
 
-        assertTrue(completeReleasedBeforeRetry(resourcesOwned = false) {
-            scheduled = coordinator.completeRecoveryRollbackCleanup(
-                failed,
-                VpnPlatformStopResult.Released,
-            )
-        })
+        scheduled = coordinator.completeRecoveryRollbackCleanup(
+            failed,
+            VpnPlatformStopResult.Released,
+        )
 
         val retry = requireNotNull(scheduled)
         assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Recovering)
@@ -1111,16 +1105,12 @@ class VpnRuntimeCoordinatorTest {
     }
 
     @Test
-    fun retryAdmissionCannotCompleteStaleCleanupOwner() {
+    fun releasedRetryCompletionCannotCompleteStaleCleanupOwner() {
         val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
         val stale = coordinator.claimStop(ServiceId, "old stop")
         coordinator.completePlatformStop(stale, VpnPlatformStopResult.RetainedForRetry)
         val current = coordinator.claimStart(ServiceId, persistent = true)
-        var accepted = true
-
-        completeReleasedBeforeRetry(resourcesOwned = false) {
-            accepted = coordinator.completePlatformStop(stale, VpnPlatformStopResult.Released)
-        }
+        val accepted = coordinator.completePlatformStop(stale, VpnPlatformStopResult.Released)
 
         assertFalse(accepted)
         assertTrue(coordinator.isCurrent(current))

@@ -36,54 +36,6 @@ internal data class BridgeTeardownDisposition(
 internal fun bridgeTeardownDisposition(hasOwnedResources: Boolean) =
     BridgeTeardownDisposition(resourcesReleased = !hasOwnedResources)
 
-internal data class BridgeTeardownRetryDecision(
-    val attempt: Int,
-    val maxAttempts: Int,
-    val delayMillis: Long?,
-) {
-    val shouldSchedule: Boolean
-        get() = delayMillis != null
-
-    val completedAttempts: Int
-        get() = (attempt - 1).coerceAtLeast(0)
-}
-
-internal val DefaultBridgeTeardownRetryDelaysMillis =
-    listOf(2_000L, 5_000L, 10_000L, 30_000L, 30_000L, 30_000L)
-
-/** Tracks bounded cleanup retries independently from task scheduling. */
-internal class BridgeTeardownRetryCoordinator(
-    retryDelaysMillis: List<Long> = DefaultBridgeTeardownRetryDelaysMillis,
-) {
-    private val retryDelaysMillis = retryDelaysMillis.toList()
-    private var attempt = 0
-
-    init {
-        require(retryDelaysMillis.isNotEmpty()) { "teardown retry delays must not be empty" }
-        require(retryDelaysMillis.all { it >= 0L }) {
-            "teardown retry delays must not be negative"
-        }
-    }
-
-    val pending: Boolean
-        @Synchronized get() = attempt > 0
-
-    @Synchronized
-    fun next(): BridgeTeardownRetryDecision {
-        attempt = if (attempt == Int.MAX_VALUE) Int.MAX_VALUE else attempt + 1
-        return BridgeTeardownRetryDecision(
-            attempt = attempt,
-            maxAttempts = retryDelaysMillis.size,
-            delayMillis = retryDelaysMillis.getOrNull(attempt - 1),
-        )
-    }
-
-    @Synchronized
-    fun reset() {
-        attempt = 0
-    }
-}
-
 internal data class DeferredServiceStopRequest(
     val lifecycleGeneration: Int,
     val persistentCommandGeneration: Int,

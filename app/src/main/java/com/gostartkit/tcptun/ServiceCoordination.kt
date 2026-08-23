@@ -217,16 +217,6 @@ internal class LatestTaskSlot {
     }
 }
 
-/** Closes the release-before-Future race at teardown retry admission. */
-internal inline fun completeReleasedBeforeRetry(
-    resourcesOwned: Boolean,
-    completeReleasedOwner: () -> Unit,
-): Boolean {
-    if (resourcesOwned) return false
-    completeReleasedOwner()
-    return true
-}
-
 /** Selects a bounded rotating slice so expensive serial probes cannot starve later entries. */
 internal class RoundRobinBatchSelector {
     private var nextIndex = 0
