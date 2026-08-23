@@ -78,6 +78,30 @@ class VpnPlatformTeardownRuntimeTest {
     }
 
     @Test
+    fun `older attempt admission cannot cancel newer Future scheduled by inline callback`() {
+        val harness = Harness()
+        val owner = stopOwner(40)
+        harness.results += VpnPlatformStopResult.RetainedForRetry
+        harness.results += VpnPlatformStopResult.Released
+        harness.scheduler.beforeScheduleReturn = { index ->
+            if (index == 0) harness.scheduler.run(index)
+        }
+
+        harness.retain(owner)
+
+        assertEquals(2, harness.scheduler.taskCount)
+        assertTrue(harness.scheduler.futures[0].isCancelled)
+        assertFalse(harness.scheduler.futures[1].isCancelled)
+        assertTrue(harness.completedOwners.isEmpty())
+
+        harness.scheduler.run(1)
+
+        assertEquals(listOf(owner), harness.completedOwners)
+        assertEquals(2, harness.cleanupAttempts)
+        assertFalse(harness.runtime.pending)
+    }
+
+    @Test
     fun `duplicate retry callback only completes current owner once`() {
         val harness = Harness()
         val owner = stopOwner(5)
@@ -229,6 +253,7 @@ class VpnPlatformTeardownRuntimeTest {
         val futures = mutableListOf<FutureTask<Unit>>()
         val delays = mutableListOf<Long>()
         var afterSchedule: () -> Unit = {}
+        var beforeScheduleReturn: (index: Int) -> Unit = {}
         val taskCount: Int get() = tasks.size
 
         fun schedule(delayMillis: Long, task: () -> Unit): FutureTask<Unit>? {
@@ -239,6 +264,7 @@ class VpnPlatformTeardownRuntimeTest {
             val future = FutureTask<Unit>({}, Unit)
             futures += future
             afterSchedule()
+            beforeScheduleReturn(tasks.lastIndex)
             return future
         }
 

@@ -61,7 +61,7 @@ internal fun releasedVpnDiagnostics(current: TcptunDiagnostics): TcptunDiagnosti
     bridgeMuxStreams = 0,
     localProxyReachable = false,
     localProxyAddress = RuntimeSettingsRepository.defaultLocalSocksConnectAddress(),
-    localProxyPort = TcptunVpnService.DEFAULT_SOCKS_PORT,
+    localProxyPort = RuntimeSettingsDefaults.SocksPort,
     healthCheckEventDriven = true,
     healthCheckIntervalSeconds = 0,
     socketProtectEnabled = false,
@@ -122,11 +122,17 @@ internal class VpnPlatformTeardownRuntime(
         var exhaustionLogged: Boolean = false,
     )
 
+    private data class AdmittedRetryFuture(
+        val generation: Long,
+        val attempt: Int,
+        val future: Future<*>,
+    )
+
     private val lock = Any()
     private val retryDelaysMillis = retryDelaysMillis.toList()
     private var generation = 0L
     private var retainedCleanup: RetainedCleanup? = null
-    private var retryFuture: Future<*>? = null
+    private var retryFuture: AdmittedRetryFuture? = null
     private var shutdown = false
 
     init {
@@ -156,7 +162,7 @@ internal class VpnPlatformTeardownRuntime(
             shutdown = true
             generation = nextGeneration(generation)
             retainedCleanup = null
-            retryFuture.also { retryFuture = null }
+            retryFuture.also { retryFuture = null }?.future
         }
         future?.cancel(false)
     }
@@ -167,7 +173,7 @@ internal class VpnPlatformTeardownRuntime(
             generation = nextGeneration(generation)
             val cleanup = RetainedCleanup(generation, request)
             retainedCleanup = cleanup
-            cleanup to retryFuture.also { retryFuture = null }
+            cleanup to retryFuture.also { retryFuture = null }?.future
         }
         val (next, previousFuture) = admission
         previousFuture?.cancel(false)
@@ -205,11 +211,18 @@ internal class VpnPlatformTeardownRuntime(
             return
         }
         val accepted = synchronized(lock) {
-            if (shutdown || retainedCleanup?.generation != expectedGeneration) {
+            val cleanup = retainedCleanup
+            val previous = retryFuture
+            val admissionIsFresh = !shutdown &&
+                cleanup?.generation == expectedGeneration &&
+                cleanup.scheduledAttempts == retry.attempt
+            val newerOrDifferentFutureInstalled = previous != null &&
+                (previous.generation != expectedGeneration || previous.attempt > retry.attempt)
+            if (!admissionIsFresh || newerOrDifferentFutureInstalled) {
                 false
             } else {
-                retryFuture?.cancel(false)
-                retryFuture = future
+                previous?.future?.cancel(false)
+                retryFuture = AdmittedRetryFuture(expectedGeneration, retry.attempt, future)
                 true
             }
         }
@@ -251,7 +264,7 @@ internal class VpnPlatformTeardownRuntime(
             if (shutdown || cleanup.generation != expectedGeneration) return
             retainedCleanup = null
             generation = nextGeneration(generation)
-            val future = retryFuture
+            val future = retryFuture?.future
             retryFuture = null
             cleanup.request.cleanupOwner to future
         }
@@ -263,7 +276,7 @@ internal class VpnPlatformTeardownRuntime(
         val future = synchronized(lock) {
             generation = nextGeneration(generation)
             retainedCleanup = null
-            retryFuture.also { retryFuture = null }
+            retryFuture.also { retryFuture = null }?.future
         }
         future?.cancel(false)
     }

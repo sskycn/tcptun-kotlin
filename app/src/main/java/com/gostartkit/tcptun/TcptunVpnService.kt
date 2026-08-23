@@ -16,11 +16,6 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 class TcptunVpnService : VpnService() {
-    private data class VpnCleanupAttempt(
-        val result: VpnPlatformStopResult,
-        val bridgeStopFailure: Throwable?,
-    )
-
     private val serviceInstanceId = nextServiceInstanceId.incrementAndGet()
     private val foregroundRuntime by lazy(LazyThreadSafetyMode.NONE) {
         VpnForegroundRuntime(AndroidVpnForegroundServicePort(this))
@@ -192,6 +187,41 @@ class TcptunVpnService : VpnService() {
     private val bridgeRestartContinuationTask = LatestTaskSlot()
     private val bridgeRestartScheduleLock = Any()
     private val bridgeRecoveryTask = LatestTaskSlot()
+    private val platformCleanupAdapter = VpnPlatformCleanupAdapter(
+        VpnPlatformCleanupActions(
+            cancelBridgeRestart = ::cancelPendingBridgeRestart,
+            publishStopping = { TcptunState.setStatus(VpnStatus.Stopping) },
+            stopHealth = bridgeHealthRuntime::stop,
+            unregisterNetwork = { underlyingNetworkRuntime.unregister(updateDiagnostics = false) },
+            resetUnderlyingDiagnostics = underlyingNetworkRuntime::clearDiagnostics,
+            clearDesiredConfig = { clearDesiredRunningConfig(this) },
+            publishBridgeStopping = { TcptunState.appendLog("stopping tcptun bridge") },
+            stopBridgeSession = ::stopBridge,
+            closeTunIfSafe = ::closeTunAfterBridgeStopAttempt,
+            clearAppIdentity = {
+                if (appIdentityProviderDelegate.isInitialized()) appIdentityProvider.clear()
+            },
+            resetHealth = bridgeHealthRuntime::reset,
+            resourcesOwned = { bridgeResources.hasOwnedResources },
+            resetDiagnostics = { TcptunState.updateDiagnostics(::releasedVpnDiagnostics) },
+            publishStopped = { TcptunState.setStatus(VpnStatus.Stopped) },
+            removeForeground = { stopForeground(STOP_FOREGROUND_REMOVE) },
+            requestServiceStop = {
+                synchronized(lifecycleCommandLock) {
+                    latestStartId.get().takeIf { it > 0 }?.let(::stopSelf) ?: stopSelf()
+                }
+            },
+            honorDeferredStopIfReleased = ::honorDeferredStopIfReleased,
+            publishIncompleteCleanup = { description ->
+                TcptunState.error("VPN cleanup is incomplete: $description")
+            },
+            retainCleanupForeground = {
+                if (!destroyed.get()) {
+                    startVpnForeground(VpnForegroundState.Error(retryingCleanup = true))
+                }
+            },
+        ),
+    )
     private val platformTeardownRuntime = newVpnPlatformTeardownRuntime(
         executor = lifecycleExecutor,
         performCleanup = { request -> performVpnCleanupAttempt(request).result },
@@ -1412,102 +1442,26 @@ class TcptunVpnService : VpnService() {
     /** Performs exactly one physical cleanup attempt; retry admission belongs to the runtime. */
     private fun performVpnCleanupAttempt(request: VpnPlatformTeardownRequest): VpnCleanupAttempt =
         synchronized(teardownLock) {
-            val cleanupGlobalStep = { label: String, action: () -> Unit ->
-                request.runGlobalCleanupStep(serviceOwnerLock, label, ::cleanupStep, action)
-            }
-
-            var bridgeStopFailure: Throwable? = null
-            cancelPendingBridgeRestart()
-            if (request.setStopped) {
-                cleanupGlobalStep("set stopping state") { TcptunState.setStatus(VpnStatus.Stopping) }
-            }
-            cleanupStep("stop bridge monitor") { bridgeHealthRuntime.stop() }
-            cleanupStep("unregister network callback") {
-                underlyingNetworkRuntime.unregister(updateDiagnostics = false)
-            }
-            cleanupGlobalStep("reset underlying network diagnostics") {
-                underlyingNetworkRuntime.clearDiagnostics()
-            }
-            if (request.clearSavedConfig) {
-                cleanupGlobalStep("clear saved VPN config") { clearDesiredRunningConfig(this) }
-            }
-            cleanupStep("log bridge stop") { TcptunState.appendLog("stopping tcptun bridge") }
-            // Engine.Stop closes the Go-owned duplicate and waits for the TUN
-            // inbound to finish. Only then may VpnService close its original.
-            try {
-                stopBridge()
-            } catch (error: Throwable) {
-                if (error.isFatalProcessError()) throw error
-                bridgeStopFailure = error
-                cleanupStep("report tcptun bridge stop failure") { throw error }
-            }
-            cleanupStep("close VPN TUN") { closeTunAfterBridgeStopAttempt() }
-            if (appIdentityProviderDelegate.isInitialized()) {
-                cleanupStep("clear app identity cache") { appIdentityProvider.clear() }
-            }
-            bridgeHealthRuntime.reset()
-            val disposition = bridgeTeardownDisposition(bridgeResources.hasOwnedResources)
-            if (disposition.resourcesReleased) {
-                completeReleasedVpnStop(
-                    setStopped = request.setStopped,
-                    stopSelfService = request.stopSelfService,
-                    disposition = disposition,
-                    cleanupGlobalStep = cleanupGlobalStep,
-                )
-            } else {
-                val stopDescription = bridgeStopFailure?.let(::failureDescription)
-                    ?: "native bridge resources are still owned"
-                cleanupGlobalStep("publish incomplete VPN teardown") {
-                    TcptunState.error("VPN cleanup is incomplete: $stopDescription")
-                }
-                if (!destroyed.get()) {
-                    cleanupGlobalStep("retain VPN cleanup foreground") {
-                        startVpnForeground(VpnForegroundState.Error(retryingCleanup = true))
-                    }
-                }
-            }
-            val result = if (disposition.resourcesReleased) {
-                VpnPlatformStopResult.Released
-            } else {
-                VpnPlatformStopResult.RetainedForRetry
-            }
-            VpnCleanupAttempt(result, bridgeStopFailure)
+            platformCleanupAdapter.perform(
+                request,
+                VpnCleanupPublicationPort(
+                    globalStep = { label, action ->
+                        request.runGlobalCleanupStep(serviceOwnerLock, label, ::cleanupStep, action)
+                    },
+                    localStep = ::cleanupStep,
+                ),
+            )
         }
 
-    private fun completeReleasedVpnStop(
-        setStopped: Boolean,
-        stopSelfService: Boolean,
-        disposition: BridgeTeardownDisposition,
-        cleanupGlobalStep: (String, () -> Unit) -> Unit,
-    ) {
-        cleanupGlobalStep("reset VPN diagnostics") {
-            TcptunState.updateDiagnostics(::releasedVpnDiagnostics)
-        }
-        if (setStopped && disposition.mayPublishStopped) {
-            cleanupGlobalStep("set stopped state") { TcptunState.setStatus(VpnStatus.Stopped) }
-        }
-        if (disposition.mayRemoveForeground) {
-            cleanupGlobalStep("remove VPN foreground notification") {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-            }
-        }
-        if (stopSelfService && disposition.mayStopService) {
-            cleanupGlobalStep("stop VPN service") {
-                synchronized(lifecycleCommandLock) {
-                    latestStartId.get().takeIf { it > 0 }?.let(::stopSelf) ?: stopSelf()
-                }
-            }
-        }
-        cleanupStep("honor deferred VPN service stop") {
-            synchronized(lifecycleCommandLock) {
-                val deferredStop = deferredServiceStopGate.consumeIfReleased(
-                    currentLifecycleGeneration = runtimeSnapshot.lifecycleGeneration,
-                    currentPersistentCommandGeneration = runtimeSnapshot.persistentCommandGeneration,
-                    resourcesReleased = true,
-                    activeServiceOwner = !destroyed.get() && isActiveServiceOwner(),
-                )
-                deferredStop?.startId?.let(::stopSelf)
-            }
+    private fun honorDeferredStopIfReleased() {
+        synchronized(lifecycleCommandLock) {
+            val deferredStop = deferredServiceStopGate.consumeIfReleased(
+                currentLifecycleGeneration = runtimeSnapshot.lifecycleGeneration,
+                currentPersistentCommandGeneration = runtimeSnapshot.persistentCommandGeneration,
+                resourcesReleased = true,
+                activeServiceOwner = !destroyed.get() && isActiveServiceOwner(),
+            )
+            deferredStop?.startId?.let(::stopSelf)
         }
     }
 
