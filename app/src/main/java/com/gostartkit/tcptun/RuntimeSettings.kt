@@ -28,6 +28,50 @@ data class RuntimeSettings(
     val flowAnalysisApp: String = "",
 )
 
+/** One atomically published view of every setting applied to the current runtime. */
+internal data class AppliedRuntimeSettings(
+    val mtu: Int = RuntimeSettingsDefaults.VpnMtu,
+    val powerSavingMode: Boolean = true,
+    val logLevel: String = DefaultLogLevel,
+    val socksPort: Int = RuntimeSettingsDefaults.SocksPort,
+    val localProxyProtocol: String = DefaultLocalProxyProtocol,
+    val socksListenAll: Boolean = false,
+    val socksUsername: String = "",
+    val socksPassword: String = "",
+    val routeLocalProxyTraffic: Boolean = false,
+    val defaultOutbound: String = DefaultOutboundDynamicPool,
+    val flowAnalysisApp: String = "",
+) {
+    fun structuralSettings(): RuntimeSettings = RuntimeSettings(
+        mtu = mtu,
+        powerSavingMode = powerSavingMode,
+        logLevel = logLevel,
+        socksPort = socksPort,
+        localProxyProtocol = localProxyProtocol,
+        socksListenAll = socksListenAll,
+        socksUsername = socksUsername,
+        socksPassword = socksPassword,
+        routeLocalProxyTraffic = routeLocalProxyTraffic,
+        defaultOutbound = defaultOutbound,
+    )
+
+    companion object {
+        fun from(settings: RuntimeSettings): AppliedRuntimeSettings = AppliedRuntimeSettings(
+            mtu = settings.mtu,
+            powerSavingMode = settings.powerSavingMode,
+            logLevel = settings.logLevel,
+            socksPort = settings.socksPort,
+            localProxyProtocol = settings.localProxyProtocol,
+            socksListenAll = settings.socksListenAll,
+            socksUsername = settings.socksUsername,
+            socksPassword = settings.socksPassword,
+            routeLocalProxyTraffic = settings.routeLocalProxyTraffic,
+            defaultOutbound = settings.defaultOutbound,
+            flowAnalysisApp = settings.flowAnalysisApp,
+        )
+    }
+}
+
 private val AndroidPackageNamePattern = Regex("^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+$")
 private const val MaxFlowAnalysisAppLength = 255
 private const val GeneratedLanProxyPasswordLength = 32

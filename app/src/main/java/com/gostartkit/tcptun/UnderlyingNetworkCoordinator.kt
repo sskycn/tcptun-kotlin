@@ -65,6 +65,13 @@ internal class UnderlyingNetworkCoordinator(
         return true
     }
 
+    /** Rebinds the selected network after the Bridge creates a replacement epoch. */
+    fun republishCurrent(reason: String) {
+        if (!canHandleCallback()) return
+        val claim = selection.currentClaim() ?: return
+        onSelectionChanged(claim.value, claim, reason)
+    }
+
     private fun createCallback(epoch: Long): ConnectivityManager.NetworkCallback {
         return object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {

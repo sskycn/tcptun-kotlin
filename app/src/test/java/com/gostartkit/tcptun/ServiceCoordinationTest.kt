@@ -55,14 +55,36 @@ class ServiceCoordinationTest {
     @Test
     fun runtimeSettingsGateCoalescesForceAndRejectsOlderGeneration() {
         val gate = RuntimeSettingsApplyGate()
-        val first = gate.request(forceRestart = true)
-        val second = gate.request(forceRestart = false)
+        val ownership = ownership(generation = 1, epoch = 10)
+        val first = gate.request(forceRestart = true, ownership)
+        val second = gate.request(forceRestart = false, ownership)
 
-        assertFalse(gate.isLatest(first))
-        assertTrue(gate.isLatest(second))
+        assertFalse(gate.isLatest(first.generation))
+        assertTrue(gate.isLatest(second.generation))
         assertNull(gate.claim(first))
-        assertTrue(gate.claim(second) == true)
-        assertFalse(gate.claim(second) ?: true)
+        assertTrue(gate.claim(second)?.forceRestart == true)
+        assertFalse(gate.claim(second)?.forceRestart ?: true)
+    }
+
+    @Test
+    fun underlyingNetworkGateCoalescesToLatestOwnedSelection() {
+        val gate = UnderlyingNetworkUpdateGate<String>()
+        val old = gate.request(
+            network = "wifi",
+            selection = RankedSelectionClaim("wifi", initial = true),
+            reason = "wifi",
+            ownership = ownership(generation = 1, epoch = 10),
+        )
+        val latest = gate.request(
+            network = "cellular",
+            selection = RankedSelectionClaim("cellular", initial = false, previousValue = "wifi"),
+            reason = "cellular",
+            ownership = ownership(generation = 1, epoch = 10),
+        )
+
+        assertFalse(gate.isLatest(old))
+        assertTrue(gate.isLatest(latest))
+        assertEquals("cellular", latest.network)
     }
 
     @Test
@@ -198,5 +220,14 @@ class ServiceCoordinationTest {
     ): BridgeRecoveryCoordinator = BridgeRecoveryCoordinator(
         minRestartIntervalMillis = minRestartIntervalMillis,
         recoveryDelayMillis = { attempt -> attempt * 1_000L },
+    )
+
+    private fun ownership(generation: Int, epoch: Long) = VpnRuntimeOwnership(
+        runtimeToken = VpnRuntimeCommandToken(
+            serviceInstanceId = 1,
+            lifecycleGeneration = generation,
+            persistentGeneration = generation,
+        ),
+        bridgeEpoch = epoch,
     )
 }

@@ -36,7 +36,6 @@ internal object VpnHealthCheckRequests {
 
     fun requestMemberProbe(reason: String, delayMs: Long = 0L) {
         val delay = delayMs.coerceIn(0L, MaxMemberProbeDelayMs)
-        forceMemberProbe.set(true)
         val requester = memberProbeCallback.get()
         if (requester != null) requester(reason, delay) else requestHealthCheck(reason)
     }
@@ -64,5 +63,12 @@ internal object VpnHealthCheckRequests {
 
     fun restoreStatusReconcileForce() {
         forceStatusReconcile.set(true)
+    }
+
+    /** Prevents requests owned by a released Bridge epoch from reaching its replacement. */
+    fun clearRuntimeForces() {
+        forceUpstreamProbe.set(false)
+        forceMemberProbe.set(false)
+        forceStatusReconcile.set(false)
     }
 }

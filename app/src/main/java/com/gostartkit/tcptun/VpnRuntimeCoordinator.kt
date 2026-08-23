@@ -10,9 +10,22 @@ internal sealed interface VpnRuntimeCommand {
     data object Start : VpnRuntimeCommand { override val description = "VPN start" }
     data object Stop : VpnRuntimeCommand { override val description = "VPN stop" }
     data object UpdateOutbounds : VpnRuntimeCommand { override val description = "VPN outbound update" }
-    data object ApplyRuntimeSettings : VpnRuntimeCommand { override val description = "runtime settings apply" }
+    data class UpdateUnderlyingNetwork(
+        val ownership: VpnRuntimeOwnership,
+    ) : VpnRuntimeCommand {
+        override val description = "underlying network update"
+    }
+    data class ApplyRuntimeSettings(
+        val request: RuntimeSettingsApplyGate.Claim,
+    ) : VpnRuntimeCommand {
+        override val description = "runtime settings apply"
+    }
     data object BridgeRecovery : VpnRuntimeCommand { override val description = "Bridge recovery" }
-    data object UpdateFlowAnalysis : VpnRuntimeCommand { override val description = "flow analysis update" }
+    data class UpdateFlowAnalysis(
+        val ownership: VpnRuntimeOwnership,
+    ) : VpnRuntimeCommand {
+        override val description = "flow analysis update"
+    }
     data object RefreshDiagnostics : VpnRuntimeCommand { override val description = "Bridge diagnostics refresh" }
     data class Internal(override val description: String) : VpnRuntimeCommand
 }
@@ -506,13 +519,62 @@ internal class VpnRuntimeCoordinator(
             }
             completeRecoverySuccess(token)
         } catch (error: Throwable) {
-            if (error.isFatalProcessError()) throw error
-            val superseded = !isCurrent(token)
-            if (!superseded) beginRecoveryRollbackCleanup(token)
-            val cleanupResult = rollbackRecovery(request, token, error, superseded)
-            if (!superseded) completeRecoveryRollbackCleanup(token, cleanupResult)?.let { retryToken ->
-                onRetryRequired(retryToken, request, error)
+            handleRecoveryFailure(token, request, error, rollbackRecovery, onRetryRequired)
+        }
+    }
+
+    /** Begins Recovery but deliberately leaves completion to a scheduled continuation. */
+    fun dispatchRecoveryPreparation(
+        token: VpnRuntimeRecoveryToken,
+        request: VpnRuntimeRecoveryRequest,
+        onFailure: (Throwable) -> Unit,
+        prepareRuntime: (VpnRuntimeRecoveryRequest, VpnRuntimeRecoveryToken, () -> Boolean) -> Unit,
+        rollbackRecovery: (
+            VpnRuntimeRecoveryRequest,
+            VpnRuntimeRecoveryToken,
+            Throwable,
+            Boolean,
+        ) -> VpnPlatformStopResult,
+        onRetryRequired: (VpnRuntimeRecoveryToken, VpnRuntimeRecoveryRequest, Throwable) -> Unit,
+    ): Boolean = dispatch(VpnRuntimeCommand.BridgeRecovery, onFailure) recovery@{
+        if (!beginRecovery(token)) return@recovery
+        try {
+            prepareRuntime(request, token) { isCurrent(token) }
+        } catch (error: Throwable) {
+            handleRecoveryFailure(token, request, error, rollbackRecovery, onRetryRequired)
+        }
+    }
+
+    /** Completes only the still-current Recovery generation prepared above. */
+    fun dispatchRecoveryContinuation(
+        token: VpnRuntimeRecoveryToken,
+        request: VpnRuntimeRecoveryRequest,
+        onFailure: (Throwable) -> Unit,
+        recoverRuntime: (
+            VpnRuntimeRecoveryRequest,
+            VpnRuntimeRecoveryToken,
+            () -> Boolean,
+            (ProfileRunPlan) -> Boolean,
+        ) -> Unit,
+        rollbackRecovery: (
+            VpnRuntimeRecoveryRequest,
+            VpnRuntimeRecoveryToken,
+            Throwable,
+            Boolean,
+        ) -> VpnPlatformStopResult,
+        onRetryRequired: (VpnRuntimeRecoveryToken, VpnRuntimeRecoveryRequest, Throwable) -> Unit,
+    ): Boolean = dispatch(VpnRuntimeCommand.BridgeRecovery, onFailure) recovery@{
+        if (!isRecovering(token)) return@recovery
+        try {
+            recoverRuntime(request, token, { isCurrent(token) }) { plan ->
+                commitRecoveryRunning(token, plan)
             }
+            if (isCurrent(token) && snapshot.phase is VpnRuntimePhase.Recovering) {
+                commitRecoveryRunning(token, request.plan)
+            }
+            completeRecoverySuccess(token)
+        } catch (error: Throwable) {
+            handleRecoveryFailure(token, request, error, rollbackRecovery, onRetryRequired)
         }
     }
 
@@ -681,6 +743,31 @@ internal class VpnRuntimeCoordinator(
             bridgeRestarting = true,
         )
         true
+    }
+
+    private fun isRecovering(token: VpnRuntimeRecoveryToken): Boolean = synchronized(stateLock) {
+        isCurrentRecoveryLocked(token) && publishedSnapshot.phase is VpnRuntimePhase.Recovering
+    }
+
+    private fun handleRecoveryFailure(
+        token: VpnRuntimeRecoveryToken,
+        request: VpnRuntimeRecoveryRequest,
+        error: Throwable,
+        rollbackRecovery: (
+            VpnRuntimeRecoveryRequest,
+            VpnRuntimeRecoveryToken,
+            Throwable,
+            Boolean,
+        ) -> VpnPlatformStopResult,
+        onRetryRequired: (VpnRuntimeRecoveryToken, VpnRuntimeRecoveryRequest, Throwable) -> Unit,
+    ) {
+        if (error.isFatalProcessError()) throw error
+        val superseded = !isCurrent(token)
+        if (!superseded) beginRecoveryRollbackCleanup(token)
+        val cleanupResult = rollbackRecovery(request, token, error, superseded)
+        if (!superseded) completeRecoveryRollbackCleanup(token, cleanupResult)?.let { retryToken ->
+            onRetryRequired(retryToken, request, error)
+        }
     }
 
     private fun completeRecoverySuccess(token: VpnRuntimeRecoveryToken): Boolean =
