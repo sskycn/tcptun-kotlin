@@ -3,7 +3,6 @@ package com.tcptun.client
 import android.content.Context
 import android.content.SharedPreferences
 import org.json.JSONObject
-import java.security.SecureRandom
 import java.util.UUID
 
 internal object RuntimeSettingsDefaults {
@@ -74,46 +73,6 @@ internal data class AppliedRuntimeSettings(
 
 private val AndroidPackageNamePattern = Regex("^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+$")
 private const val MaxFlowAnalysisAppLength = 255
-private const val GeneratedLanProxyPasswordLength = 32
-private const val LanProxyPasswordAlphabet =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-
-/** Generates 192 bits of entropy without modulo bias (the alphabet contains exactly 64 symbols). */
-internal fun generateLanProxyPassword(random: SecureRandom = SecureRandom()): String {
-    val entropy = ByteArray(GeneratedLanProxyPasswordLength)
-    random.nextBytes(entropy)
-    return buildString(GeneratedLanProxyPasswordLength) {
-        entropy.forEach { byte -> append(LanProxyPasswordAlphabet[byte.toInt() and 0x3f]) }
-    }
-}
-
-internal data class SecuredRuntimeSettings(
-    val settings: RuntimeSettings,
-    val generatedLanProxyPassword: Boolean,
-)
-
-/** The local mixed and SOCKS5 listeners share this fail-closed authentication policy. */
-internal fun secureRuntimeSettings(
-    settings: RuntimeSettings,
-    passwordGenerator: () -> String = ::generateLanProxyPassword,
-): SecuredRuntimeSettings {
-    if (!settings.socksListenAll || settings.socksPassword.isNotEmpty()) {
-        return SecuredRuntimeSettings(settings, generatedLanProxyPassword = false)
-    }
-    val password = passwordGenerator()
-    require(password.isNotEmpty()) { "LAN proxy password generation failed" }
-    require(hasValidSocksCredentialSize(password)) { "generated LAN proxy password is too long" }
-    return SecuredRuntimeSettings(
-        settings.copy(socksPassword = password),
-        generatedLanProxyPassword = true,
-    )
-}
-
-internal fun requireSafeRuntimeSettings(settings: RuntimeSettings) {
-    require(!settings.socksListenAll || settings.socksPassword.isNotEmpty()) {
-        "LAN proxy authentication requires a non-empty password"
-    }
-}
 
 /** Preserves a restored non-secret draft while hydrating credentials from encrypted storage. */
 internal fun hydrateRuntimeSettingsCredentials(
@@ -218,16 +177,11 @@ object RuntimeSettingsRepository {
                 },
             ),
         )
-        val secured = secureRuntimeSettings(stored)
-        if (storageVersion < StorageVersionEncryptedSecrets || secured.generatedLanProxyPassword) {
-            // Persist before returning so process restoration/background starts cannot reuse
-            // legacy listen-all settings without authentication.
-            write(context, secured.settings)
-            if (secured.generatedLanProxyPassword) {
-                TcptunState.appendLog("legacy LAN proxy settings repaired; authentication is now required")
-            }
+        if (storageVersion < StorageVersionEncryptedSecrets) {
+            // Persist legacy plaintext credentials through the encrypted secret store.
+            write(context, stored)
         }
-        return secured.settings
+        return stored
     }
 
     fun write(context: Context, settings: RuntimeSettings) {
@@ -244,15 +198,14 @@ object RuntimeSettingsRepository {
         require(hasValidSocksCredentialSize(settings.socksPassword)) {
             "SOCKS password exceeds $MaxSocksCredentialUtf8Bytes UTF-8 bytes"
         }
-        val normalizedSettings = secureRuntimeSettings(settings.copy(
+        val normalizedSettings = settings.copy(
             mtu = settings.mtu.coerceIn(1280, 1500),
             logLevel = normalizedLogLevel,
             socksPort = normalizedSocksPort,
             localProxyProtocol = normalizedLocalProxyProtocol,
             defaultOutbound = normalizedDefaultOutbound,
             flowAnalysisApp = normalizedFlowAnalysisApp,
-        )).settings
-        requireSafeRuntimeSettings(normalizedSettings)
+        )
         val appContext = context.applicationContext ?: context
         val prefs = appContext.getSharedPreferences(Prefs, Context.MODE_PRIVATE)
         val previousSecretsId = prefs.getString(KeySecretsId, null).orEmpty()

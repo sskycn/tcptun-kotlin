@@ -151,7 +151,6 @@
     <string name="socks_port">本地代理端口</string>
     <string name="socks_port_error">请输入 1 到 65535 之间的端口。</string>
     <string name="socks_listen_all">监听所有网卡</string>
-    <string name="lan_proxy_authentication_generated">已启用局域网代理认证。系统已生成安全密码，请在离开此页面前从密码框复制。</string>
     <string name="route_local_proxy_traffic">本地代理走路由规则</string>
     <string name="route_local_proxy_traffic_note">默认关闭。开启后，mixed/SOCKS 监听流量与 VPN（TUN）流量共用同一套托管路由规则。修改后需重启 VPN 生效。</string>
     <string name="default_outbound">默认出口（route.default_outbound）</string>
