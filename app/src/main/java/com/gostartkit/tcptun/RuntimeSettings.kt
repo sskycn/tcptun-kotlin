@@ -3,7 +3,6 @@ package com.tcptun.client
 import android.content.Context
 import android.content.SharedPreferences
 import org.json.JSONObject
-import java.security.SecureRandom
 import java.util.UUID
 
 internal object RuntimeSettingsDefaults {
@@ -28,48 +27,52 @@ data class RuntimeSettings(
     val flowAnalysisApp: String = "",
 )
 
+/** One atomically published view of every setting applied to the current runtime. */
+internal data class AppliedRuntimeSettings(
+    val mtu: Int = RuntimeSettingsDefaults.VpnMtu,
+    val powerSavingMode: Boolean = true,
+    val logLevel: String = DefaultLogLevel,
+    val socksPort: Int = RuntimeSettingsDefaults.SocksPort,
+    val localProxyProtocol: String = DefaultLocalProxyProtocol,
+    val socksListenAll: Boolean = false,
+    val socksUsername: String = "",
+    val socksPassword: String = "",
+    val routeLocalProxyTraffic: Boolean = false,
+    val defaultOutbound: String = DefaultOutboundDynamicPool,
+    val flowAnalysisApp: String = "",
+) {
+    fun structuralSettings(): RuntimeSettings = RuntimeSettings(
+        mtu = mtu,
+        powerSavingMode = powerSavingMode,
+        logLevel = logLevel,
+        socksPort = socksPort,
+        localProxyProtocol = localProxyProtocol,
+        socksListenAll = socksListenAll,
+        socksUsername = socksUsername,
+        socksPassword = socksPassword,
+        routeLocalProxyTraffic = routeLocalProxyTraffic,
+        defaultOutbound = defaultOutbound,
+    )
+
+    companion object {
+        fun from(settings: RuntimeSettings): AppliedRuntimeSettings = AppliedRuntimeSettings(
+            mtu = settings.mtu,
+            powerSavingMode = settings.powerSavingMode,
+            logLevel = settings.logLevel,
+            socksPort = settings.socksPort,
+            localProxyProtocol = settings.localProxyProtocol,
+            socksListenAll = settings.socksListenAll,
+            socksUsername = settings.socksUsername,
+            socksPassword = settings.socksPassword,
+            routeLocalProxyTraffic = settings.routeLocalProxyTraffic,
+            defaultOutbound = settings.defaultOutbound,
+            flowAnalysisApp = settings.flowAnalysisApp,
+        )
+    }
+}
+
 private val AndroidPackageNamePattern = Regex("^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+$")
 private const val MaxFlowAnalysisAppLength = 255
-private const val GeneratedLanProxyPasswordLength = 32
-private const val LanProxyPasswordAlphabet =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-
-/** Generates 192 bits of entropy without modulo bias (the alphabet contains exactly 64 symbols). */
-internal fun generateLanProxyPassword(random: SecureRandom = SecureRandom()): String {
-    val entropy = ByteArray(GeneratedLanProxyPasswordLength)
-    random.nextBytes(entropy)
-    return buildString(GeneratedLanProxyPasswordLength) {
-        entropy.forEach { byte -> append(LanProxyPasswordAlphabet[byte.toInt() and 0x3f]) }
-    }
-}
-
-internal data class SecuredRuntimeSettings(
-    val settings: RuntimeSettings,
-    val generatedLanProxyPassword: Boolean,
-)
-
-/** The local mixed and SOCKS5 listeners share this fail-closed authentication policy. */
-internal fun secureRuntimeSettings(
-    settings: RuntimeSettings,
-    passwordGenerator: () -> String = ::generateLanProxyPassword,
-): SecuredRuntimeSettings {
-    if (!settings.socksListenAll || settings.socksPassword.isNotEmpty()) {
-        return SecuredRuntimeSettings(settings, generatedLanProxyPassword = false)
-    }
-    val password = passwordGenerator()
-    require(password.isNotEmpty()) { "LAN proxy password generation failed" }
-    require(hasValidSocksCredentialSize(password)) { "generated LAN proxy password is too long" }
-    return SecuredRuntimeSettings(
-        settings.copy(socksPassword = password),
-        generatedLanProxyPassword = true,
-    )
-}
-
-internal fun requireSafeRuntimeSettings(settings: RuntimeSettings) {
-    require(!settings.socksListenAll || settings.socksPassword.isNotEmpty()) {
-        "LAN proxy authentication requires a non-empty password"
-    }
-}
 
 /** Preserves a restored non-secret draft while hydrating credentials from encrypted storage. */
 internal fun hydrateRuntimeSettingsCredentials(
@@ -174,16 +177,11 @@ object RuntimeSettingsRepository {
                 },
             ),
         )
-        val secured = secureRuntimeSettings(stored)
-        if (storageVersion < StorageVersionEncryptedSecrets || secured.generatedLanProxyPassword) {
-            // Persist before returning so process restoration/background starts cannot reuse
-            // legacy listen-all settings without authentication.
-            write(context, secured.settings)
-            if (secured.generatedLanProxyPassword) {
-                TcptunState.appendLog("legacy LAN proxy settings repaired; authentication is now required")
-            }
+        if (storageVersion < StorageVersionEncryptedSecrets) {
+            // Persist legacy plaintext credentials through the encrypted secret store.
+            write(context, stored)
         }
-        return secured.settings
+        return stored
     }
 
     fun write(context: Context, settings: RuntimeSettings) {
@@ -200,15 +198,14 @@ object RuntimeSettingsRepository {
         require(hasValidSocksCredentialSize(settings.socksPassword)) {
             "SOCKS password exceeds $MaxSocksCredentialUtf8Bytes UTF-8 bytes"
         }
-        val normalizedSettings = secureRuntimeSettings(settings.copy(
+        val normalizedSettings = settings.copy(
             mtu = settings.mtu.coerceIn(1280, 1500),
             logLevel = normalizedLogLevel,
             socksPort = normalizedSocksPort,
             localProxyProtocol = normalizedLocalProxyProtocol,
             defaultOutbound = normalizedDefaultOutbound,
             flowAnalysisApp = normalizedFlowAnalysisApp,
-        )).settings
-        requireSafeRuntimeSettings(normalizedSettings)
+        )
         val appContext = context.applicationContext ?: context
         val prefs = appContext.getSharedPreferences(Prefs, Context.MODE_PRIVATE)
         val previousSecretsId = prefs.getString(KeySecretsId, null).orEmpty()
@@ -258,16 +255,17 @@ object RuntimeSettingsRepository {
     fun defaultLocalSocksConnectAddress(): String =
         "${RuntimeSettingsDefaults.LocalSocksHost}:${RuntimeSettingsDefaults.SocksPort}"
 
+    fun publishHotApplied(settings: RuntimeSettings) {
+        publishDiagnostics(settings)
+        TcptunState.appendLog(
+            "runtime settings applied without VPN restart: " +
+                "log-level=${settings.logLevel} power-saving=${settings.powerSavingMode}",
+        )
+    }
+
     private fun publish(settings: RuntimeSettings) {
         TcptunState.setFlowAnalysisApp(settings.flowAnalysisApp)
-        TcptunState.updateDiagnostics {
-            it.copy(
-                mtu = settings.mtu,
-                powerSavingMode = settings.powerSavingMode,
-                localProxyAddress = localSocksConnectAddress(settings),
-                localProxyPort = settings.socksPort,
-            )
-        }
+        publishDiagnostics(settings)
         TcptunState.appendLog(
             "runtime settings saved: proxy=${settings.localProxyProtocol}://" +
                 "${localSocksListenAddress(settings)} mtu=${settings.mtu} " +
@@ -276,6 +274,17 @@ object RuntimeSettingsRepository {
                 "default-outbound=${settings.defaultOutbound.ifBlank { "profile-pool" }} " +
                 "flow-analysis=${settings.flowAnalysisApp.ifBlank { "disabled" }}",
         )
+    }
+
+    private fun publishDiagnostics(settings: RuntimeSettings) {
+        TcptunState.updateDiagnostics {
+            it.copy(
+                mtu = settings.mtu,
+                powerSavingMode = settings.powerSavingMode,
+                localProxyAddress = localSocksConnectAddress(settings),
+                localProxyPort = settings.socksPort,
+            )
+        }
     }
 }
 

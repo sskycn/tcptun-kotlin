@@ -153,7 +153,6 @@
     <string name="socks_port">Local proxy port</string>
     <string name="socks_port_error">Use a port from 1 to 65535.</string>
     <string name="socks_listen_all">Listen on all interfaces</string>
-    <string name="lan_proxy_authentication_generated">LAN proxy authentication is enabled. A secure password was generated; copy it from the password field before leaving this page.</string>
     <string name="route_local_proxy_traffic">Route local proxy traffic</string>
     <string name="route_local_proxy_traffic_note">Off by default. When enabled, mixed/SOCKS listener traffic uses the same managed route rules as VPN (TUN) traffic. Requires a VPN restart when changed.</string>
     <string name="default_outbound">Default outbound (route.default_outbound)</string>

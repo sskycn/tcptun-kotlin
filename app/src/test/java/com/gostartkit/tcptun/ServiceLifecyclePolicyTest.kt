@@ -50,47 +50,6 @@ class ServiceLifecyclePolicyTest {
     }
 
     @Test
-    fun `teardown retries follow bounded production backoff`() {
-        val coordinator = teardownRetryCoordinator()
-
-        val decisions = List(6) { coordinator.next() }
-
-        assertEquals(listOf(1, 2, 3, 4, 5, 6), decisions.map { it.attempt })
-        assertEquals(
-            listOf(2_000L, 5_000L, 10_000L, 30_000L, 30_000L, 30_000L),
-            decisions.map { it.delayMillis },
-        )
-        assertTrue(decisions.all { it.shouldSchedule })
-        assertTrue(coordinator.pending)
-    }
-
-    @Test
-    fun `teardown retry exhaustion retains completed attempt count`() {
-        val coordinator = teardownRetryCoordinator()
-        repeat(6) { coordinator.next() }
-
-        val exhausted = coordinator.next()
-
-        assertFalse(exhausted.shouldSchedule)
-        assertNull(exhausted.delayMillis)
-        assertEquals(6, exhausted.completedAttempts)
-        assertEquals(6, exhausted.maxAttempts)
-        assertTrue(coordinator.pending)
-    }
-
-    @Test
-    fun `released resources reset teardown retry state`() {
-        val coordinator = teardownRetryCoordinator()
-        coordinator.next()
-        coordinator.next()
-
-        coordinator.reset()
-
-        assertFalse(coordinator.pending)
-        assertEquals(1, coordinator.next().attempt)
-    }
-
-    @Test
     fun `deferred stop is consumed only after resources release in the same generation`() {
         val gate = DeferredServiceStopGate()
         gate.defer(lifecycleGeneration = 7, persistentCommandGeneration = 3, startId = 41)
@@ -351,5 +310,4 @@ class ServiceLifecyclePolicyTest {
         assertEquals("second", gate.runIfActive(second) { "second" })
     }
 
-    private fun teardownRetryCoordinator() = BridgeTeardownRetryCoordinator()
 }

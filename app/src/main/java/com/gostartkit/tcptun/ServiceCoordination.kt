@@ -8,6 +8,22 @@ internal data class RankedSelectionClaim<K>(
     val previousValue: K? = null,
 )
 
+/** Identifies one concrete native runtime, not merely one Service instance. */
+internal data class VpnRuntimeOwnership(
+    val runtimeToken: VpnRuntimeCommandToken,
+    val bridgeEpoch: Long,
+) {
+    init {
+        require(bridgeEpoch > 0L) { "bridge epoch must be positive" }
+    }
+}
+
+internal fun VpnRuntimeOwnership.isCurrent(
+    runtimeTokenCurrent: Boolean,
+    activeBridgeEpoch: Long,
+    activeServiceInstance: Boolean,
+): Boolean = runtimeTokenCurrent && activeServiceInstance && bridgeEpoch == activeBridgeEpoch
+
 /**
  * Owns ranked candidate state and rejects stale selections computed by an
  * earlier callback. All mutations are serialized behind one private monitor.
@@ -49,29 +65,13 @@ internal class RankedSelectionTracker<K> {
         initialized = false
     }
 
+    @Synchronized
+    fun currentClaim(): RankedSelectionClaim<K>? {
+        if (!initialized) return null
+        return RankedSelectionClaim(value = current, initial = true, previousValue = current)
+    }
+
     private fun selectedLocked(): K? = scores.maxByOrNull { it.value }?.key
-}
-
-/** Coalesces debounced runtime-setting requests without exposing its lock. */
-internal class RuntimeSettingsApplyGate {
-    private var generation = 0
-    private var forceRestartPending = false
-
-    @Synchronized
-    fun request(forceRestart: Boolean): Int {
-        generation += 1
-        forceRestartPending = forceRestartPending || forceRestart
-        return generation
-    }
-
-    @Synchronized
-    fun claim(requestGeneration: Int): Boolean? {
-        if (requestGeneration != generation) return null
-        return forceRestartPending.also { forceRestartPending = false }
-    }
-
-    @Synchronized
-    fun isLatest(requestGeneration: Int): Boolean = requestGeneration == generation
 }
 
 internal data class BridgeRestartToken(

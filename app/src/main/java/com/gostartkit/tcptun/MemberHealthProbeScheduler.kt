@@ -23,12 +23,17 @@ internal class MemberHealthProbeScheduler(
     val notBeforeMs: Long
         get() = notBeforeElapsedMs.get()
 
-    fun schedule(reason: String, requestedDelayMs: Long) {
+    fun schedule(
+        reason: String,
+        requestedDelayMs: Long,
+        requestCurrent: () -> Boolean = { true },
+    ) {
         val delayMs = requestedDelayMs.coerceIn(0L, maxDelayMs)
-        if (!canRun()) return
-        markProbeForced()
+        if (!canRun() || !requestCurrent()) return
         synchronized(lock) {
             if (delayMs == 0L) {
+                if (!requestCurrent()) return
+                markProbeForced()
                 notBeforeElapsedMs.set(0L)
                 generation.incrementAndGet()
                 delayedTask.cancel()
@@ -50,15 +55,19 @@ internal class MemberHealthProbeScheduler(
                 taskName = "delayed member health probe",
                 onFailure = { error -> log(failureDescription(error)) },
             ) delayedProbe@{
-                if (scheduledGeneration != generation.get() || !canRun()) return@delayedProbe
+                if (
+                    scheduledGeneration != generation.get() || !canRun() || !requestCurrent()
+                ) return@delayedProbe
                 markProbeForced()
                 log("bridge health check requested: $reason")
                 wakeMonitor()
             }
             if (future == null) {
-                log("member health probe scheduling failed; requesting an immediate check")
-                markProbeForced()
-                wakeMonitor()
+                if (requestCurrent()) {
+                    log("member health probe scheduling failed; requesting an immediate check")
+                    markProbeForced()
+                    wakeMonitor()
+                }
             } else {
                 delayedTask.replace(future)
             }

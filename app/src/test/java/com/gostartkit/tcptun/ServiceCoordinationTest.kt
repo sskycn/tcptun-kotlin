@@ -54,15 +54,39 @@ class ServiceCoordinationTest {
 
     @Test
     fun runtimeSettingsGateCoalescesForceAndRejectsOlderGeneration() {
-        val gate = RuntimeSettingsApplyGate()
-        val first = gate.request(forceRestart = true)
-        val second = gate.request(forceRestart = false)
+        val state = RuntimeSettingsRuntimeState()
+        val ownership = ownership(generation = 1, epoch = 10)
+        val first = state.requestDesired(forceRestart = true)
+        val second = state.requestDesired(forceRestart = false)
+        val claim = requireNotNull(state.bindLatest(ownership))
 
-        assertFalse(gate.isLatest(first))
-        assertTrue(gate.isLatest(second))
-        assertNull(gate.claim(first))
-        assertTrue(gate.claim(second) == true)
-        assertFalse(gate.claim(second) ?: true)
+        assertFalse(state.isLatest(RuntimeSettingsApplyClaim(first, ownership)))
+        assertTrue(state.isLatest(claim))
+        assertEquals(second.sequence, claim.mutation.sequence)
+        assertTrue(claim.mutation.forceRestart)
+        assertTrue(state.acknowledge(second.sequence))
+        assertNull(state.pending)
+    }
+
+    @Test
+    fun underlyingNetworkGateCoalescesToLatestOwnedSelection() {
+        val gate = UnderlyingNetworkUpdateGate<String>()
+        val old = gate.request(
+            network = "wifi",
+            selection = RankedSelectionClaim("wifi", initial = true),
+            reason = "wifi",
+            ownership = ownership(generation = 1, epoch = 10),
+        )
+        val latest = gate.request(
+            network = "cellular",
+            selection = RankedSelectionClaim("cellular", initial = false, previousValue = "wifi"),
+            reason = "cellular",
+            ownership = ownership(generation = 1, epoch = 10),
+        )
+
+        assertFalse(gate.isLatest(old))
+        assertTrue(gate.isLatest(latest))
+        assertEquals("cellular", latest.network)
     }
 
     @Test
@@ -198,5 +222,14 @@ class ServiceCoordinationTest {
     ): BridgeRecoveryCoordinator = BridgeRecoveryCoordinator(
         minRestartIntervalMillis = minRestartIntervalMillis,
         recoveryDelayMillis = { attempt -> attempt * 1_000L },
+    )
+
+    private fun ownership(generation: Int, epoch: Long) = VpnRuntimeOwnership(
+        runtimeToken = VpnRuntimeCommandToken(
+            serviceInstanceId = 1,
+            lifecycleGeneration = generation,
+            persistentGeneration = generation,
+        ),
+        bridgeEpoch = epoch,
     )
 }
