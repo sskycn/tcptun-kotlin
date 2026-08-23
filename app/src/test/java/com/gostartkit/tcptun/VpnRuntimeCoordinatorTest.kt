@@ -105,6 +105,7 @@ class VpnRuntimeCoordinatorTest {
                     bridgeOwned = false
                     tunOwned = false
                     leaseOwned = false
+                    VpnPlatformStopResult.Released
                 },
             )
 
@@ -115,6 +116,92 @@ class VpnRuntimeCoordinatorTest {
             assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Idle)
             assertNull(coordinator.snapshot.runningPlan)
         }
+    }
+
+    @Test
+    fun startFailureAfterTunWithReleasedRollbackTransitionsToIdle() {
+        val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
+        val token = coordinator.claimStart(ServiceId, persistent = true)
+
+        coordinator.dispatchStart(
+            token = token,
+            request = request(plan("A")),
+            onFailure = {},
+            hasRuntimeResources = { false },
+            stopExisting = { _, _ -> error("unexpected stop") },
+            startRuntime = { _, _, _, _ -> error("failed after TUN") },
+            rollbackStart = { _, _, _, superseded ->
+                assertFalse(superseded)
+                assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.CleaningUp)
+                assertTrue(coordinator.snapshot.stopping)
+                VpnPlatformStopResult.Released
+            },
+        )
+
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Idle)
+        assertFalse(coordinator.snapshot.stopping)
+        assertNull(coordinator.snapshot.runningPlan)
+    }
+
+    @Test
+    fun retainedStartRollbackRemainsCleanupOwnedUntilRetryReleases() {
+        val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
+        val previous = plan("previous")
+        startImmediately(coordinator, coordinator.claimStart(ServiceId, true), previous)
+        val replacement = coordinator.claimReplacement(ServiceId)
+
+        coordinator.dispatchStart(
+            token = replacement,
+            request = request(plan("replacement")),
+            onFailure = {},
+            hasRuntimeResources = { true },
+            stopExisting = { _, owner -> assertTrue(owner()) },
+            startRuntime = { _, _, _, _ -> error("failed after Bridge start") },
+            rollbackStart = { _, _, _, _ -> VpnPlatformStopResult.RetainedForRetry },
+        )
+
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.CleaningUp)
+        assertTrue(coordinator.snapshot.stopping)
+        assertNull(coordinator.snapshot.runningPlan)
+        assertTrue(
+            coordinator.completeStartRollbackCleanup(
+                replacement,
+                VpnPlatformStopResult.Released,
+            ),
+        )
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Idle)
+        assertFalse(coordinator.snapshot.stopping)
+    }
+
+    @Test
+    fun retainedStartRollbackRetryCannotTransitionNewerStart() {
+        val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
+        val failed = coordinator.claimStart(ServiceId, persistent = true)
+        failStartWithRetainedRollback(coordinator, failed)
+
+        val newer = coordinator.claimStart(ServiceId, persistent = true)
+        assertFalse(
+            coordinator.completeStartRollbackCleanup(failed, VpnPlatformStopResult.Released),
+        )
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Starting)
+        assertTrue(coordinator.isCurrent(newer))
+
+        startImmediately(coordinator, newer, plan("newer"))
+        assertEquals("newer", coordinator.snapshot.runningPlan?.profiles?.single()?.id)
+    }
+
+    @Test
+    fun retainedStartRollbackRetryCannotOverwriteStop() {
+        val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
+        val failed = coordinator.claimStart(ServiceId, persistent = true)
+        failStartWithRetainedRollback(coordinator, failed)
+
+        val stop = coordinator.claimStop(ServiceId, "stop cleanup-owned start")
+        assertFalse(
+            coordinator.completeStartRollbackCleanup(failed, VpnPlatformStopResult.Released),
+        )
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Stopping)
+        assertTrue(coordinator.isCurrent(stop))
     }
 
     @Test
@@ -186,7 +273,7 @@ class VpnRuntimeCoordinatorTest {
                     assertTrue(releaseStart.await(2, TimeUnit.SECONDS))
                     lateCommitAccepted = owner() && commit(startRequest.command.plan)
                 },
-                { _, _, _, _ -> },
+                { _, _, _, _ -> VpnPlatformStopResult.Released },
             )
             assertTrue(startEntered.await(2, TimeUnit.SECONDS))
             val stopToken = coordinator.claimStop(ServiceId, "stop while starting")
@@ -283,7 +370,7 @@ class VpnRuntimeCoordinatorTest {
                     assertTrue(releaseFirst.await(2, TimeUnit.SECONDS))
                     if (owner()) commit(plan("A"))
                 },
-                { _, _, _, _ -> },
+                { _, _, _, _ -> VpnPlatformStopResult.Released },
             )
             assertTrue(firstBlocked.await(2, TimeUnit.SECONDS))
             val tokenB = coordinator.claimReplacement(ServiceId)
@@ -294,7 +381,7 @@ class VpnRuntimeCoordinatorTest {
                     secondStarted = true
                     commit(startRequest.command.plan)
                 },
-                { _, _, _, _ -> },
+                { _, _, _, _ -> VpnPlatformStopResult.Released },
             )
             val tokenC = coordinator.claimReplacement(ServiceId)
             coordinator.dispatchStart(
@@ -305,7 +392,7 @@ class VpnRuntimeCoordinatorTest {
                     assertTrue(owner())
                     assertTrue(commit(startRequest.command.plan))
                 },
-                { _, _, _, _ -> },
+                { _, _, _, _ -> VpnPlatformStopResult.Released },
             )
             releaseFirst.countDown()
             awaitInFlight(coordinator)
@@ -558,7 +645,7 @@ class VpnRuntimeCoordinatorTest {
         val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
         val running = plan("A")
         startImmediately(coordinator, coordinator.claimStart(ServiceId, true), running)
-        val token = coordinator.currentToken(ServiceId)
+        val token = requireNotNull(coordinator.claimRecovery(coordinator.currentToken(ServiceId)))
 
         coordinator.dispatchRecovery(
             token = token,
@@ -580,12 +667,146 @@ class VpnRuntimeCoordinatorTest {
     }
 
     @Test
+    fun newerRecoveryGenerationRejectsQueuedOlderRecovery() {
+        val executor = QueuedExecutor()
+        val coordinator = VpnRuntimeCoordinator(executor) { true }
+        val running = plan("A")
+        startQueued(coordinator, executor, running)
+        val lifecycle = coordinator.currentToken(ServiceId)
+        val recoveryA = requireNotNull(coordinator.claimRecovery(lifecycle))
+        val ran = mutableListOf<String>()
+        dispatchSuccessfulRecovery(coordinator, recoveryA, running) { ran += "A" }
+        val recoveryB = requireNotNull(coordinator.claimRecovery(lifecycle))
+        assertEquals(recoveryA.lifecycleToken, recoveryB.lifecycleToken)
+        assertTrue(recoveryB.recoveryGeneration > recoveryA.recoveryGeneration)
+        dispatchSuccessfulRecovery(coordinator, recoveryB, running) { ran += "B" }
+
+        executor.runAll()
+
+        assertEquals(listOf("B"), ran)
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Running)
+    }
+
+    @Test
+    fun inProgressRecoveryCannotCommitAfterNewGenerationIsClaimed() {
+        val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
+        val running = plan("A")
+        startImmediately(coordinator, coordinator.claimStart(ServiceId, true), running)
+        val recoveryA = requireNotNull(
+            coordinator.claimRecovery(coordinator.currentToken(ServiceId)),
+        )
+        var recoveryB: VpnRuntimeRecoveryToken? = null
+        var staleCommitAccepted = true
+
+        coordinator.dispatchRecovery(
+            token = recoveryA,
+            request = VpnRuntimeRecoveryRequest(running, "Recovery A"),
+            onFailure = { throw AssertionError(it) },
+            recoverRuntime = { request, activeToken, owner, commit ->
+                assertTrue(owner())
+                recoveryB = requireNotNull(
+                    coordinator.claimRecovery(activeToken.lifecycleToken),
+                )
+                assertFalse(owner())
+                staleCommitAccepted = commit(request.plan)
+            },
+            rollbackRecovery = { _, _, error, _ -> throw AssertionError(error) },
+            onRetryRequired = { _, _, error -> throw AssertionError(error) },
+        )
+
+        assertFalse(staleCommitAccepted)
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Recovering)
+        var recoveryBRan = false
+        dispatchSuccessfulRecovery(coordinator, requireNotNull(recoveryB), running) {
+            recoveryBRan = true
+        }
+        assertTrue(recoveryBRan)
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Running)
+    }
+
+    @Test
+    fun startedRetryCallbackIsRejectedWhenNewRecoveryIsRequested() {
+        val executor = QueuedExecutor()
+        val coordinator = VpnRuntimeCoordinator(executor) { true }
+        val running = plan("A")
+        startQueued(coordinator, executor, running)
+        val recoveryA = requireNotNull(coordinator.claimRecovery(coordinator.currentToken(ServiceId)))
+        var retryA: VpnRuntimeRecoveryToken? = null
+        dispatchFailedRecovery(coordinator, recoveryA, running) { retryA = it }
+        executor.runNext()
+
+        var staleRetryRan = false
+        dispatchSuccessfulRecovery(coordinator, requireNotNull(retryA), running) {
+            staleRetryRan = true
+        }
+        val recoveryB = requireNotNull(
+            coordinator.claimRecovery(coordinator.currentToken(ServiceId)),
+        )
+        var recoveryBRan = false
+        dispatchSuccessfulRecovery(coordinator, recoveryB, running) { recoveryBRan = true }
+        executor.runAll()
+
+        assertFalse(staleRetryRan)
+        assertTrue(recoveryBRan)
+    }
+
+    @Test
+    fun recoveryTokenIsRejectedAfterNewStartClaimsLifecycle() {
+        val executor = QueuedExecutor()
+        val coordinator = VpnRuntimeCoordinator(executor) { true }
+        val running = plan("A")
+        startQueued(coordinator, executor, running)
+        val recovery = requireNotNull(coordinator.claimRecovery(coordinator.currentToken(ServiceId)))
+        var recoveryRan = false
+        dispatchSuccessfulRecovery(coordinator, recovery, running) { recoveryRan = true }
+
+        val replacement = coordinator.claimReplacement(ServiceId)
+        executor.runAll()
+
+        assertFalse(recoveryRan)
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Starting)
+        assertTrue(coordinator.isCurrent(replacement))
+    }
+
+    @Test
+    fun duplicateRetryCallbackCannotActAfterNextGenerationIsIssued() {
+        val executor = QueuedExecutor()
+        val coordinator = VpnRuntimeCoordinator(executor) { true }
+        val running = plan("A")
+        startQueued(coordinator, executor, running)
+        val initial = requireNotNull(coordinator.claimRecovery(coordinator.currentToken(ServiceId)))
+        var retryOne: VpnRuntimeRecoveryToken? = null
+        dispatchFailedRecovery(coordinator, initial, running) { retryOne = it }
+        executor.runNext()
+
+        var retryOneRuns = 0
+        var retryTwo: VpnRuntimeRecoveryToken? = null
+        dispatchFailedRecovery(coordinator, requireNotNull(retryOne), running) {
+            retryOneRuns += 1
+            retryTwo = it
+        }
+        dispatchSuccessfulRecovery(coordinator, requireNotNull(retryOne), running) {
+            retryOneRuns += 1
+        }
+        executor.runAll()
+        var retryTwoRuns = 0
+        dispatchSuccessfulRecovery(coordinator, requireNotNull(retryTwo), running) {
+            retryTwoRuns += 1
+        }
+        executor.runAll()
+
+        assertEquals(1, retryOneRuns)
+        assertEquals(1, retryTwoRuns)
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Running)
+    }
+
+    @Test
     fun staleRecoveryRetryCannotRunAfterStopClaimsOwnership() {
         val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
         val running = plan("A")
         startImmediately(coordinator, coordinator.claimStart(ServiceId, true), running)
-        val recovery = coordinator.currentToken(ServiceId)
-        var retryToken: VpnRuntimeCommandToken? = null
+        val recovery = requireNotNull(coordinator.claimRecovery(coordinator.currentToken(ServiceId)))
+        var retryToken: VpnRuntimeRecoveryToken? = null
 
         coordinator.dispatchRecovery(
             token = recovery,
@@ -677,6 +898,80 @@ class VpnRuntimeCoordinatorTest {
         )
     }
 
+    private fun failStartWithRetainedRollback(
+        coordinator: VpnRuntimeCoordinator,
+        token: VpnRuntimeCommandToken,
+    ) {
+        coordinator.dispatchStart(
+            token = token,
+            request = request(plan("failed")),
+            onFailure = {},
+            hasRuntimeResources = { false },
+            stopExisting = { _, _ -> error("unexpected stop") },
+            startRuntime = { _, _, _, _ -> error("start failure") },
+            rollbackStart = { _, _, _, _ -> VpnPlatformStopResult.RetainedForRetry },
+        )
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.CleaningUp)
+    }
+
+    private fun startQueued(
+        coordinator: VpnRuntimeCoordinator,
+        executor: QueuedExecutor,
+        running: ProfileRunPlan,
+    ) {
+        val token = coordinator.claimStart(ServiceId, persistent = true)
+        coordinator.dispatchStart(
+            token,
+            request(running),
+            { throw AssertionError(it) },
+            { false },
+            { _, _ -> error("unexpected stop") },
+            { _, _, owner, commit ->
+                assertTrue(owner())
+                assertTrue(commit(running))
+            },
+            { _, _, error, _ -> throw AssertionError(error) },
+        )
+        executor.runNext()
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Running)
+    }
+
+    private fun dispatchSuccessfulRecovery(
+        coordinator: VpnRuntimeCoordinator,
+        token: VpnRuntimeRecoveryToken,
+        running: ProfileRunPlan,
+        onRun: () -> Unit,
+    ) {
+        coordinator.dispatchRecovery(
+            token = token,
+            request = VpnRuntimeRecoveryRequest(running, "test recovery"),
+            onFailure = { throw AssertionError(it) },
+            recoverRuntime = { request, _, owner, commit ->
+                onRun()
+                assertTrue(owner())
+                assertTrue(commit(request.plan))
+            },
+            rollbackRecovery = { _, _, error, _ -> throw AssertionError(error) },
+            onRetryRequired = { _, _, error -> throw AssertionError(error) },
+        )
+    }
+
+    private fun dispatchFailedRecovery(
+        coordinator: VpnRuntimeCoordinator,
+        token: VpnRuntimeRecoveryToken,
+        running: ProfileRunPlan,
+        onRetry: (VpnRuntimeRecoveryToken) -> Unit,
+    ) {
+        coordinator.dispatchRecovery(
+            token = token,
+            request = VpnRuntimeRecoveryRequest(running, "failed recovery"),
+            onFailure = { throw AssertionError(it) },
+            recoverRuntime = { _, _, _, _ -> error("recovery failure") },
+            rollbackRecovery = { _, _, _, superseded -> assertFalse(superseded) },
+            onRetryRequired = { retryToken, _, _ -> onRetry(retryToken) },
+        )
+    }
+
     private fun startAndAwait(
         coordinator: VpnRuntimeCoordinator,
         token: VpnRuntimeCommandToken,
@@ -731,5 +1026,21 @@ class VpnRuntimeCoordinatorTest {
     private companion object {
         const val ServiceId = 7L
         val ExecutorDirect = java.util.concurrent.Executor { command -> command.run() }
+    }
+
+    private class QueuedExecutor : java.util.concurrent.Executor {
+        private val tasks = ArrayDeque<Runnable>()
+
+        override fun execute(command: Runnable) {
+            tasks.addLast(command)
+        }
+
+        fun runNext() {
+            tasks.removeFirst().run()
+        }
+
+        fun runAll() {
+            while (tasks.isNotEmpty()) runNext()
+        }
     }
 }

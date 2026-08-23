@@ -23,11 +23,20 @@ internal data class VpnRuntimeCommandToken(
     val persistentGeneration: Int,
 )
 
+internal data class VpnRuntimeRecoveryToken(
+    val lifecycleToken: VpnRuntimeCommandToken,
+    val recoveryGeneration: Long,
+)
+
 internal sealed interface VpnRuntimePhase {
     data object Idle : VpnRuntimePhase
     data class Starting(val token: VpnRuntimeCommandToken) : VpnRuntimePhase
     data class Running(val token: VpnRuntimeCommandToken) : VpnRuntimePhase
     data class Stopping(
+        val token: VpnRuntimeCommandToken,
+        val reason: String,
+    ) : VpnRuntimePhase
+    data class CleaningUp(
         val token: VpnRuntimeCommandToken,
         val reason: String,
     ) : VpnRuntimePhase
@@ -39,6 +48,7 @@ internal data class VpnRuntimeSnapshot(
     val phase: VpnRuntimePhase = VpnRuntimePhase.Idle,
     val lifecycleGeneration: Int = 0,
     val persistentCommandGeneration: Int = 0,
+    val recoveryGeneration: Long = 0L,
     val serviceInstanceId: Long = 0L,
     val runningPlan: ProfileRunPlan? = null,
     val explicitStopRequested: Boolean = false,
@@ -111,6 +121,7 @@ internal class VpnRuntimeCoordinator(
             lifecycleGeneration = token.lifecycleGeneration,
             persistentCommandGeneration = token.persistentGeneration,
             serviceInstanceId = token.serviceInstanceId,
+            recoveryGeneration = nextRecoveryGeneration(),
             explicitStopRequested = false,
             bridgeRestarting = false,
         )
@@ -127,6 +138,7 @@ internal class VpnRuntimeCoordinator(
                 phase = VpnRuntimePhase.Stopping(token, reason),
                 lifecycleGeneration = token.lifecycleGeneration,
                 serviceInstanceId = token.serviceInstanceId,
+                recoveryGeneration = nextRecoveryGeneration(),
                 explicitStopRequested = true,
                 stopping = true,
                 bridgeRestarting = false,
@@ -152,6 +164,7 @@ internal class VpnRuntimeCoordinator(
             lifecycleGeneration = token.lifecycleGeneration,
             persistentCommandGeneration = token.persistentGeneration,
             serviceInstanceId = token.serviceInstanceId,
+            recoveryGeneration = nextRecoveryGeneration(),
         )
         token
     }
@@ -173,6 +186,42 @@ internal class VpnRuntimeCoordinator(
             token.serviceInstanceId == current.serviceInstanceId &&
             token.lifecycleGeneration == current.lifecycleGeneration &&
             token.persistentGeneration == current.persistentCommandGeneration
+    }
+
+    fun claimRecovery(token: VpnRuntimeCommandToken): VpnRuntimeRecoveryToken? =
+        synchronized(stateLock) {
+            if (!isCurrentLocked(token)) return@synchronized null
+            when (publishedSnapshot.phase) {
+                is VpnRuntimePhase.Running,
+                is VpnRuntimePhase.Recovering,
+                -> Unit
+
+                else -> return@synchronized null
+            }
+            VpnRuntimeRecoveryToken(
+                lifecycleToken = token,
+                recoveryGeneration = nextRecoveryGeneration(),
+            ).also { recoveryToken ->
+                publishedSnapshot = publishedSnapshot.copy(
+                    recoveryGeneration = recoveryToken.recoveryGeneration,
+                )
+            }
+        }
+
+    fun claimRecoveryRetry(token: VpnRuntimeRecoveryToken): VpnRuntimeRecoveryToken? =
+        synchronized(stateLock) {
+            if (!isCurrentRecoveryLocked(token)) return@synchronized null
+            if (
+                publishedSnapshot.phase !is VpnRuntimePhase.Recovering ||
+                publishedSnapshot.bridgeRestarting
+            ) return@synchronized null
+            val next = token.copy(recoveryGeneration = nextRecoveryGeneration())
+            publishedSnapshot = publishedSnapshot.copy(recoveryGeneration = next.recoveryGeneration)
+            next
+        }
+
+    fun isCurrent(token: VpnRuntimeRecoveryToken): Boolean = synchronized(stateLock) {
+        isCurrentRecoveryLocked(token)
     }
 
     fun isCurrentGeneration(generation: Int): Boolean =
@@ -209,6 +258,7 @@ internal class VpnRuntimeCoordinator(
             phase = VpnRuntimePhase.Destroyed,
             lifecycleGeneration = token.lifecycleGeneration,
             serviceInstanceId = token.serviceInstanceId,
+            recoveryGeneration = nextRecoveryGeneration(),
             explicitStopRequested = true,
             stopping = true,
             bridgeRestarting = false,
@@ -229,7 +279,12 @@ internal class VpnRuntimeCoordinator(
             () -> Boolean,
             (ProfileRunPlan) -> Boolean,
         ) -> Unit,
-        rollbackStart: (VpnRuntimeStartRequest, VpnRuntimeCommandToken, Throwable, Boolean) -> Unit,
+        rollbackStart: (
+            VpnRuntimeStartRequest,
+            VpnRuntimeCommandToken,
+            Throwable,
+            Boolean,
+        ) -> VpnPlatformStopResult,
     ): Boolean = dispatch(VpnRuntimeCommand.Start, onFailure) start@{
         if (!isCurrent(token)) return@start
         try {
@@ -252,9 +307,31 @@ internal class VpnRuntimeCoordinator(
         } catch (error: Throwable) {
             if (error.isFatalProcessError()) throw error
             val superseded = !isCurrent(token)
-            rollbackStart(request, token, error, superseded)
-            if (!superseded) transitionToIdle(token)
+            if (!superseded) beginStartRollbackCleanup(token)
+            val cleanupResult = rollbackStart(request, token, error, superseded)
+            if (!superseded) completeStartRollbackCleanup(token, cleanupResult)
             throw error
+        }
+    }
+
+    fun completeStartRollbackCleanup(
+        token: VpnRuntimeCommandToken,
+        result: VpnPlatformStopResult,
+    ): Boolean = synchronized(stateLock) {
+        val cleanupPhase = publishedSnapshot.phase as? VpnRuntimePhase.CleaningUp
+            ?: return@synchronized false
+        if (cleanupPhase.token != token || !isCurrentLocked(token)) return@synchronized false
+        when (result) {
+            VpnPlatformStopResult.Released -> {
+                publishedSnapshot = publishedSnapshot.copy(
+                    phase = VpnRuntimePhase.Idle,
+                    runningPlan = null,
+                    stopping = false,
+                    bridgeRestarting = false,
+                )
+                true
+            }
+            VpnPlatformStopResult.RetainedForRetry -> true
         }
     }
 
@@ -380,39 +457,33 @@ internal class VpnRuntimeCoordinator(
 
     /** Owns Running -> Recovering -> Running and rejects stale retry/restart completion. */
     fun dispatchRecovery(
-        token: VpnRuntimeCommandToken,
+        token: VpnRuntimeRecoveryToken,
         request: VpnRuntimeRecoveryRequest,
         onFailure: (Throwable) -> Unit,
         recoverRuntime: (
             VpnRuntimeRecoveryRequest,
-            VpnRuntimeCommandToken,
+            VpnRuntimeRecoveryToken,
             () -> Boolean,
             (ProfileRunPlan) -> Boolean,
         ) -> Unit,
-        rollbackRecovery: (VpnRuntimeRecoveryRequest, VpnRuntimeCommandToken, Throwable, Boolean) -> Unit,
-        onRetryRequired: (VpnRuntimeCommandToken, VpnRuntimeRecoveryRequest, Throwable) -> Unit,
+        rollbackRecovery: (VpnRuntimeRecoveryRequest, VpnRuntimeRecoveryToken, Throwable, Boolean) -> Unit,
+        onRetryRequired: (VpnRuntimeRecoveryToken, VpnRuntimeRecoveryRequest, Throwable) -> Unit,
     ): Boolean = dispatch(VpnRuntimeCommand.BridgeRecovery, onFailure) recovery@{
         if (!beginRecovery(token)) return@recovery
         try {
             recoverRuntime(request, token, { isCurrent(token) }) { plan ->
-                commitRunningPlan(token, plan)
+                commitRecoveryRunning(token, plan)
             }
             if (isCurrent(token) && snapshot.phase is VpnRuntimePhase.Recovering) {
-                commitRunningPlan(token, request.plan)
+                commitRecoveryRunning(token, request.plan)
             }
+            completeRecoverySuccess(token)
         } catch (error: Throwable) {
             if (error.isFatalProcessError()) throw error
             val superseded = !isCurrent(token)
             rollbackRecovery(request, token, error, superseded)
-            if (!superseded && transition(token) { current ->
-                    current.copy(
-                        phase = VpnRuntimePhase.Recovering(token),
-                        stopping = false,
-                        bridgeRestarting = false,
-                    )
-                }
-            ) {
-                onRetryRequired(token, request, error)
+            if (!superseded) finishRecoveryFailure(token)?.let { retryToken ->
+                onRetryRequired(retryToken, request, error)
             }
         }
     }
@@ -444,6 +515,10 @@ internal class VpnRuntimeCoordinator(
         )
     }
 
+    private fun nextRecoveryGeneration(): Long =
+        if (publishedSnapshot.recoveryGeneration == Long.MAX_VALUE) 1L
+        else publishedSnapshot.recoveryGeneration + 1L
+
     private fun inertToken(serviceInstanceId: Long) = VpnRuntimeCommandToken(
         serviceInstanceId = serviceInstanceId,
         lifecycleGeneration = publishedSnapshot.lifecycleGeneration,
@@ -455,6 +530,7 @@ internal class VpnRuntimeCoordinator(
         is VpnRuntimePhase.Starting -> copy(token = token)
         is VpnRuntimePhase.Running -> copy(token = token)
         is VpnRuntimePhase.Stopping -> copy(token = token)
+        is VpnRuntimePhase.CleaningUp -> copy(token = token)
         is VpnRuntimePhase.Recovering -> copy(token = token)
         VpnRuntimePhase.Destroyed -> this
     }
@@ -475,6 +551,21 @@ internal class VpnRuntimeCoordinator(
     private fun commitRunningPlan(token: VpnRuntimeCommandToken, plan: ProfileRunPlan): Boolean =
         commitRunning(token, plan)
 
+    private fun commitRecoveryRunning(
+        token: VpnRuntimeRecoveryToken,
+        plan: ProfileRunPlan,
+    ): Boolean = synchronized(stateLock) {
+        if (!isCurrentRecoveryLocked(token)) return@synchronized false
+        publishedSnapshot = publishedSnapshot.copy(
+            phase = VpnRuntimePhase.Running(token.lifecycleToken),
+            runningPlan = plan,
+            explicitStopRequested = false,
+            stopping = false,
+            bridgeRestarting = false,
+        )
+        true
+    }
+
     private fun requestReplacement(
         token: VpnRuntimeCommandToken,
         plan: ProfileRunPlan,
@@ -488,6 +579,7 @@ internal class VpnRuntimeCoordinator(
                     phase = VpnRuntimePhase.Starting(next),
                     lifecycleGeneration = next.lifecycleGeneration,
                     serviceInstanceId = next.serviceInstanceId,
+                    recoveryGeneration = nextRecoveryGeneration(),
                     runningPlan = if (failure == null) publishedSnapshot.runningPlan else null,
                     explicitStopRequested = false,
                     stopping = false,
@@ -499,8 +591,18 @@ internal class VpnRuntimeCoordinator(
         onReplacementRequired(replacement, plan, failure)
     }
 
-    private fun beginRecovery(token: VpnRuntimeCommandToken): Boolean = synchronized(stateLock) {
-        if (!isCurrentLocked(token)) return@synchronized false
+    private fun beginStartRollbackCleanup(token: VpnRuntimeCommandToken): Boolean =
+        transition(token) { current ->
+            current.copy(
+                phase = VpnRuntimePhase.CleaningUp(token, "failed start rollback"),
+                runningPlan = null,
+                stopping = true,
+                bridgeRestarting = false,
+            )
+        }
+
+    private fun beginRecovery(token: VpnRuntimeRecoveryToken): Boolean = synchronized(stateLock) {
+        if (!isCurrentRecoveryLocked(token)) return@synchronized false
         when (publishedSnapshot.phase) {
             is VpnRuntimePhase.Running,
             is VpnRuntimePhase.Recovering,
@@ -509,20 +611,33 @@ internal class VpnRuntimeCoordinator(
             else -> return@synchronized false
         }
         publishedSnapshot = publishedSnapshot.copy(
-            phase = VpnRuntimePhase.Recovering(token),
+            phase = VpnRuntimePhase.Recovering(token.lifecycleToken),
             stopping = false,
             bridgeRestarting = true,
         )
         true
     }
 
-    private fun transitionToIdle(token: VpnRuntimeCommandToken): Boolean = transition(token) { current ->
-        current.copy(
-            phase = VpnRuntimePhase.Idle,
-            runningPlan = null,
+    private fun completeRecoverySuccess(token: VpnRuntimeRecoveryToken): Boolean =
+        synchronized(stateLock) {
+            if (!isCurrentRecoveryLocked(token)) return@synchronized false
+            if (publishedSnapshot.phase !is VpnRuntimePhase.Running) return@synchronized false
+            publishedSnapshot = publishedSnapshot.copy(recoveryGeneration = nextRecoveryGeneration())
+            true
+        }
+
+    private fun finishRecoveryFailure(
+        token: VpnRuntimeRecoveryToken,
+    ): VpnRuntimeRecoveryToken? = synchronized(stateLock) {
+        if (!isCurrentRecoveryLocked(token)) return@synchronized null
+        val retryToken = token.copy(recoveryGeneration = nextRecoveryGeneration())
+        publishedSnapshot = publishedSnapshot.copy(
+            phase = VpnRuntimePhase.Recovering(token.lifecycleToken),
             stopping = false,
             bridgeRestarting = false,
+            recoveryGeneration = retryToken.recoveryGeneration,
         )
+        retryToken
     }
 
     private inline fun transition(
@@ -539,4 +654,8 @@ internal class VpnRuntimeCoordinator(
             token.serviceInstanceId == publishedSnapshot.serviceInstanceId &&
             token.lifecycleGeneration == publishedSnapshot.lifecycleGeneration &&
             token.persistentGeneration == publishedSnapshot.persistentCommandGeneration
+
+    private fun isCurrentRecoveryLocked(token: VpnRuntimeRecoveryToken): Boolean =
+        isCurrentLocked(token.lifecycleToken) &&
+            token.recoveryGeneration == publishedSnapshot.recoveryGeneration
 }
