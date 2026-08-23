@@ -152,7 +152,7 @@ class VpnRuntimeCoordinatorTest {
                 stopRuntime = { _, _, owner ->
                     assertTrue(owner())
                     finished.countDown()
-                    true
+                    VpnPlatformStopResult.Released
                 },
             )
             releaseOldStop.countDown()
@@ -198,11 +198,12 @@ class VpnRuntimeCoordinatorTest {
                 stopRuntime = { _, _, owner ->
                     assertTrue(owner())
                     stopCompleted.countDown()
-                    true
+                    VpnPlatformStopResult.Released
                 },
             )
             releaseStart.countDown()
             assertTrue(stopCompleted.await(2, TimeUnit.SECONDS))
+            awaitInFlight(coordinator)
 
             assertFalse(lateCommitAccepted)
             assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Idle)
@@ -228,7 +229,7 @@ class VpnRuntimeCoordinatorTest {
                     firstEntered.countDown()
                     assertTrue(releaseFirst.await(2, TimeUnit.SECONDS))
                     firstPublished = owner()
-                    true
+                    VpnPlatformStopResult.Released
                 },
             )
             assertTrue(firstEntered.await(2, TimeUnit.SECONDS))
@@ -238,7 +239,7 @@ class VpnRuntimeCoordinatorTest {
                 stopRuntime = { _, _, owner ->
                     assertTrue(owner())
                     secondCompleted.countDown()
-                    true
+                    VpnPlatformStopResult.Released
                 },
             )
             releaseFirst.countDown()
@@ -331,6 +332,284 @@ class VpnRuntimeCoordinatorTest {
         second.destroy(ServiceId)
         assertFalse(second.isCurrent(stop))
         assertTrue(second.snapshot.phase is VpnRuntimePhase.Destroyed)
+    }
+
+    @Test
+    fun retainedPlatformStopStaysStoppingUntilOwnedRetryReleasesResources() {
+        val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
+        val running = plan("A")
+        val runningToken = coordinator.claimStart(ServiceId, true)
+        startImmediately(coordinator, runningToken, running)
+        assertFalse(
+            coordinator.completePlatformStop(runningToken, VpnPlatformStopResult.Released),
+        )
+        val stop = coordinator.claimStop(ServiceId, "retry stop")
+
+        coordinator.dispatchStop(
+            stop,
+            "retry stop",
+            VpnRuntimeStopOptions(),
+            { throw AssertionError(it) },
+            stopRuntime = { _, _, _ -> VpnPlatformStopResult.RetainedForRetry },
+        )
+
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Stopping)
+        assertSame(running, coordinator.snapshot.runningPlan)
+        assertTrue(coordinator.completePlatformStop(stop, VpnPlatformStopResult.Released))
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Idle)
+        assertNull(coordinator.snapshot.runningPlan)
+    }
+
+    @Test
+    fun outboundUpdateCommitsOnlyAfterNativeMutationAndPersistence() {
+        val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
+        val current = membershipPlan("A")
+        val next = membershipPlan("B")
+        startImmediately(coordinator, coordinator.claimStart(ServiceId, true), current)
+        val update = coordinator.claimAuxiliaryCommand(ServiceId, persistent = true)
+        val order = mutableListOf<String>()
+
+        coordinator.dispatchOutboundUpdate(
+            token = update,
+            request = VpnRuntimeOutboundUpdateRequest(next, hasRuntimeResources = true),
+            onFailure = { throw AssertionError(it) },
+            persistPlan = { plan, owner ->
+                assertTrue(owner())
+                assertSame(next, plan)
+                order += "persist"
+                true
+            },
+            mutateOutbound = { profile, running, owner ->
+                assertTrue(owner())
+                order += "native-${profile.id}-$running"
+            },
+            onCommitted = { order += "commit" },
+            onRolledBack = { _, error -> throw AssertionError(error) },
+            onMutationFailure = { error, _ -> throw AssertionError(error) },
+            onReplacementRequired = { _, _, _ -> error("unexpected replacement") },
+        )
+
+        assertEquals(listOf("native-A-false", "native-B-true", "persist", "commit"), order)
+        assertSame(next, coordinator.snapshot.runningPlan)
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Running)
+    }
+
+    @Test
+    fun outboundUpdateSupersededByStopDoesNotRollbackOrReplace() {
+        val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
+        val current = membershipPlan("A")
+        val next = membershipPlan("B")
+        startImmediately(coordinator, coordinator.claimStart(ServiceId, true), current)
+        val update = coordinator.claimAuxiliaryCommand(ServiceId, persistent = true)
+        var mutations = 0
+        var replacementRequested = false
+
+        coordinator.dispatchOutboundUpdate(
+            token = update,
+            request = VpnRuntimeOutboundUpdateRequest(next, hasRuntimeResources = true),
+            onFailure = { throw AssertionError(it) },
+            persistPlan = { _, _ -> error("stale update persisted") },
+            mutateOutbound = { _, _, owner ->
+                assertTrue(owner())
+                mutations += 1
+                coordinator.claimStop(ServiceId, "stop during update")
+            },
+            onCommitted = { error("stale update committed") },
+            onRolledBack = { _, _ -> error("stale update rolled back") },
+            onMutationFailure = { _, _ -> error("unexpected update failure") },
+            onReplacementRequired = { _, _, _ -> replacementRequested = true },
+        )
+
+        assertEquals(1, mutations)
+        assertFalse(replacementRequested)
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Stopping)
+        assertSame(current, coordinator.snapshot.runningPlan)
+    }
+
+    @Test
+    fun outboundFailureBeforeNativeMutationKeepsCurrentPlan() {
+        val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
+        val current = membershipPlan("A")
+        startImmediately(coordinator, coordinator.claimStart(ServiceId, true), current)
+        val update = coordinator.claimAuxiliaryCommand(ServiceId, persistent = true)
+        var attempted = true
+
+        coordinator.dispatchOutboundUpdate(
+            token = update,
+            request = VpnRuntimeOutboundUpdateRequest(current, hasRuntimeResources = true),
+            onFailure = { throw AssertionError(it) },
+            persistPlan = { _, _ -> error("persistence failure") },
+            mutateOutbound = { _, _, _ -> error("native mutation was not expected") },
+            onCommitted = { error("failed update committed") },
+            onRolledBack = { _, _ -> error("no native mutation needed rollback") },
+            onMutationFailure = { _, nativeAttempted -> attempted = nativeAttempted },
+            onReplacementRequired = { _, _, _ -> error("unexpected replacement") },
+        )
+
+        assertFalse(attempted)
+        assertSame(current, coordinator.snapshot.runningPlan)
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Running)
+    }
+
+    @Test
+    fun successfulOutboundRollbackRestoresCurrentPlanWithoutReplacement() {
+        val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
+        val current = membershipPlan("A")
+        val next = membershipPlan("B")
+        startImmediately(coordinator, coordinator.claimStart(ServiceId, true), current)
+        val update = coordinator.claimAuxiliaryCommand(ServiceId, persistent = true)
+        var mutationCall = 0
+        var rolledBack = false
+
+        coordinator.dispatchOutboundUpdate(
+            token = update,
+            request = VpnRuntimeOutboundUpdateRequest(next, hasRuntimeResources = true),
+            onFailure = { throw AssertionError(it) },
+            persistPlan = { _, _ -> error("persistence should not run") },
+            mutateOutbound = { _, _, _ ->
+                mutationCall += 1
+                if (mutationCall == 2) error("native failure")
+            },
+            onCommitted = { error("failed update committed") },
+            onRolledBack = { plan, _ ->
+                assertSame(current, plan)
+                rolledBack = true
+            },
+            onMutationFailure = { _, attempted -> assertTrue(attempted) },
+            onReplacementRequired = { _, _, _ -> error("rollback should avoid replacement") },
+        )
+
+        assertEquals(4, mutationCall)
+        assertTrue(rolledBack)
+        assertSame(current, coordinator.snapshot.runningPlan)
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Running)
+    }
+
+    @Test
+    fun uncertainOutboundRollbackClaimsReplacementAndClearsPublishedPlan() {
+        val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
+        val current = membershipPlan("A")
+        val next = membershipPlan("B")
+        startImmediately(coordinator, coordinator.claimStart(ServiceId, true), current)
+        val update = coordinator.claimAuxiliaryCommand(ServiceId, persistent = true)
+        var mutationCall = 0
+        var replacement: VpnRuntimeCommandToken? = null
+
+        coordinator.dispatchOutboundUpdate(
+            token = update,
+            request = VpnRuntimeOutboundUpdateRequest(next, hasRuntimeResources = true),
+            onFailure = { throw AssertionError(it) },
+            persistPlan = { _, _ -> error("persistence should not run") },
+            mutateOutbound = { _, _, _ ->
+                mutationCall += 1
+                if (mutationCall >= 2) error(if (mutationCall == 2) "native failure" else "rollback failure")
+            },
+            onCommitted = { error("failed update committed") },
+            onRolledBack = { _, _ -> error("uncertain rollback reported success") },
+            onMutationFailure = { _, attempted -> assertTrue(attempted) },
+            onReplacementRequired = { token, plan, failure ->
+                replacement = token
+                assertSame(current, plan)
+                assertTrue(failure != null)
+            },
+        )
+
+        assertTrue(replacement != null)
+        assertTrue(coordinator.isCurrent(requireNotNull(replacement)))
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Starting)
+        assertNull(coordinator.snapshot.runningPlan)
+    }
+
+    @Test
+    fun outboundUpdateSupersededByReplacementCannotPublishOrRollbackOverNewPlan() {
+        val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
+        val current = membershipPlan("A")
+        val requested = membershipPlan("B")
+        val finalPlan = plan("replacement")
+        startImmediately(coordinator, coordinator.claimStart(ServiceId, true), current)
+        val update = coordinator.claimAuxiliaryCommand(ServiceId, persistent = true)
+        lateinit var replacement: VpnRuntimeCommandToken
+        var mutations = 0
+
+        coordinator.dispatchOutboundUpdate(
+            token = update,
+            request = VpnRuntimeOutboundUpdateRequest(requested, hasRuntimeResources = true),
+            onFailure = { throw AssertionError(it) },
+            persistPlan = { _, _ -> error("stale update persisted") },
+            mutateOutbound = { _, _, owner ->
+                assertTrue(owner())
+                mutations += 1
+                replacement = coordinator.claimReplacement(ServiceId)
+            },
+            onCommitted = { error("stale update committed") },
+            onRolledBack = { _, _ -> error("stale update rolled back") },
+            onMutationFailure = { _, _ -> error("unexpected update failure") },
+            onReplacementRequired = { _, _, _ -> error("stale update requested fallback") },
+        )
+        startImmediately(coordinator, replacement, finalPlan)
+
+        assertEquals(1, mutations)
+        assertSame(finalPlan, coordinator.snapshot.runningPlan)
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Running)
+    }
+
+    @Test
+    fun recoveryTransactionOwnsRecoveringAndRunningTransitions() {
+        val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
+        val running = plan("A")
+        startImmediately(coordinator, coordinator.claimStart(ServiceId, true), running)
+        val token = coordinator.currentToken(ServiceId)
+
+        coordinator.dispatchRecovery(
+            token = token,
+            request = VpnRuntimeRecoveryRequest(running, "health failure"),
+            onFailure = { throw AssertionError(it) },
+            recoverRuntime = { request, _, owner, commit ->
+                assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Recovering)
+                assertTrue(coordinator.snapshot.bridgeRestarting)
+                assertTrue(owner())
+                assertTrue(commit(request.plan))
+            },
+            rollbackRecovery = { _, _, error, _ -> throw AssertionError(error) },
+            onRetryRequired = { _, _, error -> throw AssertionError(error) },
+        )
+
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Running)
+        assertSame(running, coordinator.snapshot.runningPlan)
+        assertFalse(coordinator.snapshot.bridgeRestarting)
+    }
+
+    @Test
+    fun staleRecoveryRetryCannotRunAfterStopClaimsOwnership() {
+        val coordinator = VpnRuntimeCoordinator(ExecutorDirect) { true }
+        val running = plan("A")
+        startImmediately(coordinator, coordinator.claimStart(ServiceId, true), running)
+        val recovery = coordinator.currentToken(ServiceId)
+        var retryToken: VpnRuntimeCommandToken? = null
+
+        coordinator.dispatchRecovery(
+            token = recovery,
+            request = VpnRuntimeRecoveryRequest(running, "health failure"),
+            onFailure = { throw AssertionError(it) },
+            recoverRuntime = { _, _, _, _ -> error("restart failed") },
+            rollbackRecovery = { _, _, _, superseded -> assertFalse(superseded) },
+            onRetryRequired = { token, _, _ -> retryToken = token },
+        )
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Recovering)
+
+        coordinator.claimStop(ServiceId, "stop before retry")
+        var staleRecoveryRan = false
+        coordinator.dispatchRecovery(
+            token = requireNotNull(retryToken),
+            request = VpnRuntimeRecoveryRequest(running, "stale retry"),
+            onFailure = { throw AssertionError(it) },
+            recoverRuntime = { _, _, _, _ -> staleRecoveryRan = true },
+            rollbackRecovery = { _, _, _, _ -> error("stale recovery rolled back") },
+            onRetryRequired = { _, _, _ -> error("stale recovery scheduled another retry") },
+        )
+
+        assertFalse(staleRecoveryRan)
+        assertTrue(coordinator.snapshot.phase is VpnRuntimePhase.Stopping)
     }
 
     @Test
@@ -435,6 +714,11 @@ class VpnRuntimeCoordinatorTest {
     )
 
     private fun plan(id: String) = ProfileRunPlan(listOf(AppConfig(id = id, name = id)))
+
+    private fun membershipPlan(activeId: String): ProfileRunPlan {
+        val profiles = listOf(AppConfig(id = "A", name = "A"), AppConfig(id = "B", name = "B"))
+        return ProfileRunPlan(profiles, linkedSetOf(activeId))
+    }
 
     private enum class StartFailureStage {
         BeforeTun,

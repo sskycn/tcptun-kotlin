@@ -60,6 +60,21 @@ internal data class VpnRuntimeStopOptions(
     val propagateBridgeStopFailure: Boolean = false,
 )
 
+internal sealed interface VpnPlatformStopResult {
+    data object Released : VpnPlatformStopResult
+    data object RetainedForRetry : VpnPlatformStopResult
+}
+
+internal data class VpnRuntimeOutboundUpdateRequest(
+    val nextPlan: ProfileRunPlan,
+    val hasRuntimeResources: Boolean,
+)
+
+internal data class VpnRuntimeRecoveryRequest(
+    val plan: ProfileRunPlan,
+    val reason: String,
+)
+
 /**
  * Single owner of VPN command generations and runtime state.
  *
@@ -164,38 +179,29 @@ internal class VpnRuntimeCoordinator(
         publishedSnapshot.lifecycleGeneration == generation &&
             publishedSnapshot.phase !is VpnRuntimePhase.Destroyed
 
-    fun updateRunningPlan(plan: ProfileRunPlan?) = synchronized(stateLock) {
-        if (publishedSnapshot.phase !is VpnRuntimePhase.Destroyed) {
-            publishedSnapshot = publishedSnapshot.copy(runningPlan = plan)
-        }
-    }
-
-    fun markBridgeRestarting(restarting: Boolean) = synchronized(stateLock) {
-        if (publishedSnapshot.phase !is VpnRuntimePhase.Destroyed) {
-            publishedSnapshot = publishedSnapshot.copy(bridgeRestarting = restarting)
-        }
-    }
-
-    fun markRecovering(token: VpnRuntimeCommandToken): Boolean = synchronized(stateLock) {
-        if (!isCurrentLocked(token)) return@synchronized false
-        publishedSnapshot = publishedSnapshot.copy(
-            phase = VpnRuntimePhase.Recovering(token),
-            stopping = false,
-        )
-        true
-    }
-
     fun completeNoOpStart(token: VpnRuntimeCommandToken, runningPlan: ProfileRunPlan?): Boolean =
-        if (runningPlan == null) {
-            transitionToIdle(token)
-        } else {
-            commitRunning(token, runningPlan)
+        synchronized(stateLock) {
+            val startingPhase = publishedSnapshot.phase as? VpnRuntimePhase.Starting
+                ?: return@synchronized false
+            if (startingPhase.token != token || !isCurrentLocked(token)) return@synchronized false
+            publishedSnapshot = if (runningPlan == null) {
+                publishedSnapshot.copy(
+                    phase = VpnRuntimePhase.Idle,
+                    runningPlan = null,
+                    stopping = false,
+                    bridgeRestarting = false,
+                )
+            } else {
+                publishedSnapshot.copy(
+                    phase = VpnRuntimePhase.Running(token),
+                    runningPlan = runningPlan,
+                    explicitStopRequested = false,
+                    stopping = false,
+                    bridgeRestarting = false,
+                )
+            }
+            true
         }
-
-    fun completeCurrentStop(): Boolean = synchronized(stateLock) {
-        val phase = publishedSnapshot.phase as? VpnRuntimePhase.Stopping ?: return@synchronized false
-        transitionToIdle(phase.token)
-    }
 
     fun destroy(serviceInstanceId: Long): VpnRuntimeCommandToken = synchronized(stateLock) {
         val token = nextToken(serviceInstanceId, persistent = false)
@@ -259,15 +265,156 @@ internal class VpnRuntimeCoordinator(
         options: VpnRuntimeStopOptions,
         onFailure: (Throwable) -> Unit,
         beforeStop: (VpnRuntimeCommandToken, () -> Boolean) -> Unit = { _, _ -> },
-        stopRuntime: (VpnRuntimeStopOptions, VpnRuntimeCommandToken, () -> Boolean) -> Boolean,
+        stopRuntime: (
+            VpnRuntimeStopOptions,
+            VpnRuntimeCommandToken,
+            () -> Boolean,
+        ) -> VpnPlatformStopResult,
     ): Boolean = dispatch(VpnRuntimeCommand.Stop, onFailure) stop@{
         if (!isCurrent(token)) return@stop
         transition(token) { current ->
             current.copy(phase = VpnRuntimePhase.Stopping(token, reason), stopping = true)
         }
         beforeStop(token) { isCurrent(token) }
-        val released = stopRuntime(options, token) { isCurrent(token) }
-        if (released && isCurrent(token)) transitionToIdle(token)
+        val result = stopRuntime(options, token) { isCurrent(token) }
+        completePlatformStop(token, result)
+    }
+
+    /** Completes a token-owned teardown retry without exposing a generic phase setter. */
+    fun completePlatformStop(
+        token: VpnRuntimeCommandToken,
+        result: VpnPlatformStopResult,
+    ): Boolean = synchronized(stateLock) {
+        val stoppingPhase = publishedSnapshot.phase as? VpnRuntimePhase.Stopping
+            ?: return@synchronized false
+        if (stoppingPhase.token != token || !isCurrentLocked(token)) return@synchronized false
+        when (result) {
+            VpnPlatformStopResult.Released -> {
+                publishedSnapshot = publishedSnapshot.copy(
+                    phase = VpnRuntimePhase.Idle,
+                    runningPlan = null,
+                    stopping = false,
+                    bridgeRestarting = false,
+                )
+                true
+            }
+            VpnPlatformStopResult.RetainedForRetry -> true
+        }
+    }
+
+    /**
+     * Owns Running A -> membership mutation -> persistence -> Running B, including rollback.
+     * JNI and persistence remain adapters supplied by the Service.
+     */
+    fun dispatchOutboundUpdate(
+        token: VpnRuntimeCommandToken,
+        request: VpnRuntimeOutboundUpdateRequest,
+        onFailure: (Throwable) -> Unit,
+        persistPlan: (ProfileRunPlan, () -> Boolean) -> Boolean,
+        mutateOutbound: (AppConfig, Boolean, () -> Boolean) -> Unit,
+        onCommitted: (ProfileRunPlan) -> Unit,
+        onRolledBack: (ProfileRunPlan, Throwable) -> Unit,
+        onMutationFailure: (Throwable, Boolean) -> Unit,
+        onReplacementRequired: (VpnRuntimeCommandToken, ProfileRunPlan, Throwable?) -> Unit,
+    ): Boolean = dispatch(VpnRuntimeCommand.UpdateOutbounds, onFailure) update@{
+        if (!isCurrent(token)) return@update
+        val currentSnapshot = snapshot
+        val currentPlan = currentSnapshot.runningPlan
+        if (
+            currentSnapshot.phase !is VpnRuntimePhase.Running ||
+            !request.hasRuntimeResources || currentPlan == null ||
+            currentPlan.profiles != request.nextPlan.profiles
+        ) {
+            requestReplacement(token, request.nextPlan, null, onReplacementRequired)
+            return@update
+        }
+
+        val changedIds = (currentPlan.activeIds - request.nextPlan.activeIds) +
+            (request.nextPlan.activeIds - currentPlan.activeIds)
+        val changedProfiles = currentPlan.profiles.filter { it.id in changedIds }
+        var nativeMutationAttempted = false
+        val transactionFailure = try {
+            for (profile in changedProfiles) {
+                if (!isCurrent(token)) return@update
+                nativeMutationAttempted = true
+                mutateOutbound(profile, profile.id in request.nextPlan.activeIds) { isCurrent(token) }
+            }
+            if (!isCurrent(token)) return@update
+            check(persistPlan(request.nextPlan) { isCurrent(token) }) {
+                "connection update persistence was not committed"
+            }
+            null
+        } catch (error: Throwable) {
+            if (error.isFatalProcessError()) throw error
+            error
+        }
+        if (transactionFailure == null) {
+            if (!commitRunningPlan(token, request.nextPlan)) return@update
+            onCommitted(request.nextPlan)
+            return@update
+        }
+
+        onMutationFailure(transactionFailure, nativeMutationAttempted)
+        if (!isCurrent(token)) return@update
+        if (!nativeMutationAttempted) {
+            commitRunningPlan(token, currentPlan)
+            return@update
+        }
+        try {
+            for (profile in changedProfiles) {
+                if (!isCurrent(token)) return@update
+                mutateOutbound(profile, profile.id in currentPlan.activeIds) { isCurrent(token) }
+            }
+        } catch (rollbackError: Throwable) {
+            if (rollbackError.isFatalProcessError()) throw rollbackError
+            if (isCurrent(token)) {
+                transactionFailure.addSuppressed(rollbackError)
+                requestReplacement(token, currentPlan, transactionFailure, onReplacementRequired)
+            }
+            return@update
+        }
+        if (!isCurrent(token)) return@update
+        commitRunningPlan(token, currentPlan)
+        onRolledBack(currentPlan, transactionFailure)
+    }
+
+    /** Owns Running -> Recovering -> Running and rejects stale retry/restart completion. */
+    fun dispatchRecovery(
+        token: VpnRuntimeCommandToken,
+        request: VpnRuntimeRecoveryRequest,
+        onFailure: (Throwable) -> Unit,
+        recoverRuntime: (
+            VpnRuntimeRecoveryRequest,
+            VpnRuntimeCommandToken,
+            () -> Boolean,
+            (ProfileRunPlan) -> Boolean,
+        ) -> Unit,
+        rollbackRecovery: (VpnRuntimeRecoveryRequest, VpnRuntimeCommandToken, Throwable, Boolean) -> Unit,
+        onRetryRequired: (VpnRuntimeCommandToken, VpnRuntimeRecoveryRequest, Throwable) -> Unit,
+    ): Boolean = dispatch(VpnRuntimeCommand.BridgeRecovery, onFailure) recovery@{
+        if (!beginRecovery(token)) return@recovery
+        try {
+            recoverRuntime(request, token, { isCurrent(token) }) { plan ->
+                commitRunningPlan(token, plan)
+            }
+            if (isCurrent(token) && snapshot.phase is VpnRuntimePhase.Recovering) {
+                commitRunningPlan(token, request.plan)
+            }
+        } catch (error: Throwable) {
+            if (error.isFatalProcessError()) throw error
+            val superseded = !isCurrent(token)
+            rollbackRecovery(request, token, error, superseded)
+            if (!superseded && transition(token) { current ->
+                    current.copy(
+                        phase = VpnRuntimePhase.Recovering(token),
+                        stopping = false,
+                        bridgeRestarting = false,
+                    )
+                }
+            ) {
+                onRetryRequired(token, request, error)
+            }
+        }
     }
 
     fun dispatch(
@@ -324,6 +471,50 @@ internal class VpnRuntimeCoordinator(
             )
             true
         }
+
+    private fun commitRunningPlan(token: VpnRuntimeCommandToken, plan: ProfileRunPlan): Boolean =
+        commitRunning(token, plan)
+
+    private fun requestReplacement(
+        token: VpnRuntimeCommandToken,
+        plan: ProfileRunPlan,
+        failure: Throwable?,
+        onReplacementRequired: (VpnRuntimeCommandToken, ProfileRunPlan, Throwable?) -> Unit,
+    ) {
+        val replacement = synchronized(stateLock) {
+            if (!isCurrentLocked(token)) null else {
+                val next = nextToken(token.serviceInstanceId, persistent = false)
+                publishedSnapshot = publishedSnapshot.copy(
+                    phase = VpnRuntimePhase.Starting(next),
+                    lifecycleGeneration = next.lifecycleGeneration,
+                    serviceInstanceId = next.serviceInstanceId,
+                    runningPlan = if (failure == null) publishedSnapshot.runningPlan else null,
+                    explicitStopRequested = false,
+                    stopping = false,
+                    bridgeRestarting = false,
+                )
+                next
+            }
+        } ?: return
+        onReplacementRequired(replacement, plan, failure)
+    }
+
+    private fun beginRecovery(token: VpnRuntimeCommandToken): Boolean = synchronized(stateLock) {
+        if (!isCurrentLocked(token)) return@synchronized false
+        when (publishedSnapshot.phase) {
+            is VpnRuntimePhase.Running,
+            is VpnRuntimePhase.Recovering,
+            -> Unit
+
+            else -> return@synchronized false
+        }
+        publishedSnapshot = publishedSnapshot.copy(
+            phase = VpnRuntimePhase.Recovering(token),
+            stopping = false,
+            bridgeRestarting = true,
+        )
+        true
+    }
 
     private fun transitionToIdle(token: VpnRuntimeCommandToken): Boolean = transition(token) { current ->
         current.copy(

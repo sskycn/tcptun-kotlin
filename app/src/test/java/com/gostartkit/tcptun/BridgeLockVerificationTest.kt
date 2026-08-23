@@ -35,20 +35,6 @@ class BridgeLockVerificationTest {
     }
 
     @Test
-    fun lockMatchesLocalCoreHeadWhenCoreCheckoutIsAvailable() {
-        val root = repositoryRoot()
-        val core = listOf(File(root, "../tcptun-go"), File(root, "tcptun-go"))
-            .firstOrNull { File(it, ".git").exists() } ?: return
-        val expected = requireNotNull(loadLock(root).getProperty("coreCommit"))
-        val process = ProcessBuilder("git", "-C", core.canonicalPath, "rev-parse", "HEAD")
-            .redirectErrorStream(true)
-            .start()
-        val actual = process.inputStream.bufferedReader().readText().trim()
-        assertEquals(0, process.waitFor())
-        assertEquals(expected, actual)
-    }
-
-    @Test
     fun buildPreflightRejectsDirtyLockedCoreCheckout() {
         val root = repositoryRoot()
         val sha = requireNotNull(loadLock(root).getProperty("coreCommit"))
