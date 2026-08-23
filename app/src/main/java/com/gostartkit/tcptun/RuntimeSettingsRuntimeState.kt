@@ -52,6 +52,12 @@ internal sealed interface RuntimeSettingsHotApplyResult {
     ) : RuntimeSettingsHotApplyResult
 }
 
+internal enum class HotAppliedCheckpointResult {
+    AppliedToSource,
+    AppliedToReboundOwner,
+    RejectedDifferentRuntime,
+}
+
 /** Owns desired/runtime-applied metadata; platform and native mutations remain in the service. */
 internal class RuntimeSettingsRuntimeState {
     private var sequence = 0L
@@ -60,6 +66,9 @@ internal class RuntimeSettingsRuntimeState {
 
     @Volatile
     private var appliedState: AppliedRuntimeState? = null
+
+    @Volatile
+    private var replacementRequiredOwnership: VpnRuntimeOwnership? = null
 
     val latestSequence: Long
         @Synchronized get() = sequence
@@ -72,6 +81,9 @@ internal class RuntimeSettingsRuntimeState {
 
     val effectiveSettings: AppliedRuntimeSettings
         get() = appliedState?.settings ?: AppliedRuntimeSettings()
+
+    val replacementRequiredFor: VpnRuntimeOwnership?
+        get() = replacementRequiredOwnership
 
     @Synchronized
     fun requestDesired(forceRestart: Boolean): RuntimeSettingsDesiredMutation {
@@ -170,6 +182,7 @@ internal class RuntimeSettingsRuntimeState {
     ): Boolean {
         if (ownership != activeOwnership) return false
         appliedState = AppliedRuntimeState(ownership, settings)
+        reconcileReplacementRequirementAfterPublish(ownership)
         return true
     }
 
@@ -181,35 +194,58 @@ internal class RuntimeSettingsRuntimeState {
     ): VpnRuntimeOwnership? {
         val active = activeOwnership ?: return null
         val ownership = VpnRuntimeOwnership(token, active.bridgeEpoch)
-        appliedState = AppliedRuntimeState(ownership, settings).takeIf {
-            ownership == active
-        } ?: return null
+        if (ownership != active) return null
+        appliedState = AppliedRuntimeState(ownership, settings)
+        reconcileReplacementRequirementAfterPublish(ownership)
         return ownership
     }
 
     /** Atomically records a confirmed native mutation without requiring desired-sequence freshness. */
     @Synchronized
     fun checkpointHotApplied(
-        ownership: VpnRuntimeOwnership,
+        sourceOwnership: VpnRuntimeOwnership,
         activeOwnership: VpnRuntimeOwnership?,
         transform: (AppliedRuntimeSettings) -> AppliedRuntimeSettings,
-    ): Boolean {
-        val current = appliedState ?: return false
-        if (current.ownership != ownership || activeOwnership != ownership) return false
-        appliedState = current.copy(settings = transform(current.settings))
-        return true
+    ): HotAppliedCheckpointResult {
+        val target = hotMutationTarget(sourceOwnership, activeOwnership)
+            ?: return HotAppliedCheckpointResult.RejectedDifferentRuntime
+        appliedState = target.copy(settings = transform(target.settings))
+        return if (target.ownership == sourceOwnership) {
+            HotAppliedCheckpointResult.AppliedToSource
+        } else {
+            HotAppliedCheckpointResult.AppliedToReboundOwner
+        }
     }
 
     fun checkpointHotAppliedOrRejectCurrent(
-        ownership: VpnRuntimeOwnership,
+        sourceOwnership: VpnRuntimeOwnership,
         activeOwnership: VpnRuntimeOwnership?,
         transform: (AppliedRuntimeSettings) -> AppliedRuntimeSettings,
-    ): Boolean {
-        val updated = checkpointHotApplied(ownership, activeOwnership, transform)
-        check(updated || activeOwnership != ownership) {
+    ): HotAppliedCheckpointResult {
+        val result = checkpointHotApplied(sourceOwnership, activeOwnership, transform)
+        check(
+            result != HotAppliedCheckpointResult.RejectedDifferentRuntime ||
+                activeOwnership != sourceOwnership,
+        ) {
             "current runtime rejected its hot-applied settings checkpoint"
         }
-        return updated
+        return result
+    }
+
+    /** Marks the physical runtime unknown only while the failed mutation still targets it. */
+    @Synchronized
+    fun markHotMutationUncertain(
+        sourceOwnership: VpnRuntimeOwnership,
+        activeOwnership: VpnRuntimeOwnership?,
+    ): HotAppliedCheckpointResult {
+        val target = hotMutationTarget(sourceOwnership, activeOwnership)
+            ?: return HotAppliedCheckpointResult.RejectedDifferentRuntime
+        replacementRequiredOwnership = target.ownership
+        return if (target.ownership == sourceOwnership) {
+            HotAppliedCheckpointResult.AppliedToSource
+        } else {
+            HotAppliedCheckpointResult.AppliedToReboundOwner
+        }
     }
 
     /** Rebinds the same live native state after an auxiliary lifecycle claim, or invalidates it. */
@@ -218,17 +254,19 @@ internal class RuntimeSettingsRuntimeState {
         token: VpnRuntimeCommandToken,
         activeOwnership: VpnRuntimeOwnership?,
     ): Boolean {
-        val previous = appliedState ?: return false
-        if (
-            activeOwnership == null ||
-            activeOwnership.runtimeToken != token ||
-            previous.ownership.bridgeEpoch != activeOwnership.bridgeEpoch
-        ) {
+        if (activeOwnership == null || activeOwnership.runtimeToken != token) {
             appliedState = null
             return false
         }
-        appliedState = AppliedRuntimeState(activeOwnership, previous.settings)
-        return true
+        val previous = appliedState
+        val rebound = previous?.takeIf {
+            it.ownership.samePhysicalRuntimeAs(activeOwnership)
+        }?.copy(ownership = activeOwnership)
+        appliedState = rebound
+        replacementRequiredOwnership = replacementRequiredOwnership?.let { required ->
+            if (required.samePhysicalRuntimeAs(activeOwnership)) activeOwnership else required
+        }
+        return rebound != null
     }
 
     @Synchronized
@@ -239,6 +277,9 @@ internal class RuntimeSettingsRuntimeState {
     ): RuntimeSettingsReconciliationAction? {
         if (pendingMutation?.sequence != claim.mutation.sequence) return null
         val current = appliedState?.takeIf { it.ownership == claim.ownership } ?: return null
+        if (replacementRequiredOwnership == claim.ownership) {
+            return RuntimeSettingsReconciliationAction.Replace
+        }
         return desiredRuntimeSettingsAction(
             current.settings,
             desired,
@@ -259,12 +300,16 @@ internal class RuntimeSettingsRuntimeState {
         if (activeOwnership != ownership) return
         val mutation = pendingMutation ?: return
         val current = appliedState?.takeIf { it.ownership == ownership } ?: return
-        val action = desiredRuntimeSettingsAction(
-            current.settings,
-            desired,
-            mutation.forceRestart,
-            freshRuntimeDesiredSequence == mutation.sequence,
-        )
+        val action = if (replacementRequiredOwnership == ownership) {
+            RuntimeSettingsReconciliationAction.Replace
+        } else {
+            desiredRuntimeSettingsAction(
+                current.settings,
+                desired,
+                mutation.forceRestart,
+                freshRuntimeDesiredSequence == mutation.sequence,
+            )
+        }
         if (action == RuntimeSettingsReconciliationAction.Satisfied) {
             pendingMutation = null
             return
@@ -283,7 +328,8 @@ internal class RuntimeSettingsRuntimeState {
         applyFlowAnalysis: (String) -> Unit,
         checkpoint: (
             (AppliedRuntimeSettings) -> AppliedRuntimeSettings,
-        ) -> Boolean,
+        ) -> HotAppliedCheckpointResult,
+        markMutationUncertain: () -> Unit,
         onApplied: () -> Unit,
         onReplacementRequired: (RuntimeSettingsHotApplyResult.RestartRequired?) -> Unit,
     ) {
@@ -304,6 +350,7 @@ internal class RuntimeSettingsRuntimeState {
                 applyLogLevel,
                 applyFlowAnalysis,
                 checkpoint,
+                markMutationUncertain,
             )
         ) {
             RuntimeSettingsHotApplyResult.Applied -> onApplied()
@@ -319,29 +366,38 @@ internal class RuntimeSettingsRuntimeState {
         applyFlowAnalysis: (String) -> Unit,
         checkpoint: (
             (AppliedRuntimeSettings) -> AppliedRuntimeSettings,
-        ) -> Boolean,
+        ) -> HotAppliedCheckpointResult,
+        markMutationUncertain: () -> Unit,
     ): RuntimeSettingsHotApplyResult {
         var actual = appliedForLatestClaim(claim) ?: return RuntimeSettingsHotApplyResult.Superseded
         if (actual.logLevel != desired.logLevel) {
-            hotMutationFailure(RuntimeSettingsHotMutation.LogLevel) {
+            hotMutationFailure(RuntimeSettingsHotMutation.LogLevel, markMutationUncertain) {
                 applyLogLevel(desired.logLevel)
             }?.let { return it }
-            if (!checkpoint { it.copy(logLevel = desired.logLevel) }) {
-                return RuntimeSettingsHotApplyResult.Superseded
+            when (checkpoint { it.copy(logLevel = desired.logLevel) }) {
+                HotAppliedCheckpointResult.AppliedToSource -> Unit
+                HotAppliedCheckpointResult.AppliedToReboundOwner,
+                HotAppliedCheckpointResult.RejectedDifferentRuntime,
+                -> return RuntimeSettingsHotApplyResult.Superseded
             }
             if (!isLatest(claim)) return RuntimeSettingsHotApplyResult.Superseded
             actual = appliedForLatestClaim(claim) ?: return RuntimeSettingsHotApplyResult.Superseded
         }
         if (actual.flowAnalysisApp != desired.flowAnalysisApp) {
-            hotMutationFailure(RuntimeSettingsHotMutation.FlowAnalysis) {
+            hotMutationFailure(RuntimeSettingsHotMutation.FlowAnalysis, markMutationUncertain) {
                 applyFlowAnalysis(desired.flowAnalysisApp)
             }?.let { return it }
-            if (!checkpoint { it.copy(flowAnalysisApp = desired.flowAnalysisApp) }) {
-                return RuntimeSettingsHotApplyResult.Superseded
+            when (checkpoint { it.copy(flowAnalysisApp = desired.flowAnalysisApp) }) {
+                HotAppliedCheckpointResult.AppliedToSource -> Unit
+                HotAppliedCheckpointResult.AppliedToReboundOwner,
+                HotAppliedCheckpointResult.RejectedDifferentRuntime,
+                -> return RuntimeSettingsHotApplyResult.Superseded
             }
             if (!isLatest(claim)) return RuntimeSettingsHotApplyResult.Superseded
         }
-        if (!checkpoint { desired }) return RuntimeSettingsHotApplyResult.Superseded
+        if (checkpoint { desired } != HotAppliedCheckpointResult.AppliedToSource) {
+            return RuntimeSettingsHotApplyResult.Superseded
+        }
         return if (acknowledge(claim.mutation.sequence)) {
             RuntimeSettingsHotApplyResult.Applied
         } else {
@@ -358,6 +414,7 @@ internal class RuntimeSettingsRuntimeState {
     fun clearForStop() {
         pendingMutation = null
         appliedState = null
+        replacementRequiredOwnership = null
         debounceTask.cancel()
     }
 
@@ -369,15 +426,43 @@ internal class RuntimeSettingsRuntimeState {
 
     private inline fun hotMutationFailure(
         mutation: RuntimeSettingsHotMutation,
+        markMutationUncertain: () -> Unit,
         action: () -> Unit,
     ): RuntimeSettingsHotApplyResult.RestartRequired? = try {
         action()
         null
     } catch (error: Throwable) {
         if (error.isFatalProcessError()) throw error
+        markMutationUncertain()
         RuntimeSettingsHotApplyResult.RestartRequired(mutation, error)
     }
+
+    @Synchronized
+    private fun hotMutationTarget(
+        sourceOwnership: VpnRuntimeOwnership,
+        activeOwnership: VpnRuntimeOwnership?,
+    ): AppliedRuntimeState? {
+        val active = activeOwnership ?: return null
+        val current = appliedState?.takeIf { it.ownership == active } ?: return null
+        return current.takeIf {
+            active == sourceOwnership || sourceOwnership.samePhysicalRuntimeAs(active)
+        }
+    }
+
+    private fun reconcileReplacementRequirementAfterPublish(ownership: VpnRuntimeOwnership) {
+        replacementRequiredOwnership = replacementRequiredOwnership?.let { required ->
+            when {
+                required.samePhysicalRuntimeAs(ownership) -> ownership
+                required.bridgeEpoch != ownership.bridgeEpoch -> null
+                else -> required
+            }
+        }
+    }
 }
+
+private fun VpnRuntimeOwnership.samePhysicalRuntimeAs(other: VpnRuntimeOwnership): Boolean =
+    runtimeToken.serviceInstanceId == other.runtimeToken.serviceInstanceId &&
+        bridgeEpoch == other.bridgeEpoch
 
 internal fun desiredRuntimeSettingsAction(
     applied: AppliedRuntimeSettings,

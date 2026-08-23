@@ -1285,12 +1285,12 @@ class TcptunVpnService : VpnService() {
     private fun checkpointHotApplied(
         ownership: VpnRuntimeOwnership,
         transform: (AppliedRuntimeSettings) -> AppliedRuntimeSettings,
-    ): Boolean = synchronized(lifecycleCommandLock) {
-        runtimeSettingsState.checkpointHotAppliedOrRejectCurrent(
-            ownership,
-            currentRuntimeOwnership(),
-            transform,
-        )
+    ): HotAppliedCheckpointResult = synchronized(lifecycleCommandLock) {
+        runtimeSettingsState.checkpointHotAppliedOrRejectCurrent(ownership, currentRuntimeOwnership(), transform)
+    }
+
+    private fun markHotMutationUncertain(ownership: VpnRuntimeOwnership) = synchronized(lifecycleCommandLock) {
+        runtimeSettingsState.markHotMutationUncertain(ownership, currentRuntimeOwnership())
     }
 
     private fun applyRuntimeLogLevel(ownership: VpnRuntimeOwnership, logLevel: String) =
@@ -2549,6 +2549,7 @@ class TcptunVpnService : VpnService() {
             applyLogLevel = { applyRuntimeLogLevel(request.ownership, it) },
             applyFlowAnalysis = { applyRuntimeFlowAnalysis(request.ownership, it) },
             checkpoint = { checkpointHotApplied(request.ownership, it) },
+            markMutationUncertain = { markHotMutationUncertain(request.ownership) },
             onApplied = {
                 RuntimeSettingsRepository.publishHotApplied(settings)
                 wakeBridgeMonitor()

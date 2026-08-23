@@ -26,6 +26,7 @@ class RuntimeSettingsRuntimeStateTest {
             },
             applyFlowAnalysis = { },
             checkpoint = { transform -> state.checkpointHotApplied(runtime, runtime, transform) },
+            markMutationUncertain = { state.markHotMutationUncertain(runtime, runtime) },
         )
 
         assertSame(RuntimeSettingsHotApplyResult.Superseded, resultA)
@@ -38,6 +39,7 @@ class RuntimeSettingsRuntimeStateTest {
             applyLogLevel = { level -> nativeLogLevel = level },
             applyFlowAnalysis = { },
             checkpoint = { transform -> state.checkpointHotApplied(runtime, runtime, transform) },
+            markMutationUncertain = { state.markHotMutationUncertain(runtime, runtime) },
         )
 
         assertSame(RuntimeSettingsHotApplyResult.Applied, resultB)
@@ -64,6 +66,7 @@ class RuntimeSettingsRuntimeStateTest {
                 state.requestDesired(false)
             },
             checkpoint = { transform -> state.checkpointHotApplied(runtime, runtime, transform) },
+            markMutationUncertain = { state.markHotMutationUncertain(runtime, runtime) },
         )
 
         assertSame(RuntimeSettingsHotApplyResult.Superseded, resultA)
@@ -76,6 +79,7 @@ class RuntimeSettingsRuntimeStateTest {
             applyLogLevel = { },
             applyFlowAnalysis = { packageName -> nativeFlowApp = packageName },
             checkpoint = { transform -> state.checkpointHotApplied(runtime, runtime, transform) },
+            markMutationUncertain = { state.markHotMutationUncertain(runtime, runtime) },
         )
 
         assertSame(RuntimeSettingsHotApplyResult.Applied, resultB)
@@ -103,6 +107,7 @@ class RuntimeSettingsRuntimeStateTest {
             },
             applyFlowAnalysis = { },
             checkpoint = { transform -> state.checkpointHotApplied(startA, active, transform) },
+            markMutationUncertain = { state.markHotMutationUncertain(startA, active) },
         )
 
         assertSame(RuntimeSettingsHotApplyResult.Superseded, result)
@@ -130,6 +135,7 @@ class RuntimeSettingsRuntimeStateTest {
                 assertTrue(state.publishFreshRuntime(epochTwo, applied(flowAnalysisApp = "new"), epochTwo))
             },
             checkpoint = { transform -> state.checkpointHotApplied(epochOne, active, transform) },
+            markMutationUncertain = { state.markHotMutationUncertain(epochOne, active) },
         )
 
         assertSame(RuntimeSettingsHotApplyResult.Superseded, result)
@@ -154,6 +160,7 @@ class RuntimeSettingsRuntimeStateTest {
             applyLogLevel = { nativeLogLevel = it },
             applyFlowAnalysis = { throw flowFailure },
             checkpoint = { transform -> state.checkpointHotApplied(oldRuntime, oldRuntime, transform) },
+            markMutationUncertain = { state.markHotMutationUncertain(oldRuntime, oldRuntime) },
         )
 
         assertEquals(
@@ -166,9 +173,12 @@ class RuntimeSettingsRuntimeStateTest {
         assertEquals("debug", nativeLogLevel)
         assertEquals("debug", state.applied?.settings?.logLevel)
         assertEquals("", state.applied?.settings?.flowAnalysisApp)
+        assertEquals(oldRuntime, state.replacementRequiredFor)
         state.clearApplied()
         assertTrue(state.publishFreshRuntime(replacement, applied(logLevel = "debug"), replacement))
-        assertFalse(
+        assertNull(state.replacementRequiredFor)
+        assertEquals(
+            HotAppliedCheckpointResult.RejectedDifferentRuntime,
             state.checkpointHotApplied(oldRuntime, replacement) {
                 it.copy(flowAnalysisApp = "com.example.capture")
             },
@@ -195,9 +205,14 @@ class RuntimeSettingsRuntimeStateTest {
         val active = VpnRuntimeOwnership(auxiliaryToken, bridgeEpoch = 10)
         val settings = applied(logLevel = "debug")
         assertTrue(state.publishFreshRuntime(previous, settings, previous))
+        assertEquals(
+            HotAppliedCheckpointResult.AppliedToSource,
+            state.markHotMutationUncertain(previous, previous),
+        )
 
         assertTrue(state.rebindAppliedOwnership(auxiliaryToken, active))
         assertEquals(AppliedRuntimeState(active, settings), state.applied)
+        assertEquals(active, state.replacementRequiredFor)
     }
 
     @Test
@@ -224,11 +239,226 @@ class RuntimeSettingsRuntimeStateTest {
         assertFalse(state.rebindAppliedOwnership(auxiliaryToken, activeOwnership = null))
         assertTrue(state.publishFreshRuntime(replacement, applied(logLevel = "debug"), replacement))
         assertFalse(state.publishFreshRuntime(oldRuntime, applied(logLevel = "warn"), replacement))
-        assertFalse(
+        assertEquals(
+            HotAppliedCheckpointResult.RejectedDifferentRuntime,
             state.checkpointHotApplied(oldRuntime, replacement) { it.copy(logLevel = "warn") },
         )
         assertEquals("debug", state.applied?.settings?.logLevel)
         assertTrue(state.pending != null)
+    }
+
+    @Test
+    fun sameEpochLogCheckpointTransfersToAuxiliaryOwnerAndLatestDesiredRestoresNative() {
+        val state = RuntimeSettingsRuntimeState()
+        val source = ownership(generation = 1, epoch = 10)
+        var active = source
+        assertTrue(state.publishFreshRuntime(source, applied(), source))
+        state.requestDesired(false)
+        val requestA = requireNotNull(state.bindLatest(source))
+        val nativeLogLevels = mutableListOf<String>()
+        var flowCalls = 0
+
+        val resultA = state.applyHot(
+            claim = requestA,
+            desired = applied(logLevel = "debug", flowAnalysisApp = "com.example.capture"),
+            applyLogLevel = { level ->
+                nativeLogLevels += level
+                val auxiliaryToken = token(generation = 2)
+                active = VpnRuntimeOwnership(auxiliaryToken, bridgeEpoch = 10)
+                assertTrue(state.rebindAppliedOwnership(auxiliaryToken, active))
+                state.requestDesired(false)
+            },
+            applyFlowAnalysis = { flowCalls += 1 },
+            checkpoint = { transform -> state.checkpointHotApplied(source, active, transform) },
+            markMutationUncertain = { state.markHotMutationUncertain(source, active) },
+        )
+
+        assertSame(RuntimeSettingsHotApplyResult.Superseded, resultA)
+        assertEquals(AppliedRuntimeState(active, applied(logLevel = "debug")), state.applied)
+        assertEquals(0, flowCalls)
+        val requestB = requireNotNull(state.bindLatest(active))
+        val resultB = state.applyHot(
+            claim = requestB,
+            desired = applied(logLevel = "info"),
+            applyLogLevel = { nativeLogLevels += it },
+            applyFlowAnalysis = { flowCalls += 1 },
+            checkpoint = { transform -> state.checkpointHotApplied(active, active, transform) },
+            markMutationUncertain = { state.markHotMutationUncertain(active, active) },
+        )
+
+        assertSame(RuntimeSettingsHotApplyResult.Applied, resultB)
+        assertEquals(listOf("debug", "info"), nativeLogLevels)
+        assertEquals(applied(logLevel = "info"), state.applied?.settings)
+    }
+
+    @Test
+    fun sameEpochFlowCheckpointTransfersToAuxiliaryOwnerAndLatestDesiredClearsNative() {
+        val state = RuntimeSettingsRuntimeState()
+        val source = ownership(generation = 1, epoch = 10)
+        var active = source
+        assertTrue(state.publishFreshRuntime(source, applied(), source))
+        state.requestDesired(false)
+        val requestA = requireNotNull(state.bindLatest(source))
+        val nativeFlowApps = mutableListOf<String>()
+
+        val resultA = state.applyHot(
+            claim = requestA,
+            desired = applied(flowAnalysisApp = "com.example.appa"),
+            applyLogLevel = { },
+            applyFlowAnalysis = { packageName ->
+                nativeFlowApps += packageName
+                val auxiliaryToken = token(generation = 2)
+                active = VpnRuntimeOwnership(auxiliaryToken, bridgeEpoch = 10)
+                assertTrue(state.rebindAppliedOwnership(auxiliaryToken, active))
+                state.requestDesired(false)
+            },
+            checkpoint = { transform -> state.checkpointHotApplied(source, active, transform) },
+            markMutationUncertain = { state.markHotMutationUncertain(source, active) },
+        )
+
+        assertSame(RuntimeSettingsHotApplyResult.Superseded, resultA)
+        assertEquals("com.example.appa", state.applied?.settings?.flowAnalysisApp)
+        val requestB = requireNotNull(state.bindLatest(active))
+        val resultB = state.applyHot(
+            claim = requestB,
+            desired = applied(flowAnalysisApp = ""),
+            applyLogLevel = { },
+            applyFlowAnalysis = { nativeFlowApps += it },
+            checkpoint = { transform -> state.checkpointHotApplied(active, active, transform) },
+            markMutationUncertain = { state.markHotMutationUncertain(active, active) },
+        )
+
+        assertSame(RuntimeSettingsHotApplyResult.Applied, resultB)
+        assertEquals(listOf("com.example.appa", ""), nativeFlowApps)
+        assertEquals("", state.applied?.settings?.flowAnalysisApp)
+    }
+
+    @Test
+    fun hotCheckpointAfterStopCannotResurrectAppliedState() {
+        val state = RuntimeSettingsRuntimeState()
+        val source = ownership(generation = 1, epoch = 10)
+        var active: VpnRuntimeOwnership? = source
+        assertTrue(state.publishFreshRuntime(source, applied(), source))
+        state.requestDesired(false)
+        val request = requireNotNull(state.bindLatest(source))
+
+        val result = state.applyHot(
+            claim = request,
+            desired = applied(logLevel = "debug"),
+            applyLogLevel = {
+                state.clearForStop()
+                active = null
+            },
+            applyFlowAnalysis = { },
+            checkpoint = { transform -> state.checkpointHotApplied(source, active, transform) },
+            markMutationUncertain = { state.markHotMutationUncertain(source, active) },
+        )
+
+        assertSame(RuntimeSettingsHotApplyResult.Superseded, result)
+        assertNull(state.applied)
+        assertNull(state.replacementRequiredFor)
+    }
+
+    @Test
+    fun sameEpochCheckpointRejectsDifferentServiceInstance() {
+        val state = RuntimeSettingsRuntimeState()
+        val source = ownership(generation = 1, epoch = 10)
+        val otherService = ownership(generation = 2, epoch = 10, serviceInstanceId = 2)
+        assertTrue(state.publishFreshRuntime(otherService, applied(), otherService))
+
+        assertEquals(
+            HotAppliedCheckpointResult.RejectedDifferentRuntime,
+            state.checkpointHotApplied(source, otherService) { it.copy(logLevel = "debug") },
+        )
+        assertEquals("info", state.applied?.settings?.logLevel)
+    }
+
+    @Test
+    fun failedMutationRequirementFollowsSameEpochAuxiliaryOwnerAndForcesReplacement() {
+        val state = RuntimeSettingsRuntimeState()
+        val source = ownership(generation = 1, epoch = 10)
+        var active = source
+        assertTrue(state.publishFreshRuntime(source, applied(), source))
+        state.requestDesired(false)
+        val requestA = requireNotNull(state.bindLatest(source))
+
+        val result = state.applyHot(
+            claim = requestA,
+            desired = applied(flowAnalysisApp = "com.example.capture"),
+            applyLogLevel = { },
+            applyFlowAnalysis = {
+                val auxiliaryToken = token(generation = 2)
+                active = VpnRuntimeOwnership(auxiliaryToken, bridgeEpoch = 10)
+                assertTrue(state.rebindAppliedOwnership(auxiliaryToken, active))
+                throw IllegalStateException("partially applied")
+            },
+            checkpoint = { transform -> state.checkpointHotApplied(source, active, transform) },
+            markMutationUncertain = { state.markHotMutationUncertain(source, active) },
+        )
+
+        assertTrue(result is RuntimeSettingsHotApplyResult.RestartRequired)
+        assertEquals(active, state.replacementRequiredFor)
+        val requestB = requireNotNull(state.bindLatest(active))
+        assertEquals(
+            RuntimeSettingsReconciliationAction.Replace,
+            state.reconciliationAction(requestB, desired = applied(), freshRuntimeSatisfiesForce = false),
+        )
+    }
+
+    @Test
+    fun stopClearsFailedMutationRequirement() {
+        val state = RuntimeSettingsRuntimeState()
+        val runtime = ownership(generation = 1, epoch = 10)
+        var active: VpnRuntimeOwnership? = runtime
+        assertTrue(state.publishFreshRuntime(runtime, applied(), runtime))
+        state.requestDesired(false)
+        val request = requireNotNull(state.bindLatest(runtime))
+
+        val result = state.applyHot(
+            claim = request,
+            desired = applied(flowAnalysisApp = "com.example.capture"),
+            applyLogLevel = { },
+            applyFlowAnalysis = {
+                state.clearForStop()
+                active = null
+                throw IllegalStateException("partially applied before stop")
+            },
+            checkpoint = { transform -> state.checkpointHotApplied(runtime, active, transform) },
+            markMutationUncertain = { state.markHotMutationUncertain(runtime, active) },
+        )
+
+        assertTrue(result is RuntimeSettingsHotApplyResult.RestartRequired)
+        assertNull(state.replacementRequiredFor)
+        assertNull(state.applied)
+    }
+
+    @Test
+    fun oldEpochFailureCannotMarkAlreadyPublishedNewEpochUncertain() {
+        val state = RuntimeSettingsRuntimeState()
+        val oldRuntime = ownership(generation = 1, epoch = 10)
+        val newRuntime = ownership(generation = 2, epoch = 20)
+        var active = oldRuntime
+        assertTrue(state.publishFreshRuntime(oldRuntime, applied(), oldRuntime))
+        state.requestDesired(false)
+        val request = requireNotNull(state.bindLatest(oldRuntime))
+
+        val result = state.applyHot(
+            claim = request,
+            desired = applied(flowAnalysisApp = "com.example.capture"),
+            applyLogLevel = { },
+            applyFlowAnalysis = {
+                active = newRuntime
+                state.clearApplied()
+                assertTrue(state.publishFreshRuntime(newRuntime, applied(logLevel = "debug"), newRuntime))
+                throw IllegalStateException("old epoch completed late")
+            },
+            checkpoint = { transform -> state.checkpointHotApplied(oldRuntime, active, transform) },
+            markMutationUncertain = { state.markHotMutationUncertain(oldRuntime, active) },
+        )
+
+        assertTrue(result is RuntimeSettingsHotApplyResult.RestartRequired)
+        assertNull(state.replacementRequiredFor)
+        assertEquals(newRuntime, state.applied?.ownership)
     }
 
     private fun applied(
@@ -239,12 +469,12 @@ class RuntimeSettingsRuntimeStateTest {
         flowAnalysisApp = flowAnalysisApp,
     )
 
-    private fun token(generation: Int) = VpnRuntimeCommandToken(
-        serviceInstanceId = 1,
+    private fun token(generation: Int, serviceInstanceId: Long = 1) = VpnRuntimeCommandToken(
+        serviceInstanceId = serviceInstanceId,
         lifecycleGeneration = generation,
         persistentGeneration = generation,
     )
 
-    private fun ownership(generation: Int, epoch: Long) =
-        VpnRuntimeOwnership(token(generation), epoch)
+    private fun ownership(generation: Int, epoch: Long, serviceInstanceId: Long = 1) =
+        VpnRuntimeOwnership(token(generation, serviceInstanceId), epoch)
 }
