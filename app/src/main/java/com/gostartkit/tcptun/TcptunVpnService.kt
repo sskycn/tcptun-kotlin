@@ -217,9 +217,7 @@ class TcptunVpnService : VpnService() {
                 // Linearize replacement work before foreground publication or
                 // any other blocking operation so stale cleanup cannot stop it.
                 if (command.policyKind == ServiceCommandKind.StartOrRestore) {
-                    runtimeCoordinator.claimStart(serviceInstanceId, persistent = true).also {
-                        runtimeSettingsState.clearApplied()
-                    }
+                    runtimeCoordinator.claimStart(serviceInstanceId, persistent = true)
                 } else {
                     runtimeCoordinator.claimAuxiliaryCommand(serviceInstanceId, persistent = true).also { token ->
                         runtimeSettingsState.rebindAppliedOwnership(token, currentRuntimeOwnership())
@@ -788,9 +786,7 @@ class TcptunVpnService : VpnService() {
                     runtimeSettingsState.clearForStop()
                 }
             } else {
-                runtimeCoordinator.claimReplacement(serviceInstanceId).also {
-                    runtimeSettingsState.clearApplied()
-                }
+                runtimeCoordinator.claimReplacement(serviceInstanceId)
             }
         }
         if (replacementToken == null) {
@@ -1000,7 +996,6 @@ class TcptunVpnService : VpnService() {
                 if (!attempted) markConnectionsReadyAfterUpdate(lifecycleGeneration, updateGeneration)
             },
             onReplacementRequired = { replacementToken, plan, failure ->
-                runtimeSettingsState.clearApplied()
                 if (failure == null) {
                     TcptunState.appendLog("reloading VPN connection configuration")
                 } else {
@@ -1035,7 +1030,7 @@ class TcptunVpnService : VpnService() {
                 if (!stopping && tun != null && TcptunState.status == VpnStatus.Running) {
                     TcptunState.setConnectionsReady(true)
                     startBridgeMonitor()
-                    runtimeSettingsState.applied?.ownership?.let { reconcileDesiredSettingsAfterRunning(it) }
+                    currentRuntimeOwnership()?.let { reconcileDesiredSettingsAfterRunning(it) }
                 }
             }
         }
@@ -1316,7 +1311,6 @@ class TcptunVpnService : VpnService() {
         ownership: VpnRuntimeOwnership,
         freshRuntimeDesiredSequence: Long? = null,
     ) {
-        if (runtimeSettingsState.pending == null) return
         synchronized(lifecycleCommandLock) {
             runtimeSettingsState.reconcileFreshRuntime(
                 ownership,
@@ -1573,7 +1567,6 @@ class TcptunVpnService : VpnService() {
             if (appIdentityProviderDelegate.isInitialized()) {
                 cleanupStep("clear app identity cache") { appIdentityProvider.clear() }
             }
-            runtimeSettingsState.clearApplied()
             lastMemberHealthProbeAtElapsedMs = 0L
             memberHealthBatchSelector.clear()
             memberHealthProbeScheduler.reset()
@@ -2039,6 +2032,7 @@ class TcptunVpnService : VpnService() {
             IllegalStateException("tcptun stopped before core became ready"),
         )
         val ownership = bridgeResources.beginStop()
+        runtimeSettingsState.clearPhysicalRuntimeApplied()
         val stoppedEpoch = ownership.epoch
         if (stoppedEpoch > 0L) TcptunState.endBridgeSession(stoppedEpoch)
         if (!bridgeDelegate.isInitialized()) {
@@ -2118,7 +2112,6 @@ class TcptunVpnService : VpnService() {
             }
         }
         stopBridge()
-        runtimeSettingsState.clearApplied()
         check(commandOwner()) { "tcptun restart was superseded" }
         closeTunAfterBridgeStopAttempt()
         check(commandOwner()) { "tcptun restart was superseded" }
@@ -2575,9 +2568,7 @@ class TcptunVpnService : VpnService() {
         val restartIntent = startIntent(this, plan)
         val restartClaim = synchronized(lifecycleCommandLock) {
             runtimeSettingsState.runIfLatestOwned(request, currentRuntimeOwnership()) {
-                runtimeCoordinator.claimReplacement(serviceInstanceId).also {
-                    runtimeSettingsState.clearApplied()
-                } to
+                runtimeCoordinator.claimReplacement(serviceInstanceId) to
                     profileRepository.currentMutationRevision()
             }
         }

@@ -276,10 +276,10 @@ internal class RuntimeSettingsRuntimeState {
         freshRuntimeSatisfiesForce: Boolean,
     ): RuntimeSettingsReconciliationAction? {
         if (pendingMutation?.sequence != claim.mutation.sequence) return null
-        val current = appliedState?.takeIf { it.ownership == claim.ownership } ?: return null
         if (replacementRequiredOwnership == claim.ownership) {
             return RuntimeSettingsReconciliationAction.Replace
         }
+        val current = appliedState?.takeIf { it.ownership == claim.ownership } ?: return null
         return desiredRuntimeSettingsAction(
             current.settings,
             desired,
@@ -299,10 +299,10 @@ internal class RuntimeSettingsRuntimeState {
     ) {
         if (activeOwnership != ownership) return
         val mutation = pendingMutation ?: return
-        val current = appliedState?.takeIf { it.ownership == ownership } ?: return
         val action = if (replacementRequiredOwnership == ownership) {
             RuntimeSettingsReconciliationAction.Replace
         } else {
+            val current = appliedState?.takeIf { it.ownership == ownership } ?: return
             desiredRuntimeSettingsAction(
                 current.settings,
                 desired,
@@ -405,8 +405,9 @@ internal class RuntimeSettingsRuntimeState {
         }
     }
 
+    /** Clears actual settings only at a physical Bridge epoch boundary. */
     @Synchronized
-    fun clearApplied() {
+    fun clearPhysicalRuntimeApplied() {
         appliedState = null
     }
 

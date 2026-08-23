@@ -102,7 +102,7 @@ class RuntimeSettingsRuntimeStateTest {
             desired = applied(logLevel = "debug"),
             applyLogLevel = {
                 active = startB
-                state.clearApplied()
+                state.clearPhysicalRuntimeApplied()
                 assertTrue(state.publishFreshRuntime(startB, applied(logLevel = "warn"), startB))
             },
             applyFlowAnalysis = { },
@@ -131,7 +131,7 @@ class RuntimeSettingsRuntimeStateTest {
             applyLogLevel = { },
             applyFlowAnalysis = {
                 active = epochTwo
-                state.clearApplied()
+                state.clearPhysicalRuntimeApplied()
                 assertTrue(state.publishFreshRuntime(epochTwo, applied(flowAnalysisApp = "new"), epochTwo))
             },
             checkpoint = { transform -> state.checkpointHotApplied(epochOne, active, transform) },
@@ -174,7 +174,7 @@ class RuntimeSettingsRuntimeStateTest {
         assertEquals("debug", state.applied?.settings?.logLevel)
         assertEquals("", state.applied?.settings?.flowAnalysisApp)
         assertEquals(oldRuntime, state.replacementRequiredFor)
-        state.clearApplied()
+        state.clearPhysicalRuntimeApplied()
         assertTrue(state.publishFreshRuntime(replacement, applied(logLevel = "debug"), replacement))
         assertNull(state.replacementRequiredFor)
         assertEquals(
@@ -448,7 +448,7 @@ class RuntimeSettingsRuntimeStateTest {
             applyLogLevel = { },
             applyFlowAnalysis = {
                 active = newRuntime
-                state.clearApplied()
+                state.clearPhysicalRuntimeApplied()
                 assertTrue(state.publishFreshRuntime(newRuntime, applied(logLevel = "debug"), newRuntime))
                 throw IllegalStateException("old epoch completed late")
             },
