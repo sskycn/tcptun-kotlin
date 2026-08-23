@@ -234,11 +234,17 @@ class TcptunVpnService : VpnService() {
         log = TcptunState::appendLog,
     )
     private val deferredServiceStopGate = DeferredServiceStopGate()
+    private val runtimeDebugSnapshotProvider = if (BuildConfig.DEBUG) {
+        { stableRuntimeOwnershipDebugSnapshot(serviceInstanceId, ::captureRuntimeOwnershipDebugState) }
+    } else null
 
     override fun onCreate() {
         super.onCreate()
         synchronized(serviceOwnerLock) {
             activeServiceInstanceId.set(serviceInstanceId)
+        }
+        runtimeDebugSnapshotProvider?.let { provider ->
+            RuntimeOwnershipDebugRegistry.install(serviceInstanceId, provider)
         }
         try {
             TcptunState.state.value.tcping.takeIf { it.running }?.let { staleRequest ->
@@ -1589,6 +1595,7 @@ class TcptunVpnService : VpnService() {
             )
             if (!bridgeResources.hasOwnedResources && closeBridgeEngine()) {
                 TcptunState.appendLog("tcptun destroy cleanup completed")
+                RuntimeOwnershipDebugRegistry.remove(serviceInstanceId)
             } else {
                 TcptunState.appendLog(
                     "tcptun destroy cleanup incomplete; native resources retained for safe process teardown",
@@ -1600,6 +1607,27 @@ class TcptunVpnService : VpnService() {
                 throw IllegalStateException("destroy coordinator thread could not be started")
             }
         }
+    }
+
+    private fun captureRuntimeOwnershipDebugState(): RuntimeOwnershipDebugCapture {
+        val coordinator = runtimeSnapshot
+        val resources = bridgeResources.snapshot
+        val state = TcptunState.state.value
+        return RuntimeOwnershipDebugCapture(
+            lifecycleGeneration = coordinator.lifecycleGeneration,
+            persistentGeneration = coordinator.persistentCommandGeneration,
+            recoveryGeneration = coordinator.recoveryGeneration,
+            bridgeEpoch = resources.epoch,
+            bridgeResourcePhase = resources.phase,
+            tunOwned = tun != null,
+            leaseOwner = bridgeRuntimeLease.owner,
+            teardownPending = platformTeardownRuntime.pending,
+            runtimePhase = coordinator.phase.javaClass.simpleName,
+            activeServiceOwner = isActiveServiceOwner(),
+            destroyed = destroyed.get(),
+            vpnStatus = state.status,
+            connectionsReady = state.connectionsReady,
+        )
     }
 
     /** Abort is deliberately not serialized by bridgeLock: it must release a JNI call holding that lock. */
@@ -2276,6 +2304,8 @@ class TcptunVpnService : VpnService() {
         private val nextServiceInstanceId = AtomicLong()
         private val activeServiceInstanceId = AtomicLong()
         private val bridgeRuntimeLease = BridgeRuntimeLease()
+        internal fun runtimeOwnershipDebugSnapshots(): List<RuntimeOwnershipDebugSnapshot> =
+            RuntimeOwnershipDebugRegistry.snapshots()
         fun startIntent(context: Context, config: AppConfig): Intent =
             VpnServiceIntents.start(context, config)
         fun refreshClientIpsIntent(context: Context): Intent =

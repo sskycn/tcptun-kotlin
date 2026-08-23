@@ -64,3 +64,117 @@ adb devices
 The managed device configuration defines `tcptunCiApi35` (Pixel 2, API 35, AOSP ATD) for CI
 or local managed-device runs. If no device is connected, report instrumentation as not run;
 do not treat a JVM build as proof of Android VPN behavior.
+
+## Runtime stress harness
+
+The Phase 7 stress harness is manual/device-lab only. It is intentionally not attached to a
+GitHub Actions workflow. Run the command-only matrix with one USB-connected device:
+
+```bash
+RUNTIME_STRESS_ITERATIONS=1000 \
+RUNTIME_STRESS_SEED=1592622103 \
+scripts/run-runtime-stress.sh
+```
+
+The defaults are 500 transitions, seed `1592622103`, and a deterministic random delay from
+0–200 ms after every command. The storm chooses from Start, Stop, UpdateConnections,
+ApplySettings, TCPing, and RefreshClientIps. Values from 200 through 5000 transitions are
+accepted. The test clears logcat first and checks process exit history after the run.
+
+Network and system-event controls are separate opt-ins because they change device-wide state:
+
+```bash
+RUNTIME_STRESS_NETWORK_CONTROL=true \
+RUNTIME_STRESS_SYSTEM_EVENTS=true \
+scripts/run-runtime-stress.sh
+```
+
+Use USB ADB for network-control runs. The test records and restores Wi-Fi/mobile-data state,
+but a lab interruption can still leave radios changed. The device needs a working Wi-Fi
+network and an active cellular subscription for the full handover matrix.
+
+### Harness architecture
+
+- `VpnRuntimeStressHarness` owns test setup/restore, command emission, bounded waits, logcat,
+  and process-exit inspection.
+- `RuntimeOwnershipDebugSnapshot` exposes only ownership scalars and safe status names. It never
+  contains a username, password, profile, endpoint, URI, or config JSON.
+- The debug registry retains providers for old Service instances until their native destroy
+  cleanup completes, so a replacement and an old retained owner are visible together.
+- `VpnRuntimeStressTest` runs rapid lifecycle sequences, service recreation, and the seeded
+  command storm.
+- `VpnNetworkHandoverStressTest` contains optional radio, Recovery-gap, task-removal, and VPN
+  permission-revoke scenarios.
+
+Every command transition asserts:
+
+- at most one Android TUN owner;
+- at most one native bridge-resource owner;
+- one process-wide runtime lease owner, matching any TUN/native owner;
+- at most one active Service instance;
+- `connectionsReady` implies an active Running coordinator, a positive current bridge epoch,
+  `SessionOwned`, an Android TUN, and the matching runtime lease;
+- no target-process fatal exception, foreground-start deadline exception, crash/native crash,
+  or ANR is recorded during the run.
+
+### Scenario coverage
+
+| # | Scenario | Execution |
+|---:|---|---|
+| 1 | rapid Start → Stop | default stress test |
+| 2 | Start → Stop → Start | default stress test |
+| 3 | Start A → Start B | default stress test |
+| 4 | repeated UpdateConnections | default stress test and storm |
+| 5 | UpdateConnections → Stop | default stress test and storm |
+| 6 | Recovery → Stop | network-control opt-in |
+| 7 | Recovery → Start replacement | network-control opt-in |
+| 8 | ApplyRuntimeSettings during Recovery gap | network-control opt-in |
+| 9 | FlowAnalysis update during Recovery gap | network-control opt-in |
+| 10 | TCPing while auxiliary ownership changes | storm and network-control opt-in |
+| 11 | Wi-Fi → cellular | network-control opt-in |
+| 12 | cellular → Wi-Fi | network-control opt-in |
+| 13 | underlying callback during Stop | network-control opt-in |
+| 14 | recreation while old native cleanup runs | default stress test; retained JNI fault remains a lab gap |
+| 15 | app task removed while Running | system-event opt-in |
+| 16 | VPN permission revoke while Running | system-event opt-in |
+| 17 | VPN permission revoke during Recovery | network + system-event opt-ins |
+
+Recovery tests require the real device to enter the coordinator's Recovering phase after all
+underlying networks are disabled. A device/core combination that does not enter that phase is
+reported as skipped rather than simulated with a production test hook.
+
+## Retained cleanup fault model
+
+The production AAR has no device-test API for forcing JNI Stop, WaitStopped, or Abort failures.
+Do not add such a backdoor. JVM tests use the existing `TcptunBridge` fake seam:
+
+| Fault | Assertion |
+|---|---|
+| Stop timeout + WaitStopped timeout + Abort failure | native and callback ownership remain retained |
+| repeated retained attempts | Android TUN remains owned and foreground/Service are retained |
+| delayed native release | TUN closes only after release; foreground and Service stop only afterward |
+| stale/duplicate retry callback | cleanup owner completes exactly once |
+| recovery continuation | downstream recovery is admitted only after Released |
+
+Real-device delayed-release and abort-failure injection remains a coverage gap until the native
+bridge supplies a debug-only, non-production fault interface.
+
+## Release smoke matrix
+
+Record the device model, exact build/API, ABI, notification permission, VPN permission state,
+network types, and result for every row.
+
+| Android/API | Required smoke coverage |
+|---|---|
+| Android 7 / API 24–25 | legacy foreground start, VPN permission, start/stop, Doze |
+| Android 8 / API 26–27 | notification channel, foreground-service deadline, background stop |
+| Android 10 / API 29 | typed foreground start, task removal, handover |
+| Android 12 / API 31–32 | background-start restrictions, Doze, recreation |
+| Android 13 / API 33 | POST_NOTIFICATIONS denied/granted, ongoing VPN notification |
+| Android 14 / API 34 | special-use foreground-service type, revoke, handover |
+| Android 15+ / API 35+ | latest background/FGS behavior, command storm, process recreation |
+| configured target / API 36 | full matrix on a matching API 36 device or managed image |
+
+For each version run clean install, permission denial and grant, foreground/background start,
+screen-off/Doze, Wi-Fi/cellular handover where supported, task removal, revoke, rapid command
+matrix, and a final stop confirming no TUN/native/foreground ownership remains.

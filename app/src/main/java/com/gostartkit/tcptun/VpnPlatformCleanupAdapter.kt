@@ -35,8 +35,9 @@ internal data class VpnPlatformCleanupActions(
 )
 
 /**
- * Executes one cleanup attempt. Retry generations and coordinator completion
- * deliberately remain owned by [TcptunVpnService].
+ * Executes one cleanup attempt. Retry generations remain owned by
+ * [VpnPlatformTeardownRuntime]; coordinator completion authority remains in
+ * [TcptunVpnService].
  */
 internal class VpnPlatformCleanupAdapter(
     private val actions: VpnPlatformCleanupActions,
