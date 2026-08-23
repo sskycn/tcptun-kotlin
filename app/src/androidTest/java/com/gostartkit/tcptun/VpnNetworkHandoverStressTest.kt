@@ -25,7 +25,7 @@ class VpnNetworkHandoverStressTest {
             controls.enableCellular()
             controls.disableWifi()
             waitForTransport(harness, NetworkCapabilities.TRANSPORT_CELLULAR, "cellular handover")
-            harness.updateConnections(harness.planAB)
+            harness.updateConnections(harness.lifecyclePlanB)
             harness.applySettings()
             harness.tcping()
             harness.assertRuntimeInvariants()
@@ -57,7 +57,7 @@ class VpnNetworkHandoverStressTest {
             harness.waitForStopped(timeoutMillis = 30_000)
 
             controls.restoreOneNetwork()
-            harness.start(harness.planA)
+            harness.start(harness.lifecyclePlanA)
             harness.waitForRunning(timeoutMillis = 45_000)
             controls.disableWifi()
             controls.disableCellular()
@@ -65,7 +65,7 @@ class VpnNetworkHandoverStressTest {
 
             harness.applySettings()
             harness.updateFlowAnalysis()
-            harness.start(harness.planB)
+            harness.start(harness.lifecyclePlanB)
             controls.restoreOneNetwork()
             harness.waitForRunning(timeoutMillis = 45_000)
             harness.assertRuntimeInvariants()

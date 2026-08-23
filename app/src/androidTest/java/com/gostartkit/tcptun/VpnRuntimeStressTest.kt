@@ -22,12 +22,14 @@ class VpnRuntimeStressTest {
         harness.start()
         harness.waitForRunning()
 
-        harness.start(harness.planA)
-        harness.start(harness.planB)
+        harness.start(harness.lifecyclePlanA)
+        harness.start(harness.lifecyclePlanB)
         harness.waitForRunning()
 
         repeat(24) { index ->
-            harness.updateConnections(if (index % 2 == 0) harness.planAB else harness.planB)
+            harness.updateConnections(
+                if (index % 2 == 0) harness.lifecyclePlanA else harness.lifecyclePlanB,
+            )
             Thread.sleep((index % 4 * 25).toLong())
             harness.assertRuntimeInvariants()
         }
@@ -40,10 +42,37 @@ class VpnRuntimeStressTest {
             harness.assertRuntimeInvariants()
         }
 
-        harness.updateConnections(harness.planA)
+        harness.updateConnections(harness.lifecyclePlanA)
         harness.stop()
         harness.waitForStopped()
         harness.assertNoProcessFailureEvidence()
+        println("RUNTIME_STRESS_RAPID_MATRIX_EXECUTED")
+    }
+
+    @Test
+    fun inPlaceMembershipMutationKeepsBridgeEpoch() = withStressHarness { harness ->
+        val fixture = harness.membershipFixture
+        assumeTrue(
+            "membership stress requires two structured device-lab profiles",
+            fixture != null,
+        )
+        requireNotNull(fixture)
+
+        harness.start(fixture.planA)
+        harness.waitForRunning()
+        val before = harness.activeOwnershipSnapshot()
+        val bridgeEpoch = before.bridgeEpoch
+
+        val afterAB = harness.updateConnectionsAndWait(fixture.planAB)
+        assertEquals("plan A -> plan AB replaced the bridge", bridgeEpoch, afterAB.bridgeEpoch)
+
+        val afterB = harness.updateConnectionsAndWait(fixture.planB)
+        assertEquals("plan AB -> plan B replaced the bridge", bridgeEpoch, afterB.bridgeEpoch)
+
+        harness.stop()
+        harness.waitForStopped()
+        harness.assertNoProcessFailureEvidence()
+        println("RUNTIME_STRESS_MEMBERSHIP_EPOCH_UNCHANGED=$bridgeEpoch")
     }
 
     @Test
@@ -58,9 +87,13 @@ class VpnRuntimeStressTest {
 
         repeat(transitions) {
             when (random.nextInt(CommandCount)) {
-                0 -> harness.start(if (random.nextBoolean()) harness.planA else harness.planB)
+                0 -> harness.start(
+                    if (random.nextBoolean()) harness.lifecyclePlanA else harness.lifecyclePlanB,
+                )
                 1 -> harness.stop()
-                2 -> harness.updateConnections(if (random.nextBoolean()) harness.planAB else harness.planA)
+                2 -> harness.updateConnections(
+                    if (random.nextBoolean()) harness.lifecyclePlanA else harness.lifecyclePlanB,
+                )
                 3 -> harness.applySettings()
                 4 -> harness.tcping()
                 5 -> harness.refreshClientIps()
@@ -73,6 +106,7 @@ class VpnRuntimeStressTest {
         harness.waitForStopped(timeoutMillis = 30_000)
         harness.assertNoProcessFailureEvidence()
         assertEquals(VpnStatus.Stopped, TcptunState.status)
+        println("RUNTIME_STRESS_SEEDED_STORM_EXECUTED seed=$seed transitions=$transitions")
     }
 
     @Test
@@ -90,7 +124,7 @@ class VpnRuntimeStressTest {
                     it.serviceInstanceId == originalServiceId && it.destroyed
                 }
         }
-        harness.start(harness.planB)
+        harness.start(harness.lifecyclePlanB)
         harness.waitForRunning(timeoutMillis = 45_000)
 
         harness.assertRuntimeInvariants()
