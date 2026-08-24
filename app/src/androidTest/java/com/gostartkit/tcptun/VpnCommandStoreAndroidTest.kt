@@ -46,7 +46,10 @@ class VpnCommandStoreAndroidTest {
         val secrets = CiphertextSecretStorage()
         val metadata = FakeMetadataStorage()
         val store = EncryptedVpnCommandStore(secrets, metadata, nowMillis = { now })
-        val commandId = store.publish(UpdateOutboundsCommandPayload(ProfileRunPlan(emptyList())))
+        val profile = AppConfig(id = "stale-command-profile", serverHost = "127.0.0.1")
+        val commandId = store.publish(
+            UpdateOutboundsCommandPayload(ProfileRunPlan(listOf(profile), setOf(profile.id))),
+        )
 
         now += EncryptedVpnCommandStore.CommandTtlMillis + 1
         store.cleanupExpired()

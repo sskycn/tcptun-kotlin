@@ -23,13 +23,21 @@ if [[ -n "$membership_profile_a_uri" && -z "$membership_profile_b_uri" ]] ||
 fi
 
 device_lines=$(adb devices | awk 'NR > 1 && $2 == "device" { print $1 }')
-device_count=$(printf '%s\n' "$device_lines" | awk 'NF { count += 1 } END { print count + 0 }')
-if (( device_count != 1 )); then
-    echo "runtime stress requires exactly one authorized device; found $device_count" >&2
-    exit 1
+requested_serial="${ANDROID_SERIAL:-}"
+if [[ -n "$requested_serial" ]]; then
+    if ! printf '%s\n' "$device_lines" | awk -v serial="$requested_serial" '$0 == serial { found = 1 } END { exit !found }'; then
+        echo "ANDROID_SERIAL does not identify an authorized device" >&2
+        exit 1
+    fi
+    serial="$requested_serial"
+else
+    device_count=$(printf '%s\n' "$device_lines" | awk 'NF { count += 1 } END { print count + 0 }')
+    if (( device_count != 1 )); then
+        echo "runtime stress requires exactly one authorized device; found $device_count" >&2
+        exit 1
+    fi
+    serial=$(printf '%s\n' "$device_lines" | awk 'NF { print; exit }')
 fi
-
-serial=$(printf '%s\n' "$device_lines" | awk 'NF { print; exit }')
 wifi_status=$(adb -s "$serial" shell cmd wifi status | tr '[:upper:]' '[:lower:]')
 if [[ "$wifi_status" == *"enabled"* ]]; then
     wifi_was_enabled="true"
@@ -113,24 +121,47 @@ adb -s "$serial" shell appops reset "$debug_test_package" >/dev/null 2>&1 || tru
 clear_disposable_package "$debug_package"
 clear_disposable_package "$debug_test_package"
 
-gradle_args=(
-    :app:connectedDebugAndroidTest
-    -Pandroid.testInstrumentationRunnerArguments.class=com.tcptun.client.VpnRuntimeStressTest,com.tcptun.client.VpnNetworkHandoverStressTest
-    -Pandroid.testInstrumentationRunnerArguments.runtimeStressEnabled=true
-    -Pandroid.testInstrumentationRunnerArguments.runtimeStressIterations="$iterations"
-    -Pandroid.testInstrumentationRunnerArguments.runtimeStressSeed="$seed"
-    -Pandroid.testInstrumentationRunnerArguments.runtimeStressMaxDelayMillis="$max_delay_millis"
-    -Pandroid.testInstrumentationRunnerArguments.runtimeStressNetworkControl="$network_control"
-    -Pandroid.testInstrumentationRunnerArguments.runtimeStressSystemEvents="$system_events"
+./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+
+debug_apk="app/build/outputs/apk/debug/app-debug.apk"
+test_apk="app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
+adb -s "$serial" install -r -t --no-streaming "$debug_apk"
+adb -s "$serial" install -r -t --no-streaming "$test_apk"
+
+instrumentation_args=(
+    -e class com.tcptun.client.VpnRuntimeStressTest,com.tcptun.client.VpnNetworkHandoverStressTest
+    -e runtimeStressEnabled true
+    -e runtimeStressIterations "$iterations"
+    -e runtimeStressSeed "$seed"
+    -e runtimeStressMaxDelayMillis "$max_delay_millis"
+    -e runtimeStressNetworkControl "$network_control"
+    -e runtimeStressSystemEvents "$system_events"
 )
 
 if [[ -n "$membership_profile_a_uri" ]]; then
     membership_profile_a_base64=$(printf '%s' "$membership_profile_a_uri" | base64 | tr -d '\r\n')
     membership_profile_b_base64=$(printf '%s' "$membership_profile_b_uri" | base64 | tr -d '\r\n')
-    gradle_args+=(
-        -Pandroid.testInstrumentationRunnerArguments.runtimeStressMembershipProfileABase64="$membership_profile_a_base64"
-        -Pandroid.testInstrumentationRunnerArguments.runtimeStressMembershipProfileBBase64="$membership_profile_b_base64"
+    instrumentation_args+=(
+        -e runtimeStressMembershipProfileABase64 "$membership_profile_a_base64"
+        -e runtimeStressMembershipProfileBBase64 "$membership_profile_b_base64"
     )
 fi
 
-ANDROID_SERIAL="$serial" ./gradlew "${gradle_args[@]}"
+set +e
+instrumentation_output=$(adb -s "$serial" shell am instrument -w -r \
+    "${instrumentation_args[@]}" \
+    "$debug_test_package/androidx.test.runner.AndroidJUnitRunner")
+instrumentation_status=$?
+set -e
+printf '%s\n' "$instrumentation_output"
+
+if (( instrumentation_status != 0 )) ||
+    grep -Eq 'FAILURES!!!|INSTRUMENTATION_(FAILED|ABORTED)|shortMsg=|Process crashed' \
+        <<<"$instrumentation_output"; then
+    echo "runtime stress instrumentation failed" >&2
+    exit 1
+fi
+if ! grep -Eq 'OK \([0-9]+ tests?\)' <<<"$instrumentation_output"; then
+    echo "runtime stress instrumentation did not report a successful JUnit summary" >&2
+    exit 1
+fi

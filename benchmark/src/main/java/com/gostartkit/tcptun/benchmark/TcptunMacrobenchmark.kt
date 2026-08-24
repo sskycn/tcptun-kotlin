@@ -45,6 +45,7 @@ class TcptunMacrobenchmark {
         setupBlock = {
             startFixture("vpn", 1)
             check(device.wait(Until.hasObject(By.text("Benchmark VPN")), UI_TIMEOUT_MS))
+            device.executeShellCommand("pm grant $PACKAGE_NAME android.permission.POST_NOTIFICATIONS")
             device.executeShellCommand("appops set $PACKAGE_NAME ACTIVATE_VPN allow")
             killProcess()
         },
@@ -53,7 +54,7 @@ class TcptunMacrobenchmark {
         val profile = device.wait(Until.findObject(By.text("Benchmark VPN")), UI_TIMEOUT_MS)
             ?: error("benchmark VPN profile did not become usable")
         profile.click()
-        check(device.wait(Until.hasObject(By.text("Running")), VPN_TIMEOUT_MS))
+        check(device.wait(Until.hasObject(By.text("Connected, tap to test")), VPN_TIMEOUT_MS))
     }
 
     @Test
@@ -66,7 +67,7 @@ class TcptunMacrobenchmark {
         setupBlock = { killProcess() },
     ) {
         startFixture("flow", 1_000)
-        check(device.wait(Until.hasObject(By.textContains("Flow")), UI_TIMEOUT_MS))
+        check(device.wait(Until.hasObject(By.text("Traffic analysis")), UI_TIMEOUT_MS))
         device.swipe(
             device.displayWidth / 2,
             device.displayHeight * 3 / 4,
@@ -77,14 +78,14 @@ class TcptunMacrobenchmark {
     }
 
     @Test
-    fun thousandProfileListScroll() = benchmarkRule.measureRepeated(
+    fun productionMaximumProfileListScroll() = benchmarkRule.measureRepeated(
         packageName = PACKAGE_NAME,
         metrics = listOf(FrameTimingMetric(), MemoryUsageMetric(MemoryUsageMetric.Mode.Last)),
         compilationMode = CompilationMode.None(),
         startupMode = StartupMode.WARM,
         iterations = 3,
         setupBlock = {
-            startFixture("profiles", 1_000)
+            startFixture("profiles", PRODUCTION_MAX_STORED_PROFILES)
             check(device.wait(Until.hasObject(By.text("Benchmark 0000")), UI_TIMEOUT_MS))
             killProcess()
         },
@@ -113,6 +114,7 @@ class TcptunMacrobenchmark {
 
     private companion object {
         const val PACKAGE_NAME = "com.tcptun.client"
+        const val PRODUCTION_MAX_STORED_PROFILES = 256
         const val UI_TIMEOUT_MS = 15_000L
         const val VPN_TIMEOUT_MS = 30_000L
     }

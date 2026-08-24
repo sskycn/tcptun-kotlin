@@ -35,7 +35,7 @@ class AndroidBridgeContractTest {
 
     @Test
     fun currentBridgeReportsVersionedCoreIdentity() {
-        assertEquals("v0.2.5", Androidbridge.coreVersion())
+        assertEquals("v0.3.1", Androidbridge.coreVersion())
         assertTrue(Androidbridge.coreBuildID().matches(Regex("[0-9a-f]{12,40}(?:-dirty)?")))
     }
 

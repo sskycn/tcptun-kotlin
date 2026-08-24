@@ -78,23 +78,22 @@ class VpnServiceLifecycleTest {
                     )
                     context.startService(TcptunVpnService.updateFlowAnalysisIntent(context))
                     waitUntil("flow analysis switches without restart") {
-                        TcptunState.logs.any {
-                            it == "flow analysis switched without VPN restart: com.android.settings"
-                        }
+                        TcptunState.logs.any { it.startsWith("runtime settings applied without VPN restart:") }
                     }
+                    assertEquals("com.android.settings", TcptunState.state.value.flowAnalysisApp)
                     assertEquals(VpnStatus.Running, TcptunState.status)
                     assertEquals(sessionId, TcptunState.diagnostics.bridgeSessionId)
 
+                    TcptunState.clearLogs()
                     TcptunVpnService.writeRuntimeSettings(
                         context,
                         runningSettings.copy(flowAnalysisApp = ""),
                     )
                     context.startService(TcptunVpnService.updateFlowAnalysisIntent(context))
                     waitUntil("flow analysis disables without restart") {
-                        TcptunState.logs.any {
-                            it == "flow analysis switched without VPN restart: disabled"
-                        }
+                        TcptunState.logs.any { it.startsWith("runtime settings applied without VPN restart:") }
                     }
+                    assertEquals("", TcptunState.state.value.flowAnalysisApp)
                     assertEquals(sessionId, TcptunState.diagnostics.bridgeSessionId)
                 }
                 ServerSocket(0, 1, InetAddress.getByName(directTarget)).use { directServer ->

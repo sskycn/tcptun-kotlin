@@ -247,7 +247,8 @@ internal class VpnRuntimeStressHarness : AutoCloseable {
     }
 
     private fun safeSnapshotDescription(): String =
-        "status=${TcptunState.status}, ownership=${TcptunVpnService.runtimeOwnershipDebugSnapshots()}"
+        "status=${TcptunState.status}, ownership=${TcptunVpnService.runtimeOwnershipDebugSnapshots()}, " +
+            "logs=${TcptunState.logs.takeLast(80)}"
 
     private fun availablePort(): Int =
         ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { it.localPort }

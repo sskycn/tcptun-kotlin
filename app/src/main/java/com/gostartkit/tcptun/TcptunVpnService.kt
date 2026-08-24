@@ -1143,7 +1143,7 @@ class TcptunVpnService : VpnService() {
                     TcptunState.setConnectionsReady(false)
                     TcptunState.appendLog("rebuilding VPN after incomplete connection rollback")
                 }
-                val replacementIntent = if (failure == null) intent else startIntent(this, plan)
+                val replacementIntent = startIntent(this, plan)
                 dispatchStartRequest(
                     replacementToken,
                     VpnRuntimeStartRequest(

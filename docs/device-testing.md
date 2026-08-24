@@ -83,6 +83,10 @@ ApplySettings, TCPing, and RefreshClientIps. Values from 200 through 5000 transi
 accepted. The test clears logcat first and checks process exit history after the run.
 
 The runner refuses to start unless `RUNTIME_STRESS_DISPOSABLE_DEBUG_DATA=true` is explicit.
+Set `ANDROID_SERIAL` when more than one authorized device is connected. The runner builds the
+debug target and test APKs, installs them with ADB's non-streaming path, and invokes the same
+`AndroidJUnitRunner` stress classes directly. This avoids OEM package installers that reject
+UTP's streamed/split install session even though normal ADB push installs are authorized.
 It only force-stops and clears `com.tcptun.client.debug` and its debug test package; it never
 touches release app data in `com.tcptun.client`. Before any mutation, the host records Wi-Fi
 and mobile-data state and installs `EXIT`, `INT`, and `TERM` traps. The trap force-stops the
