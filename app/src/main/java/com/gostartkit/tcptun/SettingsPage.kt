@@ -202,8 +202,9 @@ internal fun SettingsPage(onBack: () -> Unit) {
     val lanPasswordRequiredMessage = stringResource(R.string.lan_proxy_password_required)
     val lanAuthenticationGeneratedMessage = stringResource(R.string.lan_proxy_auth_generated)
     val socksPasswordLabel = stringResource(R.string.socks_password)
-    val vpnState by TcptunState.state.collectAsStateWithLifecycle()
-    val diagnostics = vpnState.diagnostics
+    val runtimeUi by TcptunState.settingsRuntimeUiFlow.collectAsStateWithLifecycle(
+        initialValue = TcptunState.settingsRuntimeUi,
+    )
     val mtuOptions = listOf("1280", "1360", "1400", "1500")
     val defaultPoolLabel = stringResource(R.string.route_outbound_proxy)
     val defaultDirectLabel = stringResource(R.string.route_outbound_direct)
@@ -587,7 +588,7 @@ internal fun SettingsPage(onBack: () -> Unit) {
                             icon = Icons.Rounded.Check,
                             title = stringResource(R.string.current_effective),
                         )
-                        DiagnosticsLine("MTU", diagnostics.mtu.toString())
+                        DiagnosticsLine("MTU", runtimeUi.mtu.toString())
                         DiagnosticsLine(stringResource(R.string.log_level), settings.logLevel)
                         DiagnosticsLine(stringResource(R.string.local_proxy_protocol), settings.localProxyProtocol)
                         DiagnosticsLine(

@@ -28,8 +28,10 @@ private val DiagnosticsListItemSpacing = 8.dp
 
 @Composable
 internal fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
-    val vpnState by TcptunState.state.collectAsStateWithLifecycle()
-    val diagnostics = vpnState.diagnostics
+    val runtimeUi by TcptunState.diagnosticsRuntimeUiFlow.collectAsStateWithLifecycle(
+        initialValue = TcptunState.diagnosticsRuntimeUi,
+    )
+    val diagnostics = runtimeUi.diagnostics
     val coreIdentity = remember { tcptunCoreIdentity() }
     val context = LocalContext.current
     val appIdentity = remember(context) {
@@ -42,9 +44,9 @@ internal fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
             )
         } ?: TcptunDiagnosticsApplication(version = "", build = "")
     }
-    val snapshot = remember(vpnState, coreIdentity) {
-        TcptunDiagnosticsSnapshot.fromRuntimeState(
-            runtimeState = vpnState,
+    val snapshot = remember(runtimeUi, coreIdentity) {
+        TcptunDiagnosticsSnapshot.fromDiagnosticsUiState(
+            runtimeState = runtimeUi,
             appVersion = appIdentity.version,
             appBuild = appIdentity.build,
             coreIdentity = coreIdentity,

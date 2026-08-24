@@ -34,11 +34,13 @@ internal fun IpInformationPage(onBack: () -> Unit) {
     val context = LocalContext.current
     val ipInfoController = rememberLocalIpInfo(context)
     val ipInfo = ipInfoController.info
-    val vpnState by TcptunState.state.collectAsStateWithLifecycle()
+    val runtimeUi by TcptunState.ipInformationRuntimeUiFlow.collectAsStateWithLifecycle(
+        initialValue = TcptunState.ipInformationRuntimeUi,
+    )
     val settings = rememberUiRuntimeSettings(context) ?: RuntimeSettings()
     val configuredListenAddress = RuntimeSettingsRepository.localSocksListenAddress(settings)
-    val actualListenAddress = vpnState.diagnostics.bridgeListen
-        .takeIf { vpnState.status == VpnStatus.Running }
+    val actualListenAddress = runtimeUi.bridgeListen
+        .takeIf { runtimeUi.status == VpnStatus.Running }
         .orEmpty()
     val effectiveListenAddress = actualListenAddress.ifBlank { configuredListenAddress }
     val listenerNetwork = mixedListenerNetworkDisplay(
@@ -51,7 +53,7 @@ internal fun IpInformationPage(onBack: () -> Unit) {
         listenAddress = effectiveListenAddress,
         hotspotIpv4 = ipInfo.hotspotIpv4,
         underlyingIpv4 = ipInfo.underlyingIpv4,
-        proxyRunning = vpnState.status == VpnStatus.Running,
+        proxyRunning = runtimeUi.status == VpnStatus.Running,
     )
     val noneLabel = stringResource(R.string.none)
 
@@ -63,7 +65,7 @@ internal fun IpInformationPage(onBack: () -> Unit) {
         PullRefreshContainer(
             onRefresh = {
                 ipInfoController.refresh()
-                if (vpnState.status == VpnStatus.Running) {
+                if (runtimeUi.status == VpnStatus.Running) {
                     runRecoverableCatching {
                         context.startService(TcptunVpnService.refreshClientIpsIntent(context))
                     }
@@ -95,7 +97,7 @@ internal fun IpInformationPage(onBack: () -> Unit) {
                     )
                 }
                 item {
-                    val clientIps = vpnState.diagnostics.bridgeClientIps
+                    val clientIps = runtimeUi.bridgeClientIps
                     IpInformationCard(
                         title = stringResource(R.string.ip_connected_clients),
                         icon = Icons.Rounded.Hub,

@@ -100,6 +100,23 @@ data class TcptunDiagnosticsSnapshot(
     }
 
     companion object {
+        internal fun fromDiagnosticsUiState(
+            runtimeState: DiagnosticsRuntimeUiState,
+            appVersion: String,
+            appBuild: String,
+            coreIdentity: TcptunCoreIdentity,
+            nowMs: Long = System.currentTimeMillis(),
+        ): TcptunDiagnosticsSnapshot = fromRuntimeState(
+            runtimeState = TcptunRuntimeState(
+                status = runtimeState.status,
+                diagnostics = runtimeState.diagnostics,
+            ),
+            appVersion = appVersion,
+            appBuild = appBuild,
+            coreIdentity = coreIdentity,
+            nowMs = nowMs,
+        )
+
         internal fun fromRuntimeState(
             runtimeState: TcptunRuntimeState,
             appVersion: String,

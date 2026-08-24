@@ -441,7 +441,7 @@ internal fun SettingsTopBar(onBack: () -> Unit) {
 
 @Composable
 internal fun LogsDialog(onDismiss: () -> Unit) {
-    val vpnState by TcptunState.state.collectAsStateWithLifecycle()
+    val logs by TcptunState.logsFlow.collectAsStateWithLifecycle(initialValue = TcptunState.logs)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.running_logs)) },
@@ -463,7 +463,7 @@ internal fun LogsDialog(onDismiss: () -> Unit) {
                 ) {
                     SelectionContainer {
                         Text(
-                            vpnState.logs.joinToString("\n").ifBlank { noLogs },
+                            logs.joinToString("\n").ifBlank { noLogs },
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontFamily = FontFamily.Monospace,
                             style = MaterialTheme.typography.bodySmall,

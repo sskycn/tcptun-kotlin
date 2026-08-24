@@ -1,6 +1,7 @@
 package com.tcptun.client
 
 import android.util.Log
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -144,10 +145,27 @@ object TcptunState {
     private val _flowAnalysis = MutableStateFlow(FlowAnalysisState())
     val flowAnalysis: StateFlow<FlowAnalysisState> = _flowAnalysis.asStateFlow()
 
+    val vpnStatusFlow: Flow<VpnStatus> = state.selectRuntimeState(::selectVpnStatus)
+    val diagnosticsFlow: Flow<TcptunDiagnostics> = state.selectRuntimeState(::selectDiagnostics)
+    val logsFlow: Flow<List<String>> = state.selectRuntimeState(::selectLogs)
+    val tcpingFlow: Flow<TcpingProgress> = state.selectRuntimeState(::selectTcping)
+    val profileHealthFlow: Flow<Map<String, ProfileHealth>> = state.selectRuntimeState(::selectProfileHealth)
+    val flowAnalysisAppFlow: Flow<String> = state.selectRuntimeState(::selectFlowAnalysisApp)
+    val profileStateRevisionFlow: Flow<Long> = state.selectRuntimeState(::selectProfileStateRevision)
+    internal val profilesRuntimeUiFlow: Flow<ProfilesRuntimeUiState> = state.selectRuntimeState(::selectProfilesRuntimeUi)
+    internal val diagnosticsRuntimeUiFlow: Flow<DiagnosticsRuntimeUiState> = state.selectRuntimeState(::selectDiagnosticsRuntimeUi)
+    internal val ipInformationRuntimeUiFlow: Flow<IpInformationRuntimeUiState> = state.selectRuntimeState(::selectIpInformationRuntimeUi)
+    internal val settingsRuntimeUiFlow: Flow<SettingsRuntimeUiState> = state.selectRuntimeState(::selectSettingsRuntimeUi)
+
     val status: VpnStatus get() = state.value.status
     val lastError: String get() = state.value.lastError
     val diagnostics: TcptunDiagnostics get() = state.value.diagnostics
     val logs: List<String> get() = state.value.logs
+    val profileStateRevision: Long get() = state.value.profileStateRevision
+    internal val profilesRuntimeUi: ProfilesRuntimeUiState get() = selectProfilesRuntimeUi(state.value)
+    internal val diagnosticsRuntimeUi: DiagnosticsRuntimeUiState get() = selectDiagnosticsRuntimeUi(state.value)
+    internal val ipInformationRuntimeUi: IpInformationRuntimeUiState get() = selectIpInformationRuntimeUi(state.value)
+    internal val settingsRuntimeUi: SettingsRuntimeUiState get() = selectSettingsRuntimeUi(state.value)
 
     private var bridgeEpoch = 0L
     private var bridgeSessionId = -1L

@@ -225,7 +225,12 @@ internal fun TcptunScreen(
     var profilesBeforeDrag by remember { mutableStateOf<List<AppConfig>?>(null) }
     var profileReorderScrollJob by remember { mutableStateOf<Job?>(null) }
     val profileReorderScrollStep = with(LocalDensity.current) { 24.dp.toPx() }
-    val vpnState by TcptunState.state.collectAsStateWithLifecycle()
+    val vpnStatus by TcptunState.vpnStatusFlow.collectAsStateWithLifecycle(
+        initialValue = TcptunState.status,
+    )
+    val profileStateRevision by TcptunState.profileStateRevisionFlow.collectAsStateWithLifecycle(
+        initialValue = TcptunState.profileStateRevision,
+    )
     LaunchedEffect(appContext) {
         val generation = profileReloadGeneration.incrementAndGet()
         val loaded = profileMutationMutex.withLock {
@@ -233,8 +238,8 @@ internal fun TcptunScreen(
         }
         if (generation == profileReloadGeneration.get()) storedState = loaded
     }
-    LaunchedEffect(vpnState.status) {
-        if (vpnState.status.isTerminal) {
+    LaunchedEffect(vpnStatus) {
+        if (vpnStatus.isTerminal) {
             delay(100)
             val generation = profileReloadGeneration.incrementAndGet()
             val loaded = profileMutationMutex.withLock {
@@ -243,8 +248,8 @@ internal fun TcptunScreen(
             if (generation == profileReloadGeneration.get()) storedState = loaded
         }
     }
-    LaunchedEffect(vpnState.profileStateRevision) {
-        if (vpnState.profileStateRevision > 0) {
+    LaunchedEffect(profileStateRevision) {
+        if (profileStateRevision > 0) {
             val generation = profileReloadGeneration.incrementAndGet()
             val loaded = profileMutationMutex.withLock {
                 withContext(Dispatchers.IO) { profileRepository.load(appContext) }
@@ -421,7 +426,7 @@ internal fun TcptunScreen(
         }.await()
 
     fun openQrScanner() {
-        if (isVpnTransitionStatus(vpnState.status)) return
+        if (isVpnTransitionStatus(vpnStatus)) return
         scannerImportJob?.cancel()
         scannerImportJob = null
         scannerSessionGeneration += 1
@@ -466,7 +471,7 @@ internal fun TcptunScreen(
     }
 
     fun importFromClipboard() {
-        if (isVpnTransitionStatus(vpnState.status)) return
+        if (isVpnTransitionStatus(vpnStatus)) return
         screenScope.launch {
             try {
                 val link = withContext(Dispatchers.IO) { clipboardText(context).getOrThrow() }.trim()
@@ -638,7 +643,7 @@ internal fun TcptunScreen(
     }
 
     fun toggleProfile(profile: AppConfig) {
-        if (isVpnTransitionStatus(vpnState.status)) return
+        if (isVpnTransitionStatus(vpnStatus)) return
         screenScope.launch {
             applyRunningMutation { current ->
                 val nextActiveIds = nextActiveProfileIds(
@@ -652,7 +657,7 @@ internal fun TcptunScreen(
     }
 
     fun deleteProfile(profile: AppConfig) {
-        if (isVpnTransitionStatus(vpnState.status)) return
+        if (isVpnTransitionStatus(vpnStatus)) return
         screenScope.launch {
             var profileIndex = -1
             var deletedProfile: AppConfig? = null
@@ -700,7 +705,7 @@ internal fun TcptunScreen(
     }
 
     fun startProfileDrag(profileId: String) {
-        if (isVpnTransitionStatus(vpnState.status)) return
+        if (isVpnTransitionStatus(vpnStatus)) return
         draggedProfileId = profileId
         draggedProfileOffset = 0f
         profilesBeforeDrag = state.profiles
@@ -810,26 +815,29 @@ internal fun TcptunScreen(
             onBack = { destination = MainDestination.Profiles },
         )
     } else if (editing == null) {
+        val profilesRuntime by TcptunState.profilesRuntimeUiFlow.collectAsStateWithLifecycle(
+            initialValue = TcptunState.profilesRuntimeUi,
+        )
         val listIpInfo = rememberLocalIpInfo(context)
         val configuredListenAddress = RuntimeSettingsRepository.localSocksListenAddress(
             rememberUiRuntimeSettings(appContext) ?: RuntimeSettings(),
         )
-        val effectiveListenAddress = vpnState.diagnostics.bridgeListen
-            .takeIf { vpnState.status == VpnStatus.Running }
+        val effectiveListenAddress = profilesRuntime.bridgeListen
+            .takeIf { profilesRuntime.status == VpnStatus.Running }
             .orEmpty()
             .ifBlank { configuredListenAddress }
         val proxyAccess = proxyAccessDisplay(
             listenAddress = effectiveListenAddress,
             hotspotIpv4 = listIpInfo.info.hotspotIpv4,
             underlyingIpv4 = listIpInfo.info.underlyingIpv4,
-            proxyRunning = vpnState.status == VpnStatus.Running,
+            proxyRunning = profilesRuntime.status == VpnStatus.Running,
         )
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             topBar = {
             TopBar(
                 title = stringResource(R.string.profiles_title),
-                actionsEnabled = !isVpnTransitionStatus(vpnState.status),
+                actionsEnabled = !isVpnTransitionStatus(profilesRuntime.status),
                 onDiagnostics = { destination = MainDestination.Diagnostics },
                 onRouteManagement = { destination = MainDestination.RouteManagement },
                 onFlowAnalysis = { destination = MainDestination.FlowAnalysis },
@@ -841,19 +849,19 @@ internal fun TcptunScreen(
             snackbarHost = { AutoDismissSnackbarHost(snackbarHostState) },
             bottomBar = {
                 val tcpingEnabled = canStartTcping(
-                    status = vpnState.status,
+                    status = profilesRuntime.status,
                     activeProfileCount = state.activeProfiles.size,
-                    connectionsReady = vpnState.connectionsReady,
+                    connectionsReady = profilesRuntime.connectionsReady,
                 )
                 BottomStatus(
-                    status = vpnState.status,
-                    error = vpnState.lastError,
-                    tcping = vpnState.tcping,
+                    status = profilesRuntime.status,
+                    error = profilesRuntime.lastError,
+                    tcping = profilesRuntime.tcping,
                     hasProfiles = state.profiles.isNotEmpty(),
-                    connectionsReady = vpnState.connectionsReady,
+                    connectionsReady = profilesRuntime.connectionsReady,
                     tcpingEnabled = tcpingEnabled,
                     onClick = {
-                        if (!tcpingEnabled || vpnState.tcping.running) return@BottomStatus
+                        if (!tcpingEnabled || profilesRuntime.tcping.running) return@BottomStatus
                         val tcpingTarget = TCPING_TARGETS.getOrNull(tcpingTargetIndex)
                             ?: TCPING_TARGETS.firstOrNull()
                             ?: return@BottomStatus
@@ -916,9 +924,9 @@ internal fun TcptunScreen(
                                 shape = CardShape
                             },
                         profile = profile,
-                        running = profile.id in state.activeIds && isVpnActiveStatus(vpnState.status),
-                        health = vpnState.profileHealth[profile.id],
-                        enabled = !isVpnTransitionStatus(vpnState.status),
+                        running = profile.id in state.activeIds && isVpnActiveStatus(profilesRuntime.status),
+                        health = profilesRuntime.profileHealth[profile.id],
+                        enabled = !isVpnTransitionStatus(profilesRuntime.status),
                         onClick = { toggleProfile(profile) },
                         onShare = { uri -> shareProfile(context, uri) },
                         onShowQrCode = { profileQrCode = profile },
@@ -933,7 +941,7 @@ internal fun TcptunScreen(
                 if (state.profiles.isEmpty()) {
                     item {
                         EmptyState(
-                            enabled = !isVpnTransitionStatus(vpnState.status),
+                            enabled = !isVpnTransitionStatus(profilesRuntime.status),
                             onAdd = {
                                 editingProfile = AppConfig(
                                     id = UUID.randomUUID().toString(),
@@ -997,7 +1005,7 @@ internal fun TcptunScreen(
     pendingDeepLinkProfile?.let { profile ->
         ConfirmProfileImportDialog(
             profile = profile,
-            enabled = !isVpnTransitionStatus(vpnState.status),
+            enabled = !isVpnTransitionStatus(vpnStatus),
             onConfirm = {
                 pendingDeepLinkProfile = null
                 screenScope.launch {
