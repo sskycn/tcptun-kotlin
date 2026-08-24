@@ -21,6 +21,9 @@ internal data class RuntimeOwnershipDebugSnapshot(
     val destroyed: Boolean,
     val vpnStatus: VpnStatus,
     val connectionsReady: Boolean,
+    val actorPhase: String = runtimePhase,
+    val actorOwnerServiceId: Long = serviceInstanceId,
+    val actorGeneration: Int = lifecycleGeneration,
 )
 
 internal data class RuntimeOwnershipDebugCapture(
@@ -37,6 +40,9 @@ internal data class RuntimeOwnershipDebugCapture(
     val destroyed: Boolean,
     val vpnStatus: VpnStatus,
     val connectionsReady: Boolean,
+    val actorPhase: String = runtimePhase,
+    val actorOwnerServiceId: Long = 0L,
+    val actorGeneration: Int = lifecycleGeneration,
 )
 
 internal fun stableRuntimeOwnershipDebugSnapshot(
@@ -69,6 +75,9 @@ private fun RuntimeOwnershipDebugCapture.toSnapshot(
     destroyed = destroyed,
     vpnStatus = vpnStatus,
     connectionsReady = connectionsReady,
+    actorPhase = actorPhase,
+    actorOwnerServiceId = actorOwnerServiceId.takeIf { it > 0L } ?: serviceInstanceId,
+    actorGeneration = actorGeneration,
 )
 
 /** Tracks every live debug Service, including an old instance retaining native cleanup. */

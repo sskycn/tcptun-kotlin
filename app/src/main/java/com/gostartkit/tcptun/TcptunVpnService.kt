@@ -1578,6 +1578,7 @@ class TcptunVpnService : VpnService() {
                 TcptunState.appendLog(
                     "tcptun lifecycle did not stop within the destroy deadline; native ownership retained",
                 )
+                runtimeCoordinator.shutdownActor()
                 return@coordinator
             }
 
@@ -1595,6 +1596,7 @@ class TcptunVpnService : VpnService() {
                     "tcptun destroy cleanup incomplete; native resources retained for safe process teardown",
                 )
             }
+            runtimeCoordinator.shutdownActor()
         }
         if (coordinator == null) {
             cleanupStep("start VPN destroy coordinator") {
@@ -1621,6 +1623,9 @@ class TcptunVpnService : VpnService() {
             destroyed = destroyed.get(),
             vpnStatus = state.status,
             connectionsReady = state.connectionsReady,
+            actorPhase = coordinator.phase.javaClass.simpleName,
+            actorOwnerServiceId = coordinator.serviceInstanceId,
+            actorGeneration = coordinator.lifecycleGeneration,
         )
     }
 
