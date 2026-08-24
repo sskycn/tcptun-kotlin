@@ -197,6 +197,11 @@
     <string name="route_example_app">需要 Android 10 或更高版本。示例：com.example.app</string>
     <string name="socks_username">SOCKS 用户名</string>
     <string name="socks_password">SOCKS 密码</string>
+    <string name="show_password">显示密码</string>
+    <string name="hide_password">隐藏密码</string>
+    <string name="copy_password">复制密码</string>
+    <string name="lan_proxy_password_required">监听所有网络接口时必须设置密码。</string>
+    <string name="lan_proxy_auth_generated">已启用局域网代理身份验证。\n已生成安全密码。</string>
     <string name="socks_auth">SOCKS 认证</string>
     <string name="socks_settings_note">本地监听默认使用 SOCKS5；选择 mixed 后可同时接受 SOCKS5 和 HTTP 代理客户端。默认绑定 127.0.0.1，启用监听所有网卡后绑定 0.0.0.0。用户名和密码可留空。默认本地代理走默认出口；开启「本地代理走路由规则」后才会走托管路由。</string>
     <string name="seconds_value">%1$d 秒</string>

@@ -2,6 +2,7 @@ package com.tcptun.client
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -19,13 +20,33 @@ class PendingUiStateCodecTest {
         )
         val plan = ProfileRunPlan(listOf(profile), setOf(profile.id))
 
-        assertEquals(plan, decodePendingRunPlan(encodePendingRunPlan(plan)))
-        assertEquals(profile, decodePendingProfile(encodePendingProfile(profile)))
+        val encodedPlan = requireNotNull(encodePendingRunPlan(plan))
+        val encodedProfile = requireNotNull(encodePendingProfile(profile))
+
+        listOf(profile.token, profile.serverHost, profile.toJson().toString()).forEach { secret ->
+            assertFalse(encodedPlan.contains(secret))
+            assertFalse(encodedProfile.contains(secret))
+        }
+        assertEquals(plan, decodePendingRunPlan(encodedPlan))
+        assertEquals(profile, decodePendingProfile(encodedProfile))
+        assertNull(decodePendingRunPlan(encodedPlan))
+        assertNull(decodePendingProfile(encodedProfile))
     }
 
     @Test
     fun appSpecificDecodersSafelyClearMalformedState() {
-        assertNull(decodePendingRunPlan("not-json"))
-        assertNull(decodePendingProfile("{}"))
+        assertNull(decodePendingRunPlan("missing-operation-id"))
+        assertNull(decodePendingProfile("missing-operation-id"))
+    }
+
+    @Test
+    fun deepLinkSavedStateContainsOnlyOpaqueOneTimeId() {
+        val profileUri = "vless://secret-token@secret.example:443"
+        val operationId = encodePendingProfileUri(profileUri)
+
+        assertFalse(operationId.contains("secret-token"))
+        assertFalse(operationId.contains("secret.example"))
+        assertEquals(profileUri, decodePendingProfileUri(operationId))
+        assertNull(decodePendingProfileUri(operationId))
     }
 }

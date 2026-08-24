@@ -74,7 +74,7 @@ class ProfileSecretSerializationAndroidTest {
     }
 
     @Test
-    fun legacyRuntimeSettingsKeepEmptyPasswordAndAreEncrypted() {
+    fun legacyAnonymousLanRuntimeSettingsGeneratePasswordAndEncryptIt() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val preferences = context.getSharedPreferences("tcptun_runtime", 0)
         val original = RuntimeSettingsRepository.read(context)
@@ -90,10 +90,12 @@ class ProfileSecretSerializationAndroidTest {
                 .all.values.filterIsInstance<String>()
 
             assertEquals("legacy-user", migrated.socksUsername)
-            assertEquals("", migrated.socksPassword)
+            assertTrue(migrated.socksPassword.isNotEmpty())
+            assertEquals(32, migrated.socksPassword.length)
             assertFalse(preferences.contains("runtimeSocksUsername"))
             assertFalse(preferences.contains("runtimeSocksPassword"))
             assertFalse(encryptedValues.any { it.contains("legacy-user") })
+            assertFalse(encryptedValues.any { it.contains(migrated.socksPassword) })
             assertEquals(2, preferences.getInt("runtimeStorageVersion", 0))
         } finally {
             preferences.edit().clear().commit()

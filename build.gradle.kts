@@ -4,3 +4,15 @@ plugins {
     alias(libs.plugins.kotlin.compose) apply false
     alias(libs.plugins.android.test) apply false
 }
+
+tasks.register("qualityGate") {
+    group = "verification"
+    description = "Runs all source-quality checks required by CI and formal releases."
+    dependsOn(
+        ":app:testDebugUnitTest",
+        ":app:lintDebug",
+        ":app:lintRelease",
+        ":app:compileDebugAndroidTestKotlin",
+        ":app:maintainabilityCheck",
+    )
+}

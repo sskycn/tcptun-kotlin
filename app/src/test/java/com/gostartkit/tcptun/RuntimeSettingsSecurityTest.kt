@@ -1,9 +1,47 @@
 package com.tcptun.client
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RuntimeSettingsSecurityTest {
+    @Test
+    fun loopbackListenerAllowsEmptyAuthentication() {
+        assertEquals(RuntimeSettings(), requireSafeRuntimeSettings(RuntimeSettings()))
+    }
+
+    @Test
+    fun lanListenerWithConfiguredPasswordIsAllowed() {
+        val settings = RuntimeSettings(socksListenAll = true, socksPassword = "configured")
+
+        assertEquals(settings, requireSafeRuntimeSettings(settings))
+    }
+
+    @Test
+    fun unsafeLanListenerIsRepairedOrRejectedAtEveryRuntimeBoundary() {
+        val unsafe = RuntimeSettings(socksListenAll = true)
+        val repaired = secureRuntimeSettings(unsafe)
+
+        assertTrue(repaired.socksPassword.isNotEmpty())
+        assertEquals(repaired, requireSafeRuntimeSettings(repaired))
+        assertThrows(IllegalArgumentException::class.java) { requireSafeRuntimeSettings(unsafe) }
+        assertThrows(IllegalArgumentException::class.java) {
+            requireSafeAppliedRuntimeSettings(AppliedRuntimeSettings.from(unsafe))
+        }
+    }
+
+    @Test
+    fun generatedLanPasswordsHave192BitsOfUrlSafeEntropyAndDiffer() {
+        val first = generateLanProxyPassword()
+        val second = generateLanProxyPassword()
+
+        assertEquals(32, first.length)
+        assertTrue(first.matches(Regex("^[A-Za-z0-9_-]+$")))
+        assertNotEquals(first, second)
+    }
+
     @Test
     fun restoredNonSecretDraftRehydratesPersistedCredentialsBeforeUnrelatedSave() {
         val persisted = RuntimeSettings(

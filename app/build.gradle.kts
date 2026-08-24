@@ -1,3 +1,4 @@
+import java.io.File
 import java.util.Properties
 import org.gradle.api.tasks.bundling.Zip
 import org.gradle.api.tasks.Exec
@@ -27,6 +28,26 @@ val hasReleaseSigningConfig =
         !releaseStorePassword.isNullOrBlank() &&
         !releaseKeyAlias.isNullOrBlank() &&
         !releaseKeyPassword.isNullOrBlank()
+val releaseStoreAbsolutePath = releaseStoreFile
+    ?.let { rootProject.file(it).absolutePath }
+    .orEmpty()
+
+val requireReleaseSigning = tasks.register("requireReleaseSigning") {
+    group = "verification"
+    description = "Fails release artifact builds unless a complete signing configuration is present."
+    inputs.property("releaseSigningConfigured", hasReleaseSigningConfig)
+    inputs.property("releaseStoreAbsolutePath", releaseStoreAbsolutePath)
+    doLast {
+        val configured = inputs.properties.getValue("releaseSigningConfigured") as Boolean
+        val storePath = inputs.properties.getValue("releaseStoreAbsolutePath") as String
+        check(configured) {
+            "Release signing is not configured. Provide signing.properties or TCPTUN_RELEASE_* variables."
+        }
+        check(File(storePath).isFile) {
+            "Release signing store file does not exist: $storePath"
+        }
+    }
+}
 
 val appVersionName = providers.gradleProperty("releaseVersionName").orNull?.also {
     require(it.isNotBlank()) { "releaseVersionName must not be blank" }
@@ -215,7 +236,7 @@ val verifyAndroidBridgeDebug = registerBridgeVerification("verifyAndroidBridgeDe
 
 tasks.configureEach {
     when (name) {
-        "assembleRelease", "bundleRelease" -> dependsOn(verifyAndroidBridge)
+        "assembleRelease", "bundleRelease" -> dependsOn(verifyAndroidBridge, requireReleaseSigning)
         "assembleDebug", "testDebugUnitTest", "lintDebug" -> dependsOn(verifyAndroidBridgeDebug)
     }
 }

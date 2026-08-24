@@ -146,7 +146,7 @@ if [ "$BUILD_BRIDGE" = "1" ] || [ ! -f "$BRIDGE_AAR" ]; then
 fi
 
 log "Building signed release APK"
-"$GRADLE" :app:assembleRelease
+"$GRADLE" qualityGate :app:verifyAndroidBridge :app:assembleRelease
 
 [ -f "$APK" ] || die "release APK not found: $APK"
 

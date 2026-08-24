@@ -179,7 +179,7 @@ import kotlin.math.roundToInt
 internal const val SnackbarAutoDismissMillis = 6_000L
 internal const val MaxUiErrorLength = 4_096
 private const val SavedProfileIntentSequence = "profileIntentSequence"
-private const val SavedPendingProfileUri = "pendingProfileUri"
+private const val SavedPendingProfileOperationId = "pendingProfileOperationId"
 /** Brief wait after requesting a monitor refresh so pulled UI can show updated values. */
 internal const val PullRefreshSettleMillis = 350L
 internal const val PostNotificationsPermission = "android.permission.POST_NOTIFICATIONS"
@@ -201,8 +201,6 @@ internal const val MaxProfileChoiceInputLength = 256
 internal const val MaxRealityKeyInputLength = 4_096
 internal const val MaxEchKeyInputLength = 4_096
 
-// TODO(security): replace pending plan/profile SavedState payloads with in-memory IDs so profile
-// credentials are not serialized by Android during process recreation.
 internal val PendingRunPlanSaver = Saver<ProfileRunPlan?, String>(
     save = { plan -> encodePendingRunPlan(plan) },
     restore = { encoded -> decodePendingRunPlan(encoded) },
@@ -360,8 +358,7 @@ class MainActivity : ComponentActivity() {
             handleProfileIntent(intent)
         } else {
             profileIntentSequence = savedInstanceState.getLong(SavedProfileIntentSequence, 0L)
-            savedInstanceState.getString(SavedPendingProfileUri)
-                ?.takeIf { it.length <= MaxProfileUriLength }
+            decodePendingProfileUri(savedInstanceState.getString(SavedPendingProfileOperationId))
                 ?.let { value -> pendingProfileUri = PendingProfileUri(profileIntentSequence, value) }
         }
         enableEdgeToEdge()
@@ -412,13 +409,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putLong(SavedProfileIntentSequence, profileIntentSequence)
-        pendingProfileUri?.value?.let { value -> outState.putString(SavedPendingProfileUri, value) }
+        pendingProfileUri?.value?.let { value ->
+            outState.putString(SavedPendingProfileOperationId, encodePendingProfileUri(value))
+        }
         super.onSaveInstanceState(outState)
     }
 
     private fun handleProfileIntent(intent: Intent?) {
         val value = profileUriFromIntent(intent) ?: return
         pendingProfileUri = PendingProfileUri(++profileIntentSequence, value)
+        // Do not leave the credential-bearing launch Intent attached to the Activity. Framework
+        // task recreation may retain the current Intent independently of our explicit Bundle.
+        setIntent(Intent(this, MainActivity::class.java).setAction(Intent.ACTION_MAIN))
     }
 
     private fun releaseUiVisibility() {

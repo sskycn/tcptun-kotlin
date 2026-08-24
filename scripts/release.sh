@@ -14,7 +14,6 @@ Options:
   --branch NAME    Release branch to require before tagging (default: main)
   --remote NAME    Git remote to push to (default: origin)
   --no-push        Commit and tag locally without pushing
-  --skip-tests     Skip the Android Bridge build and Gradle quality gates
   -h, --help       Show this help
 EOF
 }
@@ -42,7 +41,6 @@ version=""
 branch="main"
 remote="origin"
 push_release=1
-run_tests=1
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -58,9 +56,6 @@ while [ "$#" -gt 0 ]; do
 			;;
 		--no-push)
 			push_release=0
-			;;
-		--skip-tests)
-			run_tests=0
 			;;
 		-h|--help)
 			usage
@@ -114,8 +109,6 @@ current_branch=$(git rev-parse --abbrev-ref HEAD) || die "failed to read current
 
 [ -z "$(git status --porcelain)" ] || die "working tree is dirty; commit or stash changes first"
 
-run ./scripts/build-androidbridge.sh --verify-release
-
 run git fetch "$remote" --tags
 
 local_head=$(git rev-parse HEAD) || die "failed to read local HEAD"
@@ -130,6 +123,14 @@ if git ls-remote --exit-code --tags "$remote" "refs/tags/${version}" >/dev/null 
 	die "remote tag ${version} already exists on ${remote}"
 fi
 
+run ./gradlew :app:requireReleaseSigning
+run ./scripts/build-androidbridge.sh --verify-release
+run ./scripts/build-androidbridge.sh
+run ./gradlew :app:verifyAndroidBridge
+
+[ -z "$(git status --porcelain)" ] || \
+	die "Bridge rebuild changed the working tree; review and commit the pinned AAR/lock before releasing"
+
 perl -0pi -e 's/^releaseVersionName=.*$/releaseVersionName='"${version_name}"'/m' gradle.properties
 perl -0pi -e 's/^releaseVersionCode=.*$/releaseVersionCode='"${version_code}"'/m' gradle.properties
 
@@ -138,14 +139,21 @@ grep -Fx "releaseVersionName=${version_name}" gradle.properties >/dev/null || \
 grep -Fx "releaseVersionCode=${version_code}" gradle.properties >/dev/null || \
 	die "failed to update releaseVersionCode in gradle.properties"
 
-if [ "$run_tests" -eq 1 ]; then
-	run ./scripts/build-androidbridge.sh
-	run ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:bundleRelease
-fi
+release_committed=0
+restore_version_on_failure() {
+	if [ "$release_committed" -eq 0 ]; then
+		git restore -- gradle.properties >/dev/null 2>&1 || true
+	fi
+}
+trap restore_version_on_failure EXIT
+
+run ./gradlew qualityGate :app:verifyAndroidBridge :app:bundleRelease
 
 run git add gradle.properties
 run git commit -m "chore: release ${version}"
 run git tag -a "$version" -m "$version"
+release_committed=1
+trap - EXIT
 
 if [ "$push_release" -eq 1 ]; then
 	run git push "$remote" "$branch"

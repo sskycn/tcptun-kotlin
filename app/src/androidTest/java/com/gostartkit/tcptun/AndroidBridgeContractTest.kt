@@ -722,11 +722,8 @@ class AndroidBridgeContractTest {
                     context,
                     originalSettings.copy(localProxyProtocol = protocol),
                 )
-                val config = JSONObject(
-                    TcptunVpnService.startIntent(context, profile)
-                        .getStringExtra(TcptunVpnService.EXTRA_CONFIG)
-                        .orEmpty(),
-                )
+                val intent = TcptunVpnService.startIntent(context, profile)
+                val config = JSONObject(VpnServiceIntents.parseStartCommand(context, intent).configJson)
                 assertEquals(
                     protocol,
                     config.getJSONArray("inbounds").getJSONObject(0).getString("type"),
@@ -753,21 +750,17 @@ class AndroidBridgeContractTest {
                 context,
                 originalSettings.copy(defaultOutbound = DefaultOutboundDirect),
             )
-            val direct = JSONObject(
-                TcptunVpnService.startIntent(context, profile)
-                    .getStringExtra(TcptunVpnService.EXTRA_CONFIG)
-                    .orEmpty(),
-            )
+            val directIntent = TcptunVpnService.startIntent(context, profile)
+            val direct = JSONObject(VpnServiceIntents.parseStartCommand(context, directIntent).configJson)
             assertEquals("direct", direct.getJSONObject("route").getString("default_outbound"))
 
             TcptunVpnService.writeRuntimeSettings(
                 context,
                 originalSettings.copy(defaultOutbound = profile.id),
             )
+            val selectedIntent = TcptunVpnService.startIntent(context, profile)
             val selectedFallsBackToPool = JSONObject(
-                TcptunVpnService.startIntent(context, profile)
-                    .getStringExtra(TcptunVpnService.EXTRA_CONFIG)
-                    .orEmpty(),
+                VpnServiceIntents.parseStartCommand(context, selectedIntent).configJson,
             )
             assertEquals(
                 "profile-pool",

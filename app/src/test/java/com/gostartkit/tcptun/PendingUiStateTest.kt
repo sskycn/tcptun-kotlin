@@ -1,31 +1,35 @@
 package com.tcptun.client
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 
 class PendingUiStateTest {
     @Test
-    fun boundedEncoderAcceptsLimitAndRejectsOversizedOrFailedEncoding() {
-        assertEquals(
-            "12345678",
-            encodeBoundedSavedState("12345678", maxLength = 8) { it },
+    fun processLocalOperationIdContainsNoProfileFieldsAndIsOneTime() {
+        val profile = AppConfig(
+            id = "pending-profile",
+            serverHost = "pending-secret.example",
+            token = "pending-secret-token",
+            rawConfigJson = "{\"token\":\"pending-raw-secret\"}",
         )
-        assertNull(encodeBoundedSavedState("123456789", maxLength = 8) { it })
-        assertNull(encodeBoundedSavedState("value", maxLength = 8) { error("encode failed") })
-        assertNull(encodeBoundedSavedState("", maxLength = 8) { it })
-        assertNull(encodeBoundedSavedState(null as String?, maxLength = 8) { it })
+
+        val operationId = requireNotNull(encodePendingProfile(profile))
+
+        listOf(profile.serverHost, profile.token, profile.rawConfigJson).forEach { marker ->
+            assertFalse(operationId.contains(marker))
+        }
+        assertEquals(profile, decodePendingProfile(operationId))
+        assertNull(decodePendingProfile(operationId))
     }
 
     @Test
-    fun boundedDecoderAcceptsLimitAndSafelyClearsInvalidState() {
-        assertEquals(
-            "decoded:12345678",
-            decodeBoundedSavedState("12345678", maxLength = 8) { "decoded:$it" },
-        )
-        assertNull(decodeBoundedSavedState("123456789", maxLength = 8) { it })
-        assertNull(decodeBoundedSavedState("malformed", maxLength = 16) { error("parse failed") })
-        assertNull(decodeBoundedSavedState("", maxLength = 8) { it })
-        assertNull(decodeBoundedSavedState(null, maxLength = 8) { it })
+    fun invalidOrExpiredOperationSafelyClearsState() {
+        PendingUiOperationStore.clearForTest()
+
+        assertNull(decodePendingProfile("not-a-live-operation"))
+        assertNull(decodePendingRunPlan("not-a-live-operation"))
+        assertNull(decodePendingProfileUri("not-a-live-operation"))
     }
 }

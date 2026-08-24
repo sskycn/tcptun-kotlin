@@ -199,8 +199,13 @@
     <string name="route_example_app">Android 10 or newer. Example: com.example.app</string>
     <string name="socks_username">SOCKS username</string>
     <string name="socks_password">SOCKS password</string>
+    <string name="show_password">Show password</string>
+    <string name="hide_password">Hide password</string>
+    <string name="copy_password">Copy password</string>
+    <string name="lan_proxy_password_required">A password is required while listening on all interfaces.</string>
+    <string name="lan_proxy_auth_generated">LAN proxy authentication has been enabled.\nA secure password was generated.</string>
     <string name="socks_auth">SOCKS auth</string>
-    <string name="socks_settings_note">The local listener uses SOCKS5 by default. Select mixed to accept both SOCKS5 and HTTP proxy clients. It binds to 127.0.0.1 by default; enable all interfaces to bind 0.0.0.0. Username/password are optional. Local proxy traffic uses the default outbound unless “Route local proxy traffic” is enabled.</string>
+    <string name="socks_settings_note">The local listener uses SOCKS5 by default. Select mixed to accept both SOCKS5 and HTTP proxy clients. It binds to 127.0.0.1 by default; listening on all interfaces requires a password. Local proxy traffic uses the default outbound unless “Route local proxy traffic” is enabled.</string>
     <string name="seconds_value">%1$ds</string>
     <string name="recent_restart_reason">Last restart reason</string>
     <string name="transparent_proxy_settings">Transparent proxy settings</string>

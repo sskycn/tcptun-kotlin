@@ -1,66 +1,69 @@
 package com.tcptun.client
 
-import org.json.JSONObject
+import java.util.UUID
+
+internal sealed interface PendingUiOperation {
+    data class RunPlan(val value: ProfileRunPlan) : PendingUiOperation
+    data class Profile(val value: AppConfig) : PendingUiOperation
+    data class ProfileUri(val value: String) : PendingUiOperation
+}
 
 /**
- * Saved-state strings are written into Activity state and therefore share the Binder transaction
- * budget with framework state. A run plan can be larger than a single profile, so keep separate
- * conservative limits instead of accepting the much larger on-disk profile limits.
+ * Process-local handoff for UI values that contain credentials. Android SavedState receives only
+ * the random operation ID. Losing the process intentionally loses these transient operations;
+ * durable profile data remains available from the encrypted profile repository.
  */
-internal const val MaxPendingRunPlanJsonLength = 256 * 1024
-internal const val MaxPendingProfileJsonLength = 128 * 1024
+internal object PendingUiOperationStore {
+    private const val MaxEntries = 64
+    private val operations = LinkedHashMap<String, PendingUiOperation>()
 
-internal fun <T> encodeBoundedSavedState(
-    value: T?,
-    maxLength: Int,
-    encode: (T) -> String,
-): String? {
-    if (value == null || maxLength <= 0) return null
-    return runRecoverableCatching { encode(value) }
-        .getOrNull()
-        ?.takeIf { it.isNotBlank() && it.length <= maxLength }
-}
-
-internal fun <T> decodeBoundedSavedState(
-    encoded: String?,
-    maxLength: Int,
-    decode: (String) -> T,
-): T? {
-    if (encoded.isNullOrBlank() || maxLength <= 0 || encoded.length > maxLength) return null
-    return runRecoverableCatching { decode(encoded) }.getOrNull()
-}
-
-internal fun encodePendingRunPlan(plan: ProfileRunPlan?): String? = encodeBoundedSavedState(
-    value = plan,
-    maxLength = MaxPendingRunPlanJsonLength,
-) { value -> value.normalized().toJson().toString() }
-
-internal fun decodePendingRunPlan(encoded: String?): ProfileRunPlan? = decodeBoundedSavedState(
-    encoded = encoded,
-    maxLength = MaxPendingRunPlanJsonLength,
-) { value ->
-    requireSafeJsonNesting(value)
-    ProfileRunPlan.fromJson(JSONObject(value))
-}
-
-internal fun encodePendingProfile(profile: AppConfig?): String? = encodeBoundedSavedState(
-    value = profile,
-    maxLength = MaxPendingProfileJsonLength,
-) { value ->
-    require(value.hasSafeStorageSize()) { "pending profile data is too large" }
-    value.toJson().toString()
-}
-
-internal fun decodePendingProfile(encoded: String?): AppConfig? = decodeBoundedSavedState(
-    encoded = encoded,
-    maxLength = MaxPendingProfileJsonLength,
-) { value ->
-    requireSafeJsonNesting(value)
-    AppConfig.fromJson(JSONObject(value)).also { profile ->
-        require(profile.id.isNotBlank() && profile.id.length <= MaxProfileIdLength) {
-            "invalid pending profile ID"
+    @Synchronized
+    fun put(value: PendingUiOperation): String {
+        while (operations.size >= MaxEntries) {
+            operations.remove(operations.entries.first().key)
         }
-        require(profile.hasSafeStorageSize()) { "pending profile data is too large" }
-        profile.validate()?.let { error -> throw IllegalArgumentException(error) }
+        return UUID.randomUUID().toString().also { id -> operations[id] = value }
+    }
+
+    @Synchronized
+    fun get(id: String): PendingUiOperation? = operations[id]
+
+    @Synchronized
+    fun consume(id: String): PendingUiOperation? = operations.remove(id)
+
+    @Synchronized
+    fun remove(id: String) {
+        operations.remove(id)
+    }
+
+    @Synchronized
+    internal fun clearForTest() {
+        operations.clear()
     }
 }
+
+internal fun encodePendingRunPlan(plan: ProfileRunPlan?): String? = plan?.let {
+    PendingUiOperationStore.put(PendingUiOperation.RunPlan(it.normalized()))
+}
+
+internal fun decodePendingRunPlan(operationId: String?): ProfileRunPlan? = operationId
+    ?.let(PendingUiOperationStore::consume)
+    ?.let { it as? PendingUiOperation.RunPlan }
+    ?.value
+
+internal fun encodePendingProfile(profile: AppConfig?): String? = profile?.let {
+    PendingUiOperationStore.put(PendingUiOperation.Profile(it))
+}
+
+internal fun decodePendingProfile(operationId: String?): AppConfig? = operationId
+    ?.let(PendingUiOperationStore::consume)
+    ?.let { it as? PendingUiOperation.Profile }
+    ?.value
+
+internal fun encodePendingProfileUri(profileUri: String): String =
+    PendingUiOperationStore.put(PendingUiOperation.ProfileUri(profileUri))
+
+internal fun decodePendingProfileUri(operationId: String?): String? = operationId
+    ?.let(PendingUiOperationStore::consume)
+    ?.let { it as? PendingUiOperation.ProfileUri }
+    ?.value

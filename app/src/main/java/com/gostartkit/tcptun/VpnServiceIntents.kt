@@ -2,7 +2,6 @@ package com.tcptun.client
 
 import android.content.Context
 import android.content.Intent
-import org.json.JSONObject
 
 internal data class VpnStartCommand(
     val configJson: String,
@@ -21,42 +20,26 @@ internal object VpnServiceIntents {
     const val ActionUpdateFlowAnalysis = "com.tcptun.client.UPDATE_FLOW_ANALYSIS"
     const val ActionRefreshClientIps = "com.tcptun.client.REFRESH_CLIENT_IPS"
 
-    const val ExtraConfig = "config"
-    const val ExtraProfilePlan = "profilePlan"
+    const val ExtraCommandId = "commandId"
+    const val ExtraCommandVersion = "commandVersion"
     const val ExtraTcpingRequestId = "tcpingRequestId"
     const val ExtraTcpingTargetLabel = "tcpingTargetLabel"
     const val ExtraTcpingHost = "tcpingHost"
     const val ExtraTcpingPort = "tcpingPort"
     const val ExtraForceRuntimeRestart = "forceRuntimeRestart"
-
-    private const val ExtraRuntimeSettingsVersion = "runtimeSettingsVersion"
-    private const val ExtraRuntimeMtu = "runtimeMtu"
-    private const val ExtraRuntimePowerSaving = "runtimePowerSaving"
-    private const val ExtraRuntimeLogLevel = "runtimeLogLevel"
-    private const val ExtraRuntimeSocksPort = "runtimeSocksPort"
-    private const val ExtraRuntimeLocalProxyProtocol = "runtimeLocalProxyProtocol"
-    private const val ExtraRuntimeSocksListenAll = "runtimeSocksListenAll"
-    private const val ExtraRuntimeSocksUsername = "runtimeSocksUsername"
-    private const val ExtraRuntimeSocksPassword = "runtimeSocksPassword"
-    private const val ExtraRuntimeRouteLocalProxyTraffic = "runtimeRouteLocalProxyTraffic"
-    private const val ExtraRuntimeDefaultOutbound = "runtimeDefaultOutbound"
-    private const val ExtraRuntimeFlowAnalysisApp = "runtimeFlowAnalysisApp"
-    private const val RuntimeSettingsIntentVersion = 1
-    private const val MaxRuntimeCredentialLength = 4_096
+    const val CommandVersion = 1
 
     fun start(context: Context, config: AppConfig): Intent =
         start(context, ProfileRunPlan(listOf(config)))
 
     fun start(context: Context, sourcePlan: ProfileRunPlan): Intent {
-        val payload = buildCommandPayload(
+        val payload = buildStartPayload(
             context = context,
             sourcePlan = sourcePlan,
             managedRouteRules = RouteRuleStore.loadAuthoritative(context).getOrThrow(),
         )
-        return serviceIntent(context, ActionStart)
-            .putExtra(ExtraConfig, payload.configJson)
-            .putExtra(ExtraProfilePlan, payload.planJson)
-            .putRuntimeSettingsSnapshot(payload.runtimeSettings)
+        val commandId = vpnCommandStore(context).publish(payload)
+        return commandIntent(context, ActionStart, commandId)
     }
 
     fun preflightStart(
@@ -64,13 +47,20 @@ internal object VpnServiceIntents {
         sourcePlan: ProfileRunPlan,
         managedRouteRules: List<ManagedRouteRule>,
     ) {
-        buildCommandPayload(context, sourcePlan, managedRouteRules)
+        buildStartPayload(context, sourcePlan, managedRouteRules)
     }
 
     fun stop(context: Context): Intent = serviceIntent(context, ActionStop)
 
-    fun updateOutbounds(context: Context, plan: ProfileRunPlan): Intent =
-        start(context, plan).setAction(ActionUpdateOutbounds)
+    fun updateOutbounds(context: Context, plan: ProfileRunPlan): Intent {
+        val normalized = plan.normalized()
+        val encodedLength = normalized.toJson().toString().length
+        require(encodedLength <= DesiredRunningPlanStore.MaxEncodedLength) {
+            "VPN profile plan is too large"
+        }
+        val commandId = vpnCommandStore(context).publish(UpdateOutboundsCommandPayload(normalized))
+        return commandIntent(context, ActionUpdateOutbounds, commandId)
+    }
 
     fun applyRuntimeSettings(context: Context, forceRestart: Boolean): Intent =
         serviceIntent(context, ActionApplyRuntimeSettings)
@@ -92,76 +82,51 @@ internal object VpnServiceIntents {
         .putExtra(ExtraTcpingHost, host)
         .putExtra(ExtraTcpingPort, port)
 
-    fun runtimeSettingsSnapshot(intent: Intent): RuntimeSettings? {
-        if (intent.getIntExtra(ExtraRuntimeSettingsVersion, 0) != RuntimeSettingsIntentVersion) {
-            return null
-        }
-        val username = intent.getStringExtra(ExtraRuntimeSocksUsername).orEmpty()
-        val password = intent.getStringExtra(ExtraRuntimeSocksPassword).orEmpty()
-        require(username.length <= MaxRuntimeCredentialLength) { "SOCKS username is too long" }
-        require(password.length <= MaxRuntimeCredentialLength) { "SOCKS password is too long" }
-        return RuntimeSettings(
-            mtu = intent.getIntExtra(ExtraRuntimeMtu, RuntimeSettingsDefaults.VpnMtu).coerceIn(1280, 1500),
-            powerSavingMode = intent.getBooleanExtra(ExtraRuntimePowerSaving, true),
-            logLevel = normalizeLogLevel(intent.getStringExtra(ExtraRuntimeLogLevel).orEmpty()),
-            socksPort = intent.getIntExtra(ExtraRuntimeSocksPort, RuntimeSettingsDefaults.SocksPort)
-                .coerceIn(1, 65535),
-            localProxyProtocol = normalizeLocalProxyProtocol(
-                intent.getStringExtra(ExtraRuntimeLocalProxyProtocol).orEmpty(),
-            ),
-            socksListenAll = intent.getBooleanExtra(ExtraRuntimeSocksListenAll, false),
-            socksUsername = username,
-            socksPassword = password,
-            routeLocalProxyTraffic = intent.getBooleanExtra(ExtraRuntimeRouteLocalProxyTraffic, false),
-            defaultOutbound = normalizeDefaultOutboundSelection(
-                intent.getStringExtra(ExtraRuntimeDefaultOutbound).orEmpty(),
-            ),
-            flowAnalysisApp = normalizeFlowAnalysisApp(
-                intent.getStringExtra(ExtraRuntimeFlowAnalysisApp).orEmpty(),
-            ),
-        )
-    }
-
     fun parseStartCommand(context: Context, intent: Intent): VpnStartCommand {
-        val configJson = intent.getStringExtra(ExtraConfig)
-            ?.takeIf { it.length <= MaxVpnCommandPayloadLength }
-            ?: error("missing VPN config")
-        val rawPlan = intent.getStringExtra(ExtraProfilePlan)
-            ?.takeIf { it.length <= DesiredRunningPlanStore.MaxEncodedLength }
-            ?: error("missing or invalid VPN profile plan")
+        val payload = consumePayload(context, intent) as? StartVpnCommandPayload
+            ?: error("missing or invalid VPN start command")
+        val configJson = payload.configJson.takeIf { it.length <= MaxVpnCommandPayloadLength }
+            ?: error("missing or invalid VPN config")
+        val plan = payload.plan.normalized()
+        val planJson = plan.toJson().toString()
         require(
             isVpnCommandPayloadWithinLimit(
                 configLength = configJson.length,
-                planLength = rawPlan.length,
+                planLength = planJson.length,
                 settingsPayloadLength = 0,
             ),
-        ) {
-            "VPN command payload is too large"
-        }
-        val plan = runRecoverableCatching {
-            requireSafeJsonNesting(rawPlan)
-            ProfileRunPlan.fromJson(JSONObject(rawPlan))
-        }.getOrNull() ?: error("missing or invalid VPN profile plan")
+        ) { "VPN command payload is too large" }
+        val runtimeSettings = requireSafeRuntimeSettings(payload.runtimeSettings)
         return VpnStartCommand(
             configJson = configJson,
             plan = plan,
-            runtimeSettings = runtimeSettingsSnapshot(intent) ?: RuntimeSettingsRepository.read(context),
+            runtimeSettings = runtimeSettings,
             desiredPlanJson = DesiredRunningPlanStore.encode(plan),
         )
     }
 
-    private data class CommandPayload(
-        val configJson: String,
-        val planJson: String,
-        val runtimeSettings: RuntimeSettings,
-    )
+    fun parseOutboundsUpdate(context: Context, intent: Intent): ProfileRunPlan {
+        val payload = consumePayload(context, intent) as? UpdateOutboundsCommandPayload
+            ?: error("missing or invalid VPN outbound update command")
+        return payload.plan.normalized()
+    }
 
-    private fun buildCommandPayload(
+    private fun consumePayload(context: Context, intent: Intent): VpnCommandPayload {
+        require(intent.getIntExtra(ExtraCommandVersion, 0) == CommandVersion) {
+            "unsupported VPN command version"
+        }
+        val commandId = intent.getStringExtra(ExtraCommandId)
+            ?.takeIf { it.length == 36 }
+            ?: error("missing VPN command ID")
+        return vpnCommandStore(context).consume(commandId) ?: error("VPN command is missing or expired")
+    }
+
+    private fun buildStartPayload(
         context: Context,
         sourcePlan: ProfileRunPlan,
         managedRouteRules: List<ManagedRouteRule>,
-    ): CommandPayload {
-        val runtimeSettings = RuntimeSettingsRepository.read(context)
+    ): StartVpnCommandPayload {
+        val runtimeSettings = requireSafeRuntimeSettings(RuntimeSettingsRepository.read(context))
         val plan = sourcePlan.normalized()
         val configJson = plan.toBridgeJson(
             localListenAddr = RuntimeSettingsRepository.localSocksListenAddress(runtimeSettings),
@@ -173,34 +138,24 @@ internal object VpnServiceIntents {
             routeLocalProxyTraffic = runtimeSettings.routeLocalProxyTraffic,
             defaultOutbound = runtimeSettings.defaultOutbound,
         )
-        val planJson = plan.toJson().toString()
+        val planLength = plan.toJson().toString().length
         val settingsPayloadLength = runtimeSettings.socksUsername.length +
             runtimeSettings.socksPassword.length +
             runtimeSettings.localProxyProtocol.length +
             runtimeSettings.logLevel.length +
             runtimeSettings.defaultOutbound.length +
             runtimeSettings.flowAnalysisApp.length
-        require(isVpnCommandPayloadWithinLimit(configJson.length, planJson.length, settingsPayloadLength)) {
-            "VPN configuration is too large to send to the service"
+        require(isVpnCommandPayloadWithinLimit(configJson.length, planLength, settingsPayloadLength)) {
+            "VPN configuration is too large"
         }
-        return CommandPayload(configJson, planJson, runtimeSettings)
+        return StartVpnCommandPayload(configJson, plan, runtimeSettings)
     }
+
+    private fun commandIntent(context: Context, action: String, commandId: String): Intent =
+        serviceIntent(context, action)
+            .putExtra(ExtraCommandId, commandId)
+            .putExtra(ExtraCommandVersion, CommandVersion)
 
     private fun serviceIntent(context: Context, action: String): Intent =
         Intent(context, TcptunVpnService::class.java).setAction(action)
-
-    private fun Intent.putRuntimeSettingsSnapshot(settings: RuntimeSettings): Intent = apply {
-        putExtra(ExtraRuntimeSettingsVersion, RuntimeSettingsIntentVersion)
-        putExtra(ExtraRuntimeMtu, settings.mtu)
-        putExtra(ExtraRuntimePowerSaving, settings.powerSavingMode)
-        putExtra(ExtraRuntimeLogLevel, settings.logLevel)
-        putExtra(ExtraRuntimeSocksPort, settings.socksPort)
-        putExtra(ExtraRuntimeLocalProxyProtocol, settings.localProxyProtocol)
-        putExtra(ExtraRuntimeSocksListenAll, settings.socksListenAll)
-        putExtra(ExtraRuntimeSocksUsername, settings.socksUsername)
-        putExtra(ExtraRuntimeSocksPassword, settings.socksPassword)
-        putExtra(ExtraRuntimeRouteLocalProxyTraffic, settings.routeLocalProxyTraffic)
-        putExtra(ExtraRuntimeDefaultOutbound, settings.defaultOutbound)
-        putExtra(ExtraRuntimeFlowAnalysisApp, settings.flowAnalysisApp)
-    }
 }

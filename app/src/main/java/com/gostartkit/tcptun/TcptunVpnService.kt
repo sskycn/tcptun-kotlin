@@ -965,18 +965,12 @@ class TcptunVpnService : VpnService() {
         )
 
     private fun requestOutboundUpdate(intent: Intent, token: VpnRuntimeCommandToken) {
-        val nextPlan = intent.getStringExtra(EXTRA_PROFILE_PLAN)
-            ?.takeIf { it.length <= DesiredRunningPlanStore.MaxEncodedLength }
-            ?.let { raw ->
-                runRecoverableCatching {
-                    requireSafeJsonNesting(raw)
-                    ProfileRunPlan.fromJson(JSONObject(raw))
-                }.getOrNull()
-            }
-            ?: run {
-                TcptunState.appendLog("connection update ignored: invalid profile plan")
-                return
-            }
+        val nextPlan = runRecoverableCatching {
+            VpnServiceIntents.parseOutboundsUpdate(this, intent)
+        }.getOrElse { error ->
+            TcptunState.appendLog("connection update ignored: ${failureDescription(error)}")
+            return
+        }
         val lifecycleGeneration = token.lifecycleGeneration
         val updateGeneration = connectionUpdateTracker.begin()
         val profileMutationRevision = profileRepository.currentMutationRevision()
@@ -1678,6 +1672,7 @@ class TcptunVpnService : VpnService() {
         settings: AppliedRuntimeSettings,
         commandOwner: () -> Boolean,
     ) {
+        requireSafeAppliedRuntimeSettings(settings)
         check(bridgeRuntimeLease.owner == serviceInstanceId) {
             "tcptun service does not own the native runtime lease"
         }
@@ -2278,8 +2273,8 @@ class TcptunVpnService : VpnService() {
         const val ACTION_APPLY_RUNTIME_SETTINGS = VpnServiceIntents.ActionApplyRuntimeSettings
         const val ACTION_UPDATE_FLOW_ANALYSIS = VpnServiceIntents.ActionUpdateFlowAnalysis
         const val ACTION_REFRESH_CLIENT_IPS = VpnServiceIntents.ActionRefreshClientIps
-        const val EXTRA_CONFIG = VpnServiceIntents.ExtraConfig
-        private const val EXTRA_PROFILE_PLAN = VpnServiceIntents.ExtraProfilePlan
+        const val EXTRA_COMMAND_ID = VpnServiceIntents.ExtraCommandId
+        const val EXTRA_COMMAND_VERSION = VpnServiceIntents.ExtraCommandVersion
         private const val EXTRA_TCPING_REQUEST_ID = VpnServiceIntents.ExtraTcpingRequestId
         private const val EXTRA_TCPING_TARGET_LABEL = VpnServiceIntents.ExtraTcpingTargetLabel
         private const val EXTRA_TCPING_HOST = VpnServiceIntents.ExtraTcpingHost

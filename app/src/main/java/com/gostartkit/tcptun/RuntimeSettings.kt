@@ -3,6 +3,7 @@ package com.tcptun.client
 import android.content.Context
 import android.content.SharedPreferences
 import org.json.JSONObject
+import java.security.SecureRandom
 import java.util.UUID
 
 internal object RuntimeSettingsDefaults {
@@ -73,6 +74,48 @@ internal data class AppliedRuntimeSettings(
 
 private val AndroidPackageNamePattern = Regex("^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+$")
 private const val MaxFlowAnalysisAppLength = 255
+internal const val LanProxyPasswordEntropyBytes = 24
+
+internal fun generateLanProxyPassword(secureRandom: SecureRandom = SecureRandom()): String {
+    val entropy = ByteArray(LanProxyPasswordEntropyBytes)
+    secureRandom.nextBytes(entropy)
+    return buildString(LanProxyPasswordEntropyBytes / 3 * 4) {
+        for (index in entropy.indices step 3) {
+            val value = ((entropy[index].toInt() and 0xff) shl 16) or
+                ((entropy[index + 1].toInt() and 0xff) shl 8) or
+                (entropy[index + 2].toInt() and 0xff)
+            append(Base64UrlAlphabet[(value ushr 18) and 0x3f])
+            append(Base64UrlAlphabet[(value ushr 12) and 0x3f])
+            append(Base64UrlAlphabet[(value ushr 6) and 0x3f])
+            append(Base64UrlAlphabet[value and 0x3f])
+        }
+    }
+}
+
+private const val Base64UrlAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+internal fun secureRuntimeSettings(
+    settings: RuntimeSettings,
+    passwordGenerator: () -> String = ::generateLanProxyPassword,
+): RuntimeSettings {
+    if (!settings.socksListenAll || settings.socksPassword.isNotEmpty()) return settings
+    return settings.copy(socksPassword = passwordGenerator().also { generated ->
+        check(generated.isNotEmpty()) { "LAN proxy password generator returned an empty password" }
+    })
+}
+
+internal fun requireSafeRuntimeSettings(settings: RuntimeSettings): RuntimeSettings = settings.also {
+    require(!it.socksListenAll || it.socksPassword.isNotEmpty()) {
+        "LAN proxy password is required when listening on all interfaces"
+    }
+}
+
+internal fun requireSafeAppliedRuntimeSettings(settings: AppliedRuntimeSettings): AppliedRuntimeSettings =
+    settings.also {
+        require(!it.socksListenAll || it.socksPassword.isNotEmpty()) {
+            "LAN proxy password is required when listening on all interfaces"
+        }
+    }
 
 /** Preserves a restored non-secret draft while hydrating credentials from encrypted storage. */
 internal fun hydrateRuntimeSettingsCredentials(
@@ -177,14 +220,17 @@ object RuntimeSettingsRepository {
                 },
             ),
         )
-        if (storageVersion < StorageVersionEncryptedSecrets) {
-            // Persist legacy plaintext credentials through the encrypted secret store.
-            write(context, stored)
+        val secured = secureRuntimeSettings(stored)
+        if (storageVersion < StorageVersionEncryptedSecrets || secured != stored) {
+            // Persist legacy plaintext credentials and repair legacy anonymous LAN listeners
+            // through the encrypted secret store before returning them to any runtime caller.
+            write(context, secured)
         }
-        return stored
+        return secured
     }
 
     fun write(context: Context, settings: RuntimeSettings) {
+        requireSafeRuntimeSettings(settings)
         val normalizedLogLevel = normalizeLogLevel(settings.logLevel)
         val normalizedSocksPort = settings.socksPort.coerceIn(1, 65535)
         val normalizedLocalProxyProtocol = normalizeLocalProxyProtocol(settings.localProxyProtocol)

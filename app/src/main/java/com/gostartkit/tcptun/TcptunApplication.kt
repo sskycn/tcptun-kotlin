@@ -28,6 +28,10 @@ internal class TcptunApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        runRecoverableCatching { vpnCommandStore(this).cleanupExpired() }
+            .onFailure { error ->
+                TcptunState.appendLog("expired VPN command cleanup failed: ${failureDescription(error)}")
+            }
         reportPreviousProcessExit()
     }
 

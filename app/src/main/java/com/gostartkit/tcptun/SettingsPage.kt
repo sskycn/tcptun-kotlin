@@ -65,6 +65,7 @@ import androidx.compose.material.icons.automirrored.rounded.AltRoute
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DragHandle
@@ -79,6 +80,8 @@ import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Button
@@ -138,6 +141,7 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -187,9 +191,14 @@ internal fun SettingsPage(onBack: () -> Unit) {
     var socksPortText by rememberSaveable { mutableStateOf(settings.socksPort.toString()) }
     var settingsDirty by rememberSaveable { mutableStateOf(false) }
     var savingSettings by remember { mutableStateOf(false) }
+    var passwordVisible by rememberSaveable { mutableStateOf(false) }
     var settingsLoaded by rememberSaveable { mutableStateOf(false) }
     var credentialsHydrated by remember { mutableStateOf(false) }
     val settingsScope = rememberCoroutineScope()
+    val settingsSnackbarHostState = remember { SnackbarHostState() }
+    val lanPasswordRequiredMessage = stringResource(R.string.lan_proxy_password_required)
+    val lanAuthenticationGeneratedMessage = stringResource(R.string.lan_proxy_auth_generated)
+    val socksPasswordLabel = stringResource(R.string.socks_password)
     val vpnState by TcptunState.state.collectAsStateWithLifecycle()
     val diagnostics = vpnState.diagnostics
     val mtuOptions = listOf("1280", "1360", "1400", "1500")
@@ -236,6 +245,10 @@ internal fun SettingsPage(onBack: () -> Unit) {
     fun leaveSettings() {
         val socksPort = socksPortText.toIntOrNull()
         if (savingSettings || socksPort == null || socksPort !in 1..65535) return
+        if (settings.socksListenAll && settings.socksPassword.isEmpty()) {
+            settingsScope.launch { settingsSnackbarHostState.showDismissibleSnackbar(lanPasswordRequiredMessage) }
+            return
+        }
         if (!settingsDirty) {
             onBack()
             return
@@ -269,6 +282,7 @@ internal fun SettingsPage(onBack: () -> Unit) {
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
+        snackbarHost = { SnackbarHost(settingsSnackbarHostState) },
         topBar = {
             SettingsTopBar(onBack = ::leaveSettings)
         },
@@ -343,7 +357,21 @@ internal fun SettingsPage(onBack: () -> Unit) {
                             settings.socksListenAll,
                             enabled = !savingSettings,
                         ) { checked ->
-                            updateSettingsDraft(settings.copy(socksListenAll = checked))
+                            val generated = checked && settings.socksPassword.isEmpty()
+                            updateSettingsDraft(
+                                if (generated) {
+                                    secureRuntimeSettings(settings.copy(socksListenAll = true))
+                                } else {
+                                    settings.copy(socksListenAll = checked)
+                                },
+                            )
+                            if (generated) {
+                                settingsScope.launch {
+                                    settingsSnackbarHostState.showDismissibleSnackbar(
+                                        lanAuthenticationGeneratedMessage,
+                                    )
+                                }
+                            }
                         }
                         ToggleRow(
                             stringResource(R.string.route_local_proxy_traffic),
@@ -387,10 +415,58 @@ internal fun SettingsPage(onBack: () -> Unit) {
                             onValueChange = { value ->
                                 updateSettingsDraft(settings.copy(socksPassword = truncateSocksCredential(value)))
                             },
-                            label = { FieldChromeText(stringResource(R.string.socks_password)) },
+                            label = { FieldChromeText(socksPasswordLabel) },
                             singleLine = true,
                             enabled = !savingSettings,
-                            visualTransformation = PasswordVisualTransformation(),
+                            isError = settings.socksListenAll && settings.socksPassword.isEmpty(),
+                            supportingText = {
+                                if (settings.socksListenAll && settings.socksPassword.isEmpty()) {
+                                    FieldChromeText(lanPasswordRequiredMessage)
+                                }
+                            },
+                            visualTransformation = if (passwordVisible) {
+                                VisualTransformation.None
+                            } else {
+                                PasswordVisualTransformation()
+                            },
+                            trailingIcon = {
+                                Row {
+                                    IconButton(
+                                        onClick = {
+                                            passwordVisible = !passwordVisible
+                                        },
+                                        enabled = !savingSettings,
+                                    ) {
+                                        Icon(
+                                            imageVector = if (passwordVisible) {
+                                                Icons.Rounded.VisibilityOff
+                                            } else {
+                                                Icons.Rounded.Visibility
+                                            },
+                                            contentDescription = stringResource(
+                                                if (passwordVisible) R.string.hide_password else R.string.show_password,
+                                            ),
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            val clipboard = context.getSystemService(ClipboardManager::class.java)
+                                            clipboard?.setPrimaryClip(
+                                                ClipData.newPlainText(
+                                                    socksPasswordLabel,
+                                                    settings.socksPassword,
+                                                ),
+                                            )
+                                        },
+                                        enabled = !savingSettings && settings.socksPassword.isNotEmpty(),
+                                    ) {
+                                        Icon(
+                                            Icons.Rounded.ContentCopy,
+                                            contentDescription = stringResource(R.string.copy_password),
+                                        )
+                                    }
+                                }
+                            },
                             modifier = Modifier.fillMaxWidth(),
                         )
                         Text(
