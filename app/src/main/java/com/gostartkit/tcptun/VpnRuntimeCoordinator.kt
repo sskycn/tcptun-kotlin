@@ -60,6 +60,12 @@ internal data class VpnRuntimeRecoveryRequest(
  * Start/Stop/Replacement admission and completion are reducer events. Recovery, outbound updates,
  * and in-flight accounting stay here for this migration, but their state commits are serialized by
  * the same actor lane. Blocking JNI/platform effects execute on [executor], never on the actor.
+ *
+ * Logical ownership matrix:
+ * - Start / Stop / Replacement lifecycle phase: VpnRuntimeActor reducer events.
+ * - Recovery policy and scheduling: Coordinator; Recovery logical commits: Actor lane.
+ * - Outbound mutation policy: Coordinator; running-plan commits: Actor lane.
+ * - Physically applied settings: RuntimeSettingsRuntimeState, scoped to runtime ownership.
  */
 internal class VpnRuntimeCoordinator(
     private val executor: Executor,
@@ -188,7 +194,7 @@ internal class VpnRuntimeCoordinator(
     fun completeNoOpStart(token: VpnRuntimeCommandToken, runningPlan: ProfileRunPlan?): Boolean =
         run {
             var accepted = false
-            actor.send { state ->
+            actor.sendInternal { state ->
                 accepted = (state.phase as? VpnRuntimePhase.Starting)?.token == token &&
                     state.isCurrent(token)
                 VpnRuntimeEvent.NoOpStartCompleted(token, runningPlan)
@@ -198,14 +204,18 @@ internal class VpnRuntimeCoordinator(
 
     fun destroy(serviceInstanceId: Long): VpnRuntimeCommandToken {
         var destroyedToken: VpnRuntimeCommandToken? = null
-        actor.send { state ->
-            nextToken(state, serviceInstanceId, persistent = false).also { destroyedToken = it }
-                .let(VpnRuntimeEvent::Destroyed)
+        actor.beginDestroy { state ->
+            VpnRuntimeEvent.Destroyed(
+                nextToken(state, serviceInstanceId, persistent = false)
+                    .also { destroyedToken = it },
+            )
         }
         return checkNotNull(destroyedToken)
     }
 
-    fun shutdownActor() = actor.shutdown()
+    fun closeExternalIngress() = actor.closeExternalIngress()
+
+    fun shutdownActor(): Boolean = actor.shutdown()
 
     /** Owns replacement sequencing and the Starting -> Running transition. */
     fun dispatchStart(
@@ -228,7 +238,7 @@ internal class VpnRuntimeCoordinator(
         ) -> VpnPlatformStopResult,
     ): Boolean = dispatch(VpnRuntimeCommand.Start, onFailure) start@{
         try {
-            val effect = actor.send(
+            val effect = actor.sendInternal(
                 VpnRuntimeEvent.StartExecutionRequested(
                     token,
                     request,
@@ -236,19 +246,19 @@ internal class VpnRuntimeCoordinator(
                 ),
             ).effects.singleOrNull() as? VpnRuntimeEffect.StartRuntime ?: return@start
             if (effect.replaceExisting) {
-                actor.send(VpnRuntimeEvent.ReplacementStopStarted(token))
+                actor.sendInternal(VpnRuntimeEvent.ReplacementStopStarted(token))
                 stopExisting(token) { isCurrent(token) }
-                actor.send(VpnRuntimeEvent.ReplacementStopCompleted(token))
+                actor.sendInternal(VpnRuntimeEvent.ReplacementStopCompleted(token))
             }
             if (!isCurrent(token)) return@start
             startRuntime(effect.request, token, { isCurrent(token) }) { plan ->
-                val decision = actor.send(VpnRuntimeEvent.StartSucceeded(token, plan))
+                val decision = actor.sendInternal(VpnRuntimeEvent.StartSucceeded(token, plan))
                 decision.state.phase == VpnRuntimePhase.Running(token) &&
                     decision.state.runningPlan === plan
             }
         } catch (error: Throwable) {
             if (error.isFatalProcessError()) throw error
-            val rollback = actor.send(
+            val rollback = actor.sendInternal(
                 VpnRuntimeEvent.StartFailed(token, request, error),
             ).effects.singleOrNull() as? VpnRuntimeEffect.RollbackStart
                 ?: throw error
@@ -269,7 +279,7 @@ internal class VpnRuntimeCoordinator(
     ): Boolean {
         val owner = VpnRuntimeCleanupOwner.StartRollback(token)
         var accepted = false
-        actor.send { state ->
+        actor.sendInternal { state ->
             accepted = (state.phase as? VpnRuntimePhase.CleaningUp)?.owner == owner &&
                 state.isCurrent(token)
             when (result) {
@@ -293,7 +303,7 @@ internal class VpnRuntimeCoordinator(
             () -> Boolean,
         ) -> VpnPlatformStopResult,
     ): Boolean = dispatch(VpnRuntimeCommand.Stop, onFailure) stop@{
-        val effect = actor.send(
+        val effect = actor.sendInternal(
             VpnRuntimeEvent.StopExecutionRequested(token, reason, options),
         ).effects.singleOrNull() as? VpnRuntimeEffect.StopRuntime ?: return@stop
         beforeStop(token) { isCurrent(token) }
@@ -308,7 +318,7 @@ internal class VpnRuntimeCoordinator(
     ): Boolean {
         val owner = VpnRuntimeCleanupOwner.Stop(token)
         var accepted = false
-        actor.send { state ->
+        actor.sendInternal { state ->
             accepted = (state.phase as? VpnRuntimePhase.Stopping)?.token == token &&
                 state.isCurrent(token)
             when (result) {
@@ -489,14 +499,14 @@ internal class VpnRuntimeCoordinator(
         result: VpnPlatformStopResult,
     ): VpnRuntimeRecoveryToken? {
         var retryToken: VpnRuntimeRecoveryToken? = null
-        actor.compatibilityMutation { state ->
+        actor.compatibilityMutationInternal { state ->
             val cleanupOwner = (state.phase as? VpnRuntimePhase.CleaningUp)
                 ?.owner as? VpnRuntimeCleanupOwner.RecoveryRollback
             if (cleanupOwner?.recoveryToken != token || !isCurrentRecovery(state, token)) {
-                return@compatibilityMutation state
+                return@compatibilityMutationInternal state
             }
             if (result is VpnPlatformStopResult.RetainedForRetry) {
-                return@compatibilityMutation state
+                return@compatibilityMutationInternal state
             }
             token.copy(
                 recoveryGeneration = nextRuntimeGeneration(state.recoveryGeneration),

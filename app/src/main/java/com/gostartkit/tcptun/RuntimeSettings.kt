@@ -131,111 +131,281 @@ internal fun normalizeFlowAnalysisApp(value: String): String {
     return value.trim().takeIf(AndroidPackageNamePattern::matches).orEmpty()
 }
 
-/** Owns the durable runtime-settings schema independently from the Android service lifecycle. */
-object RuntimeSettingsRepository {
-    private const val Prefs = "tcptun_runtime"
-    private const val KeyMtu = "runtimeMtu"
-    private const val KeyPowerSaving = "runtimePowerSaving"
-    private const val KeyLogLevel = "runtimeLogLevel"
-    private const val KeySocksPort = "runtimeSocksPort"
-    private const val KeyLocalProxyProtocol = "runtimeLocalProxyProtocol"
-    private const val KeySocksListenAll = "runtimeSocksListenAll"
-    private const val KeySocksUsername = "runtimeSocksUsername"
-    private const val KeySocksPassword = "runtimeSocksPassword"
-    private const val KeyRouteLocalProxyTraffic = "runtimeRouteLocalProxyTraffic"
-    private const val KeyDefaultOutbound = "runtimeDefaultOutbound"
-    private const val KeyFlowAnalysisApp = "runtimeFlowAnalysisApp"
-    private const val KeyStorageVersion = "runtimeStorageVersion"
-    private const val KeySecretsId = "runtimeSecretsId"
-    private const val StorageVersionEncryptedSecrets = 2
-    private const val MaxRuntimeCredentialLength = 4_096
+internal const val RuntimeSettingsUnavailableSafeDescription =
+    "Settings could not be loaded securely. Retry before making changes."
 
-    fun read(context: Context): RuntimeSettings {
-        val appContext = context.applicationContext ?: context
-        val prefs = try {
-            appContext.getSharedPreferences(Prefs, Context.MODE_PRIVATE)
-        } catch (error: Throwable) {
-            if (error.isFatalProcessError()) throw error
-            TcptunState.appendLog("runtime settings unavailable: ${failureDescription(error)}")
-            return RuntimeSettings()
+internal enum class RuntimeSettingsSource { CleanInstall, Stored }
+
+internal sealed interface RuntimeSettingsRevision {
+    data object Absent : RuntimeSettingsRevision
+    data class Stored(private val opaqueId: String) : RuntimeSettingsRevision
+}
+
+internal sealed interface RuntimeSettingsRead {
+    data class Success(
+        val settings: RuntimeSettings,
+        val source: RuntimeSettingsSource,
+        internal val revision: RuntimeSettingsRevision,
+    ) : RuntimeSettingsRead
+
+    class Unavailable(
+        internal val failure: Throwable,
+        val safeDescription: String = RuntimeSettingsUnavailableSafeDescription,
+    ) : RuntimeSettingsRead
+}
+
+internal fun RuntimeSettingsRead.requireAuthoritativeSettings(): RuntimeSettings =
+    (this as? RuntimeSettingsRead.Success)?.settings
+        ?: throw IllegalStateException(RuntimeSettingsUnavailableSafeDescription)
+
+internal fun RuntimeSettingsRead.uiFallbackSettings(): RuntimeSettings =
+    (this as? RuntimeSettingsRead.Success)?.settings ?: RuntimeSettings()
+
+internal fun RuntimeSettingsRead.allowsMutation(): Boolean = this is RuntimeSettingsRead.Success
+
+internal object RuntimeSettingsStorageKeys {
+    const val Prefs = "tcptun_runtime"
+    const val Mtu = "runtimeMtu"
+    const val PowerSaving = "runtimePowerSaving"
+    const val LogLevel = "runtimeLogLevel"
+    const val SocksPort = "runtimeSocksPort"
+    const val LocalProxyProtocol = "runtimeLocalProxyProtocol"
+    const val SocksListenAll = "runtimeSocksListenAll"
+    const val SocksUsername = "runtimeSocksUsername"
+    const val SocksPassword = "runtimeSocksPassword"
+    const val RouteLocalProxyTraffic = "runtimeRouteLocalProxyTraffic"
+    const val DefaultOutbound = "runtimeDefaultOutbound"
+    const val FlowAnalysisApp = "runtimeFlowAnalysisApp"
+    const val StorageVersion = "runtimeStorageVersion"
+    const val SecretsId = "runtimeSecretsId"
+    const val EncryptedSecretsVersion = 2
+
+    val all = setOf(
+        Mtu,
+        PowerSaving,
+        LogLevel,
+        SocksPort,
+        LocalProxyProtocol,
+        SocksListenAll,
+        SocksUsername,
+        SocksPassword,
+        RouteLocalProxyTraffic,
+        DefaultOutbound,
+        FlowAnalysisApp,
+        StorageVersion,
+        SecretsId,
+    )
+}
+
+internal interface RuntimeSettingsPreferences {
+    fun contains(key: String): Boolean
+    fun getInt(key: String, defaultValue: Int): Int
+    fun getBoolean(key: String, defaultValue: Boolean): Boolean
+    fun getString(key: String, defaultValue: String?): String?
+    fun publish(settings: RuntimeSettings, secretsId: String): Boolean
+}
+
+internal interface RuntimeSettingsCredentialCodec {
+    fun encode(username: String, password: String): String
+    fun decode(raw: String): Pair<String, String>
+}
+
+private object JsonRuntimeSettingsCredentialCodec : RuntimeSettingsCredentialCodec {
+    override fun encode(username: String, password: String): String = JSONObject()
+        .put("username", username)
+        .put("password", password)
+        .toString()
+
+    override fun decode(raw: String): Pair<String, String> {
+        val json = JSONObject(raw)
+        val username = json.opt("username")
+        val password = json.opt("password")
+        require(username is String && password is String) {
+            "encrypted runtime settings credentials are incomplete"
         }
-        val mtu = prefs.readOrDefault(KeyMtu, RuntimeSettingsDefaults.VpnMtu) {
-            getInt(KeyMtu, RuntimeSettingsDefaults.VpnMtu)
-        }.coerceIn(1280, 1500)
-        val powerSavingMode = prefs.readOrDefault(KeyPowerSaving, true) {
-            getBoolean(KeyPowerSaving, true)
-        }
-        val logLevel = normalizeLogLevel(
-            prefs.readOrDefault(KeyLogLevel, DefaultLogLevel) {
-                getString(KeyLogLevel, DefaultLogLevel).orEmpty()
-            },
-        )
-        val socksPort = prefs.readOrDefault(KeySocksPort, RuntimeSettingsDefaults.SocksPort) {
-            getInt(KeySocksPort, RuntimeSettingsDefaults.SocksPort)
-        }.coerceIn(1, 65535)
-        val storageVersion = prefs.readOrDefault(KeyStorageVersion, 0) { getInt(KeyStorageVersion, 0) }
-        val storedCredentials = if (storageVersion >= StorageVersionEncryptedSecrets) {
-            val secretsId = prefs.getString(KeySecretsId, null)
-                ?: throw IllegalStateException("encrypted runtime settings reference is missing")
-            val plaintext = EncryptedSecretStore(appContext).read(secretsId)
-                ?: throw IllegalStateException("encrypted runtime settings are missing")
-            require(plaintext.length <= MaxRuntimeCredentialLength * 3) {
-                "encrypted runtime settings are too large"
-            }
-            val secrets = JSONObject(plaintext)
-            secrets.optString("username") to secrets.optString("password")
-        } else {
-            prefs.readOrDefault(KeySocksUsername, "") {
-                getString(KeySocksUsername, "").orEmpty()
-            } to prefs.readOrDefault(KeySocksPassword, "") {
-                getString(KeySocksPassword, "").orEmpty()
-            }
-        }
-        val stored = RuntimeSettings(
-            mtu = mtu,
-            powerSavingMode = powerSavingMode,
-            logLevel = logLevel,
-            socksPort = socksPort,
-            localProxyProtocol = normalizeLocalProxyProtocol(
-                prefs.readOrDefault(KeyLocalProxyProtocol, DefaultLocalProxyProtocol) {
-                    getString(KeyLocalProxyProtocol, DefaultLocalProxyProtocol).orEmpty()
-                },
-            ),
-            socksListenAll = prefs.readOrDefault(KeySocksListenAll, false) {
-                getBoolean(KeySocksListenAll, false)
-            },
-            socksUsername = storedCredentials.first.take(MaxRuntimeCredentialLength).let(::truncateSocksCredential),
-            socksPassword = storedCredentials.second.take(MaxRuntimeCredentialLength).let(::truncateSocksCredential),
-            routeLocalProxyTraffic = prefs.readOrDefault(KeyRouteLocalProxyTraffic, false) {
-                getBoolean(KeyRouteLocalProxyTraffic, false)
-            },
-            defaultOutbound = normalizeDefaultOutboundSelection(
-                prefs.readOrDefault(KeyDefaultOutbound, DefaultOutboundDynamicPool) {
-                    getString(KeyDefaultOutbound, DefaultOutboundDynamicPool).orEmpty()
-                },
-            ),
-            flowAnalysisApp = normalizeFlowAnalysisApp(
-                prefs.readOrDefault(KeyFlowAnalysisApp, "") {
-                    getString(KeyFlowAnalysisApp, "").orEmpty()
-                },
-            ),
-        )
-        val secured = secureRuntimeSettings(stored)
-        if (storageVersion < StorageVersionEncryptedSecrets || secured != stored) {
-            // Persist legacy plaintext credentials and repair legacy anonymous LAN listeners
-            // through the encrypted secret store before returning them to any runtime caller.
-            write(context, secured)
-        }
-        return secured
+        return username to password
+    }
+}
+
+private class SharedPreferencesRuntimeSettingsPreferences(
+    private val preferences: SharedPreferences,
+) : RuntimeSettingsPreferences {
+    override fun contains(key: String): Boolean = preferences.contains(key)
+    override fun getInt(key: String, defaultValue: Int): Int = preferences.getInt(key, defaultValue)
+    override fun getBoolean(key: String, defaultValue: Boolean): Boolean =
+        preferences.getBoolean(key, defaultValue)
+    override fun getString(key: String, defaultValue: String?): String? =
+        preferences.getString(key, defaultValue)
+
+    override fun publish(settings: RuntimeSettings, secretsId: String): Boolean = preferences.edit()
+        .putInt(RuntimeSettingsStorageKeys.StorageVersion, RuntimeSettingsStorageKeys.EncryptedSecretsVersion)
+        .putInt(RuntimeSettingsStorageKeys.Mtu, settings.mtu)
+        .putBoolean(RuntimeSettingsStorageKeys.PowerSaving, settings.powerSavingMode)
+        .putString(RuntimeSettingsStorageKeys.LogLevel, settings.logLevel)
+        .putInt(RuntimeSettingsStorageKeys.SocksPort, settings.socksPort)
+        .putString(RuntimeSettingsStorageKeys.LocalProxyProtocol, settings.localProxyProtocol)
+        .putBoolean(RuntimeSettingsStorageKeys.SocksListenAll, settings.socksListenAll)
+        .putString(RuntimeSettingsStorageKeys.SecretsId, secretsId)
+        .remove(RuntimeSettingsStorageKeys.SocksUsername)
+        .remove(RuntimeSettingsStorageKeys.SocksPassword)
+        .putBoolean(RuntimeSettingsStorageKeys.RouteLocalProxyTraffic, settings.routeLocalProxyTraffic)
+        .putString(RuntimeSettingsStorageKeys.DefaultOutbound, settings.defaultOutbound)
+        .putString(RuntimeSettingsStorageKeys.FlowAnalysisApp, settings.flowAnalysisApp)
+        .commit()
+}
+
+/** Testable authoritative reader/writer; Android Context creation stays in the facade below. */
+internal class RuntimeSettingsRepositoryEngine(
+    private val preferences: RuntimeSettingsPreferences,
+    private val secretStore: SecretStorage,
+    private val nextSecretId: () -> String = { "runtime.${UUID.randomUUID()}" },
+    private val logUnavailable: () -> Unit = {},
+    private val credentialCodec: RuntimeSettingsCredentialCodec = JsonRuntimeSettingsCredentialCodec,
+) {
+    fun read(): RuntimeSettingsRead = try {
+        readUnsafe()
+    } catch (error: Throwable) {
+        if (error.isFatalProcessError()) throw error
+        logUnavailable()
+        RuntimeSettingsRead.Unavailable(error)
     }
 
-    fun write(context: Context, settings: RuntimeSettings) {
+    fun writeIfCurrent(expected: RuntimeSettingsRead, settings: RuntimeSettings): RuntimeSettingsRead.Success {
+        val expectedSuccess = expected as? RuntimeSettingsRead.Success
+            ?: throw IllegalStateException(RuntimeSettingsUnavailableSafeDescription)
+        val current = read() as? RuntimeSettingsRead.Success
+            ?: throw IllegalStateException(RuntimeSettingsUnavailableSafeDescription)
+        check(current.revision == expectedSuccess.revision) {
+            "runtime settings changed while being edited"
+        }
+        return write(settings)
+    }
+
+    fun write(settings: RuntimeSettings): RuntimeSettingsRead.Success {
+        val normalized = normalizeForStorage(settings)
+        val previousSecretsId = preferences.getString(RuntimeSettingsStorageKeys.SecretsId, null).orEmpty()
+        val secretsId = nextSecretId()
+        require(secretsId.isNotBlank()) { "runtime settings secret reference must not be blank" }
+        val encodedSecrets = credentialCodec.encode(
+            normalized.socksUsername,
+            normalized.socksPassword,
+        )
+        val saved = replaceWithVerifiedSecret(
+            secretStore = secretStore,
+            newSecretId = secretsId,
+            plaintext = encodedSecrets,
+            commitPointer = { preferences.publish(normalized, secretsId) },
+        )
+        check(saved) { "runtime settings could not be persisted" }
+        if (previousSecretsId.isNotBlank() && previousSecretsId != secretsId) {
+            runRecoverableCatching { secretStore.remove(previousSecretsId) }
+        }
+        return RuntimeSettingsRead.Success(
+            normalized,
+            RuntimeSettingsSource.Stored,
+            RuntimeSettingsRevision.Stored(secretsId),
+        )
+    }
+
+    private fun readUnsafe(): RuntimeSettingsRead.Success {
+        if (RuntimeSettingsStorageKeys.all.none(preferences::contains)) {
+            return RuntimeSettingsRead.Success(
+                RuntimeSettings(),
+                RuntimeSettingsSource.CleanInstall,
+                RuntimeSettingsRevision.Absent,
+            )
+        }
+        val version = preferences.getInt(RuntimeSettingsStorageKeys.StorageVersion, 0)
+        require(version in 0..RuntimeSettingsStorageKeys.EncryptedSecretsVersion) {
+            "unsupported runtime settings storage version"
+        }
+        val encrypted = version == RuntimeSettingsStorageKeys.EncryptedSecretsVersion
+        if (!encrypted) {
+            require(!preferences.contains(RuntimeSettingsStorageKeys.SecretsId)) {
+                "encrypted runtime settings reference exists without its storage version"
+            }
+        } else {
+            val requiredEncryptedKeys = RuntimeSettingsStorageKeys.all -
+                RuntimeSettingsStorageKeys.SocksUsername - RuntimeSettingsStorageKeys.SocksPassword
+            require(requiredEncryptedKeys.all(preferences::contains)) {
+                "encrypted runtime settings public record is incomplete"
+            }
+        }
+        val secretsId = if (encrypted) {
+            preferences.getString(RuntimeSettingsStorageKeys.SecretsId, null)
+                ?.takeIf(String::isNotBlank)
+                ?: throw IllegalStateException("encrypted runtime settings reference is missing")
+        } else {
+            null
+        }
+        val credentials = if (encrypted) {
+            parseCredentials(
+                secretStore.read(requireNotNull(secretsId))
+                    ?: throw IllegalStateException("encrypted runtime settings are missing"),
+            )
+        } else {
+            preferences.getString(RuntimeSettingsStorageKeys.SocksUsername, "").orEmpty() to
+                preferences.getString(RuntimeSettingsStorageKeys.SocksPassword, "").orEmpty()
+        }
+        val stored = RuntimeSettings(
+            mtu = preferences.getInt(RuntimeSettingsStorageKeys.Mtu, RuntimeSettingsDefaults.VpnMtu)
+                .coerceIn(1280, 1500),
+            powerSavingMode = preferences.getBoolean(RuntimeSettingsStorageKeys.PowerSaving, true),
+            logLevel = normalizeLogLevel(
+                preferences.getString(RuntimeSettingsStorageKeys.LogLevel, DefaultLogLevel).orEmpty(),
+            ),
+            socksPort = preferences.getInt(RuntimeSettingsStorageKeys.SocksPort, RuntimeSettingsDefaults.SocksPort)
+                .coerceIn(1, 65535),
+            localProxyProtocol = normalizeLocalProxyProtocol(
+                preferences.getString(
+                    RuntimeSettingsStorageKeys.LocalProxyProtocol,
+                    DefaultLocalProxyProtocol,
+                ).orEmpty(),
+            ),
+            socksListenAll = preferences.getBoolean(RuntimeSettingsStorageKeys.SocksListenAll, false),
+            socksUsername = credentials.first.let(::validatedCredential),
+            socksPassword = credentials.second.let(::validatedCredential),
+            routeLocalProxyTraffic = preferences.getBoolean(
+                RuntimeSettingsStorageKeys.RouteLocalProxyTraffic,
+                false,
+            ),
+            defaultOutbound = normalizeDefaultOutboundSelection(
+                preferences.getString(
+                    RuntimeSettingsStorageKeys.DefaultOutbound,
+                    DefaultOutboundDynamicPool,
+                ).orEmpty(),
+            ),
+            flowAnalysisApp = normalizeFlowAnalysisApp(
+                preferences.getString(RuntimeSettingsStorageKeys.FlowAnalysisApp, "").orEmpty(),
+            ),
+        )
+        if (encrypted) {
+            requireSafeRuntimeSettings(stored)
+            return RuntimeSettingsRead.Success(
+                stored,
+                RuntimeSettingsSource.Stored,
+                RuntimeSettingsRevision.Stored(requireNotNull(secretsId)),
+            )
+        }
+        // Legacy data becomes authoritative only after encrypted migration and pointer commit.
+        return write(secureRuntimeSettings(stored))
+    }
+
+    private fun parseCredentials(raw: String): Pair<String, String> {
+        require(raw.length <= MaxRuntimeCredentialLength * 3) {
+            "encrypted runtime settings are too large"
+        }
+        return credentialCodec.decode(raw)
+    }
+
+    private fun validatedCredential(value: String): String {
+        require(value.length <= MaxRuntimeCredentialLength) { "runtime credential is too long" }
+        require(hasValidSocksCredentialSize(value)) { "runtime credential exceeds UTF-8 limit" }
+        return truncateSocksCredential(value)
+    }
+
+    private fun normalizeForStorage(settings: RuntimeSettings): RuntimeSettings {
         requireSafeRuntimeSettings(settings)
-        val normalizedLogLevel = normalizeLogLevel(settings.logLevel)
-        val normalizedSocksPort = settings.socksPort.coerceIn(1, 65535)
-        val normalizedLocalProxyProtocol = normalizeLocalProxyProtocol(settings.localProxyProtocol)
-        val normalizedDefaultOutbound = normalizeDefaultOutboundSelection(settings.defaultOutbound)
-        val normalizedFlowAnalysisApp = normalizeFlowAnalysisApp(settings.flowAnalysisApp)
         require(settings.socksUsername.length <= MaxRuntimeCredentialLength) { "SOCKS username is too long" }
         require(settings.socksPassword.length <= MaxRuntimeCredentialLength) { "SOCKS password is too long" }
         require(hasValidSocksCredentialSize(settings.socksUsername)) {
@@ -244,50 +414,57 @@ object RuntimeSettingsRepository {
         require(hasValidSocksCredentialSize(settings.socksPassword)) {
             "SOCKS password exceeds $MaxSocksCredentialUtf8Bytes UTF-8 bytes"
         }
-        val normalizedSettings = settings.copy(
+        return settings.copy(
             mtu = settings.mtu.coerceIn(1280, 1500),
-            logLevel = normalizedLogLevel,
-            socksPort = normalizedSocksPort,
-            localProxyProtocol = normalizedLocalProxyProtocol,
-            defaultOutbound = normalizedDefaultOutbound,
-            flowAnalysisApp = normalizedFlowAnalysisApp,
+            logLevel = normalizeLogLevel(settings.logLevel),
+            socksPort = settings.socksPort.coerceIn(1, 65535),
+            localProxyProtocol = normalizeLocalProxyProtocol(settings.localProxyProtocol),
+            defaultOutbound = normalizeDefaultOutboundSelection(settings.defaultOutbound),
+            flowAnalysisApp = normalizeFlowAnalysisApp(settings.flowAnalysisApp),
         )
+    }
+
+    private companion object {
+        const val MaxRuntimeCredentialLength = 4_096
+    }
+}
+
+/** Owns the durable runtime-settings schema independently from the Android service lifecycle. */
+object RuntimeSettingsRepository {
+    internal fun read(context: Context): RuntimeSettingsRead {
         val appContext = context.applicationContext ?: context
-        val prefs = appContext.getSharedPreferences(Prefs, Context.MODE_PRIVATE)
-        val previousSecretsId = prefs.getString(KeySecretsId, null).orEmpty()
-        val secretsId = "runtime.${UUID.randomUUID()}"
-        val secretStore = EncryptedSecretStore(appContext)
-        val encodedSecrets = JSONObject()
-            .put("username", normalizedSettings.socksUsername)
-            .put("password", normalizedSettings.socksPassword)
-            .toString()
-        val saved = replaceWithVerifiedSecret(
-            secretStore = secretStore,
-            newSecretId = secretsId,
-            plaintext = encodedSecrets,
-            commitPointer = {
-                prefs.edit()
-                    .putInt(KeyStorageVersion, StorageVersionEncryptedSecrets)
-                    .putInt(KeyMtu, normalizedSettings.mtu)
-                    .putBoolean(KeyPowerSaving, normalizedSettings.powerSavingMode)
-                    .putString(KeyLogLevel, normalizedSettings.logLevel)
-                    .putInt(KeySocksPort, normalizedSettings.socksPort)
-                    .putString(KeyLocalProxyProtocol, normalizedSettings.localProxyProtocol)
-                    .putBoolean(KeySocksListenAll, normalizedSettings.socksListenAll)
-                    .putString(KeySecretsId, secretsId)
-                    .remove(KeySocksUsername)
-                    .remove(KeySocksPassword)
-                    .putBoolean(KeyRouteLocalProxyTraffic, normalizedSettings.routeLocalProxyTraffic)
-                    .putString(KeyDefaultOutbound, normalizedSettings.defaultOutbound)
-                    .putString(KeyFlowAnalysisApp, normalizedSettings.flowAnalysisApp)
-                    .commit()
+        return try {
+            engine(appContext).read()
+        } catch (error: Throwable) {
+            if (error.isFatalProcessError()) throw error
+            runRecoverableCatching { TcptunState.appendLog("runtime settings unavailable") }
+            RuntimeSettingsRead.Unavailable(error)
+        }
+    }
+
+    internal fun writeIfCurrent(
+        context: Context,
+        expected: RuntimeSettingsRead,
+        settings: RuntimeSettings,
+    ): RuntimeSettingsRead.Success {
+        val appContext = context.applicationContext ?: context
+        return engine(appContext).writeIfCurrent(expected, settings).also { publish(it.settings) }
+    }
+
+    internal fun write(context: Context, settings: RuntimeSettings): RuntimeSettingsRead.Success {
+        val appContext = context.applicationContext ?: context
+        return engine(appContext).write(settings).also { publish(it.settings) }
+    }
+
+    private fun engine(context: Context): RuntimeSettingsRepositoryEngine {
+        val preferences = context.getSharedPreferences(RuntimeSettingsStorageKeys.Prefs, Context.MODE_PRIVATE)
+        return RuntimeSettingsRepositoryEngine(
+            SharedPreferencesRuntimeSettingsPreferences(preferences),
+            EncryptedSecretStore(context),
+            logUnavailable = {
+                runRecoverableCatching { TcptunState.appendLog("runtime settings unavailable") }
             },
         )
-        check(saved) { "runtime settings could not be persisted" }
-        if (previousSecretsId.isNotBlank() && previousSecretsId != secretsId) {
-            runRecoverableCatching { secretStore.remove(previousSecretsId) }
-        }
-        publish(normalizedSettings)
     }
 
     fun localSocksListenAddress(settings: RuntimeSettings): String {
@@ -334,6 +511,7 @@ object RuntimeSettingsRepository {
     }
 }
 
+/** Legacy helper retained for non-RuntimeSettings stores that intentionally define a fallback. */
 internal fun <T> SharedPreferences.readOrDefault(
     key: String,
     defaultValue: T,
@@ -342,6 +520,6 @@ internal fun <T> SharedPreferences.readOrDefault(
     read()
 } catch (error: Throwable) {
     if (error.isFatalProcessError()) throw error
-    runRecoverableCatching { TcptunState.appendLog("runtime setting $key is invalid; using default") }
+    runRecoverableCatching { TcptunState.appendLog("stored value $key is invalid; using fallback") }
     defaultValue
 }

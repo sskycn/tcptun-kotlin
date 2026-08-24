@@ -35,6 +35,19 @@ class BridgeLockVerificationTest {
     }
 
     @Test
+    fun optionalAdditionalCommitAssertionRejectsMismatchButIsNotRequired() {
+        val root = repositoryRoot()
+        val lock = loadLock(root)
+        val sha = requireNotNull(lock.getProperty("coreCommit"))
+        val api = requireNotNull(lock.getProperty("bridgeApiVersion"))
+        val valid = createAar(sha, api, dirty = false)
+
+        assertEquals(0, verify(root, valid))
+        assertEquals(0, verify(root, valid, assertedCommit = sha))
+        assertFalse(verify(root, valid, assertedCommit = "0".repeat(40)) == 0)
+    }
+
+    @Test
     fun buildPreflightRejectsDirtyLockedCoreCheckout() {
         val root = repositoryRoot()
         val sha = requireNotNull(loadLock(root).getProperty("coreCommit"))
@@ -98,12 +111,15 @@ class BridgeLockVerificationTest {
         return aar
     }
 
-    private fun verify(root: File, aar: File): Int = ProcessBuilder(
-        "bash",
-        File(root, "scripts/verify-androidbridge.sh").absolutePath,
-        "strict",
-        aar.absolutePath,
-        File(root, "bridge.lock").absolutePath,
+    private fun verify(root: File, aar: File, assertedCommit: String? = null): Int = ProcessBuilder(
+        buildList {
+            add("bash")
+            add(File(root, "scripts/verify-androidbridge.sh").absolutePath)
+            add("strict")
+            add(aar.absolutePath)
+            add(File(root, "bridge.lock").absolutePath)
+            assertedCommit?.let(::add)
+        },
     ).redirectErrorStream(true).start().let { process ->
         process.inputStream.bufferedReader().readText()
         process.waitFor()

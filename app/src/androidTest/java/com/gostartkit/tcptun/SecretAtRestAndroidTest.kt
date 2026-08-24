@@ -12,7 +12,7 @@ class SecretAtRestAndroidTest {
     fun noCredentialMarkerAppearsInAnyApplicationPreferenceValue() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val originalProfiles = ProfileStore.load(context)
-        val originalRuntime = RuntimeSettingsRepository.read(context)
+        val originalRuntime = RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()
         val originalDesired = DesiredRunningPlanStore.read(context)
         val markers = listOf(
             "GLOBAL_TOKEN_3a30c1",

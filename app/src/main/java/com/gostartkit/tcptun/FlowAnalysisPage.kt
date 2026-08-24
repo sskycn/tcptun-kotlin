@@ -184,6 +184,7 @@ internal fun FlowAnalysisPage(onBack: () -> Unit) {
     val startFailedMessage = stringResource(R.string.start_failed)
     val flowState by TcptunState.flowAnalysis.collectAsStateWithLifecycle()
     var settings by remember { mutableStateOf(RuntimeSettings()) }
+    var authoritativeSettings by remember { mutableStateOf<RuntimeSettingsRead.Success?>(null) }
     var installedApps by remember { mutableStateOf<List<InstalledRouteApp>>(emptyList()) }
     var selectionSaving by remember { mutableStateOf(false) }
     var routeRuleSaving by remember { mutableStateOf(false) }
@@ -205,6 +206,7 @@ internal fun FlowAnalysisPage(onBack: () -> Unit) {
     }
 
     fun selectFlowApp(selected: String) {
+        val expected = authoritativeSettings ?: return
         if (selectionSaving || flowLeaveRequested) return
         val packageName = installedApps
             .firstOrNull { it.displayName == selected }
@@ -217,12 +219,16 @@ internal fun FlowAnalysisPage(onBack: () -> Unit) {
                 val next = settings.copy(flowAnalysisApp = packageName)
                 val persisted = durableMutation(appContext, "flow analysis setting save") {
                     ProcessRuntimeSettingsMutationMutex.withLock {
-                        writeUiRuntimeSettings(appContext, next).getOrThrow()
+                        writeUiRuntimeSettings(appContext, expected, next).getOrThrow()
                         applyFlowAnalysisSettings(appContext)
-                        readUiRuntimeSettings(appContext)
+                        readUiRuntimeSettings(appContext).let { refreshed ->
+                            refreshed as? RuntimeSettingsRead.Success
+                                ?: throw IllegalStateException(RuntimeSettingsUnavailableSafeDescription)
+                        }
                     }
                 }.await()
-                settings = persisted
+                authoritativeSettings = persisted
+                settings = persisted.settings
                 if (flowLeaveRequested && !routeRuleSaving) {
                     flowLeaveRequested = false
                     onBack()
@@ -284,12 +290,18 @@ internal fun FlowAnalysisPage(onBack: () -> Unit) {
                 readUiRuntimeSettings(appContext) to loadInstalledRouteApps(appContext)
             }
         }
-        settings = loaded.first
+        authoritativeSettings = loaded.first as? RuntimeSettingsRead.Success
+        settings = loaded.first.uiFallbackSettings()
+        (loaded.first as? RuntimeSettingsRead.Unavailable)?.let {
+            reportUiError(it.safeDescription)
+        }
         installedApps = loaded.second
         pageLoaded = true
     }
-    LaunchedEffect(selectedPackage, pageLoaded) {
-        if (pageLoaded) TcptunState.setFlowAnalysisApp(selectedPackage)
+    LaunchedEffect(selectedPackage, pageLoaded, authoritativeSettings) {
+        if (pageLoaded && authoritativeSettings != null) {
+            TcptunState.setFlowAnalysisApp(selectedPackage)
+        }
     }
     BackHandler(onBack = ::leaveFlowAnalysis)
 
@@ -328,7 +340,11 @@ internal fun FlowAnalysisPage(onBack: () -> Unit) {
                         readUiRuntimeSettings(appContext) to loadInstalledRouteApps(appContext)
                     }
                 }
-                settings = refreshed.first
+                authoritativeSettings = refreshed.first as? RuntimeSettingsRead.Success
+                settings = refreshed.first.uiFallbackSettings()
+                (refreshed.first as? RuntimeSettingsRead.Unavailable)?.let {
+                    reportUiError(it.safeDescription)
+                }
                 installedApps = refreshed.second
             },
             modifier = Modifier
@@ -351,7 +367,8 @@ internal fun FlowAnalysisPage(onBack: () -> Unit) {
                             title = stringResource(R.string.flow_analysis_app),
                             value = selectedAppLabel,
                             options = flowAppOptions,
-                            enabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !selectionSaving,
+                            enabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                                !selectionSaving && authoritativeSettings != null,
                             onChange = ::selectFlowApp,
                         )
                         Text(

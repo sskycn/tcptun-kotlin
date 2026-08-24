@@ -213,6 +213,7 @@
     <string name="tcp_udp">TCP + UDP</string>
     <string name="current_effective">当前生效</string>
     <string name="back">返回</string>
+    <string name="retry">重试</string>
     <string name="logs">日志</string>
     <string name="log_level">日志级别（log.level）</string>
     <string name="log_level_note">无需重启 VPN 即可立即生效。Debug 会产生大量运行日志并可能增加耗电；Off 会关闭核心日志。</string>

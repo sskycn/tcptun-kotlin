@@ -174,7 +174,7 @@ private fun IpInformationTopBar(onBack: () -> Unit) {
 internal fun rememberUiRuntimeSettings(context: Context): RuntimeSettings? {
     return androidx.compose.runtime.produceState<RuntimeSettings?>(initialValue = null, context) {
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            readUiRuntimeSettings(context)
+            readUiRuntimeSettings(context).uiFallbackSettings()
         }
     }.value
 }

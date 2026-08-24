@@ -58,3 +58,17 @@ internal sealed interface VpnRuntimeEvent {
         val token: VpnRuntimeCommandToken,
     ) : VpnRuntimeEvent
 }
+
+/**
+ * Reliability is part of the control-plane contract, not an Actor implementation detail.
+ * Every event currently defined here owns or completes a lifecycle transition and is critical.
+ * Future diagnostics/network hints must be added as [Coalescable] explicitly before they may use
+ * replacement/drop semantics.
+ */
+internal enum class VpnRuntimeEventReliability {
+    Critical,
+    Coalescable,
+}
+
+internal val VpnRuntimeEvent.reliability: VpnRuntimeEventReliability
+    get() = VpnRuntimeEventReliability.Critical

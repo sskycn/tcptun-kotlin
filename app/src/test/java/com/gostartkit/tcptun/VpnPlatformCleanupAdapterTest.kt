@@ -165,6 +165,27 @@ class VpnPlatformCleanupAdapterTest {
     }
 
     @Test
+    fun `stale retained cleanup cannot publish Error or replace new foreground`() {
+        val harness = Harness(resourcesOwned = true)
+        val request = VpnPlatformTeardownRequest(
+            globalStateOwner = { false },
+            globalStateCommitLock = Any(),
+        )
+        val stalePort = VpnCleanupPublicationPort(
+            globalStep = { label, action ->
+                request.runGlobalCleanupStep(Any(), label, harness::localStep, action)
+            },
+            localStep = harness::localStep,
+        )
+
+        harness.perform(request, stalePort)
+
+        assertFalse(harness.events.any { it.startsWith("publish-incomplete:") })
+        assertFalse("retain-cleanup-foreground" in harness.events)
+        assertTrue("stop-bridge" in harness.events)
+    }
+
+    @Test
     fun `retained retry invokes same one-shot adapter without registering another retry`() {
         val harness = Harness(resourcesOwned = true)
         val tasks = mutableListOf<() -> Unit>()

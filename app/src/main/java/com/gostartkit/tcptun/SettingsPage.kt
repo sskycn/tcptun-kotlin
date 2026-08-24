@@ -194,6 +194,9 @@ internal fun SettingsPage(onBack: () -> Unit) {
     var passwordVisible by rememberSaveable { mutableStateOf(false) }
     var settingsLoaded by rememberSaveable { mutableStateOf(false) }
     var credentialsHydrated by remember { mutableStateOf(false) }
+    var authoritativeSettings by remember { mutableStateOf<RuntimeSettingsRead.Success?>(null) }
+    var settingsUnavailable by remember { mutableStateOf<RuntimeSettingsRead.Unavailable?>(null) }
+    var settingsReadAttempt by remember { mutableIntStateOf(0) }
     val settingsScope = rememberCoroutineScope()
     val settingsSnackbarHostState = remember { SnackbarHostState() }
     val lanPasswordRequiredMessage = stringResource(R.string.lan_proxy_password_required)
@@ -213,19 +216,28 @@ internal fun SettingsPage(onBack: () -> Unit) {
         ?.second
         ?: defaultPoolLabel
 
-    LaunchedEffect(appContext) {
-        val loadedSettings = withContext(Dispatchers.IO) { readUiRuntimeSettings(appContext) }
-        if (settingsLoaded) {
-            settings = hydrateRuntimeSettingsCredentials(settings, loadedSettings)
-        } else {
-            settings = loadedSettings
-            socksPortText = loadedSettings.socksPort.toString()
-            settingsLoaded = true
+    LaunchedEffect(appContext, settingsReadAttempt) {
+        when (val loaded = withContext(Dispatchers.IO) { readUiRuntimeSettings(appContext) }) {
+            is RuntimeSettingsRead.Success -> {
+                if (settingsLoaded) {
+                    settings = hydrateRuntimeSettingsCredentials(settings, loaded.settings)
+                } else {
+                    settings = loaded.settings
+                    socksPortText = loaded.settings.socksPort.toString()
+                    settingsLoaded = true
+                }
+                authoritativeSettings = loaded
+                settingsUnavailable = null
+            }
+            is RuntimeSettingsRead.Unavailable -> {
+                authoritativeSettings = null
+                settingsUnavailable = loaded
+            }
         }
         credentialsHydrated = true
     }
 
-    if (!settingsLoaded || !credentialsHydrated) {
+    if (!credentialsHydrated) {
         BackHandler(onBack = onBack)
         Box(
             modifier = Modifier.fillMaxSize(),
@@ -235,6 +247,45 @@ internal fun SettingsPage(onBack: () -> Unit) {
         }
         return
     }
+
+    settingsUnavailable?.let { unavailable ->
+        BackHandler(onBack = onBack)
+        Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
+            topBar = { SettingsTopBar(onBack = onBack) },
+        ) { padding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Text(
+                        text = unavailable.safeDescription,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.Center,
+                    )
+                    Button(
+                        onClick = {
+                            credentialsHydrated = false
+                            settingsReadAttempt += 1
+                        },
+                    ) {
+                        Text(stringResource(R.string.retry))
+                    }
+                }
+            }
+        }
+        return
+    }
+
+    if (!settingsLoaded || authoritativeSettings == null) return
 
     fun updateSettingsDraft(next: RuntimeSettings) {
         if (savingSettings) return
@@ -254,18 +305,23 @@ internal fun SettingsPage(onBack: () -> Unit) {
             return
         }
         val next = settings.copy(socksPort = socksPort)
+        val expected = authoritativeSettings ?: return
         savingSettings = true
         settingsScope.launch {
             try {
                 val persisted = durableMutation(appContext, "runtime settings save") {
                     ProcessRuntimeSettingsMutationMutex.withLock {
-                        writeUiRuntimeSettings(appContext, next).getOrThrow()
+                        writeUiRuntimeSettings(appContext, expected, next).getOrThrow()
                         applyRuntimeSettings(appContext)
-                        readUiRuntimeSettings(appContext)
+                        readUiRuntimeSettings(appContext).let { refreshed ->
+                            refreshed as? RuntimeSettingsRead.Success
+                                ?: throw IllegalStateException(RuntimeSettingsUnavailableSafeDescription)
+                        }
                     }
                 }.await()
-                settings = persisted
-                socksPortText = persisted.socksPort.toString()
+                authoritativeSettings = persisted
+                settings = persisted.settings
+                socksPortText = persisted.settings.socksPort.toString()
                 settingsDirty = false
                 onBack()
             } catch (cancelled: CancellationException) {
@@ -290,9 +346,17 @@ internal fun SettingsPage(onBack: () -> Unit) {
         PullRefreshContainer(
             onRefresh = {
                 if (!settingsDirty) {
-                    val loadedSettings = withContext(Dispatchers.IO) { readUiRuntimeSettings(appContext) }
-                    settings = loadedSettings
-                    socksPortText = settings.socksPort.toString()
+                    when (val loaded = withContext(Dispatchers.IO) { readUiRuntimeSettings(appContext) }) {
+                        is RuntimeSettingsRead.Success -> {
+                            authoritativeSettings = loaded
+                            settings = loaded.settings
+                            socksPortText = settings.socksPort.toString()
+                        }
+                        is RuntimeSettingsRead.Unavailable -> {
+                            authoritativeSettings = null
+                            settingsUnavailable = loaded
+                        }
+                    }
                 }
                 refreshRunningDiagnostics()
             },

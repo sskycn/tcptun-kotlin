@@ -126,7 +126,9 @@ internal object VpnServiceIntents {
         sourcePlan: ProfileRunPlan,
         managedRouteRules: List<ManagedRouteRule>,
     ): StartVpnCommandPayload {
-        val runtimeSettings = requireSafeRuntimeSettings(RuntimeSettingsRepository.read(context))
+        val runtimeSettings = requireSafeRuntimeSettings(
+            RuntimeSettingsRepository.read(context).requireAuthoritativeSettings(),
+        )
         val plan = sourcePlan.normalized()
         val configJson = plan.toBridgeJson(
             localListenAddr = RuntimeSettingsRepository.localSocksListenAddress(runtimeSettings),

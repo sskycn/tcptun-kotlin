@@ -77,7 +77,7 @@ class ProfileSecretSerializationAndroidTest {
     fun legacyAnonymousLanRuntimeSettingsGeneratePasswordAndEncryptIt() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val preferences = context.getSharedPreferences("tcptun_runtime", 0)
-        val original = RuntimeSettingsRepository.read(context)
+        val original = RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()
         try {
             preferences.edit().clear()
                 .putBoolean("runtimeSocksListenAll", true)
@@ -85,7 +85,7 @@ class ProfileSecretSerializationAndroidTest {
                 .putString("runtimeSocksPassword", "")
                 .commit()
 
-            val migrated = RuntimeSettingsRepository.read(context)
+            val migrated = RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()
             val encryptedValues = context.getSharedPreferences("tcptun_encrypted_secrets", 0)
                 .all.values.filterIsInstance<String>()
 

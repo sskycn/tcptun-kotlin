@@ -12,7 +12,7 @@ class RuntimeSettingsRecreationAndroidTest {
     @Test
     fun restoredDraftRehydratesCredentialsBeforeUnrelatedPersistence() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val original = RuntimeSettingsRepository.read(context)
+        val original = RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()
         val persisted = original.copy(
             mtu = 1400,
             logLevel = "info",
@@ -31,10 +31,10 @@ class RuntimeSettingsRecreationAndroidTest {
 
             val hydrated = hydrateRuntimeSettingsCredentials(
                 restoredDraft,
-                RuntimeSettingsRepository.read(context),
+                RuntimeSettingsRepository.read(context).requireAuthoritativeSettings(),
             )
             RuntimeSettingsRepository.write(context, hydrated.copy(mtu = 1500))
-            val reloaded = RuntimeSettingsRepository.read(context)
+            val reloaded = RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()
 
             assertEquals(1500, reloaded.mtu)
             assertEquals("debug", reloaded.logLevel)
@@ -48,7 +48,7 @@ class RuntimeSettingsRecreationAndroidTest {
     @Test
     fun lanPasswordRemainsStableAcrossRecreationAndUnrelatedChange() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val original = RuntimeSettingsRepository.read(context)
+        val original = RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()
         val persisted = original.copy(
             mtu = 1400,
             socksListenAll = true,
@@ -62,10 +62,10 @@ class RuntimeSettingsRecreationAndroidTest {
             )
             val hydrated = hydrateRuntimeSettingsCredentials(
                 restoredDraft,
-                RuntimeSettingsRepository.read(context),
+                RuntimeSettingsRepository.read(context).requireAuthoritativeSettings(),
             )
             RuntimeSettingsRepository.write(context, hydrated.copy(mtu = 1500))
-            val reloaded = RuntimeSettingsRepository.read(context)
+            val reloaded = RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()
 
             assertEquals(1500, reloaded.mtu)
             assertEquals(persisted.socksUsername, reloaded.socksUsername)

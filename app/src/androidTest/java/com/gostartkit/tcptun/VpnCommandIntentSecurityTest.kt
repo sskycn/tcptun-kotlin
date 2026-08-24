@@ -14,7 +14,7 @@ class VpnCommandIntentSecurityTest {
     @Test
     fun startIntentContainsOnlyOpaqueCommandReference() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val original = RuntimeSettingsRepository.read(context)
+        val original = RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()
         val password = "intent-secret-password-marker"
         val profile = AppConfig(
             id = "intent-command-profile",

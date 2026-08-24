@@ -566,18 +566,15 @@ internal fun clearClipboardText(context: Context, expectedText: String) {
     }
 }
 
-internal fun readUiRuntimeSettings(context: Context): RuntimeSettings {
-    return runRecoverableCatching { RuntimeSettingsRepository.read(context) }
-        .getOrElse { error ->
-            TcptunState.appendLog(
-                "runtime settings read failed: ${error.message ?: error.javaClass.simpleName}",
-            )
-            RuntimeSettings()
-        }
-}
+internal fun readUiRuntimeSettings(context: Context): RuntimeSettingsRead =
+    RuntimeSettingsRepository.read(context)
 
-internal fun writeUiRuntimeSettings(context: Context, settings: RuntimeSettings): Result<Unit> {
-    return runRecoverableCatching { RuntimeSettingsRepository.write(context, settings) }
+internal fun writeUiRuntimeSettings(
+    context: Context,
+    expected: RuntimeSettingsRead,
+    settings: RuntimeSettings,
+): Result<RuntimeSettingsRead.Success> = runRecoverableCatching {
+    RuntimeSettingsRepository.writeIfCurrent(context, expected, settings)
 }
 
 internal fun needsNotificationPermission(context: Context): Boolean {

@@ -55,8 +55,11 @@ class TcptunVpnService : VpnService() {
     private val teardownLock = Any()
     /** Shared with service ownership so old/new instances cannot publish across each other. */
     private val lifecycleCommandLock = serviceOwnerLock
+    private val runtimeControlUnavailable = AtomicBoolean()
     private val lifecycleExecutor = newLifecycleScheduledExecutor("TcptunLifecycle")
-    private val runtimeCoordinator = VpnRuntimeCoordinator(lifecycleExecutor) { !destroyed.get() }
+    private val runtimeCoordinator = VpnRuntimeCoordinator(lifecycleExecutor) {
+        !destroyed.get() && !runtimeControlUnavailable.get()
+    }
     private val latestStartId = AtomicInteger()
     private val connectionUpdateTracker = ConnectionUpdateTracker()
     private val bridgeRecoveryCoordinator = BridgeRecoveryCoordinator(
@@ -302,21 +305,30 @@ class TcptunVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         val command = VpnServiceCommand.fromAction(action)
-        val admittedToken = synchronized(lifecycleCommandLock) {
-            latestStartId.updateAndGet { current -> maxOf(current, startId) }
-            val replacesRuntime = command.policyKind == ServiceCommandKind.StartOrRestore ||
-                (command.policyKind == ServiceCommandKind.UpdateConnections && !explicitStopRequested)
-            if (replacesRuntime) {
-                // Linearize replacement work before foreground publication or
-                // any other blocking operation so stale cleanup cannot stop it.
-                if (command.policyKind == ServiceCommandKind.StartOrRestore) {
-                    runtimeCoordinator.claimStart(serviceInstanceId, persistent = true)
-                } else {
-                    runtimeCoordinator.claimAuxiliaryCommand(serviceInstanceId, persistent = true).also { token ->
-                        runtimeSettingsState.rebindAppliedOwnership(token, currentRuntimeOwnership())
+        val admittedToken = try {
+            synchronized(lifecycleCommandLock) {
+                latestStartId.updateAndGet { current -> maxOf(current, startId) }
+                val replacesRuntime = command.policyKind == ServiceCommandKind.StartOrRestore ||
+                    (command.policyKind == ServiceCommandKind.UpdateConnections && !explicitStopRequested)
+                if (replacesRuntime) {
+                    // Linearize replacement work before foreground publication or
+                    // any other blocking operation so stale cleanup cannot stop it.
+                    if (command.policyKind == ServiceCommandKind.StartOrRestore) {
+                        runtimeCoordinator.claimStart(serviceInstanceId, persistent = true)
+                    } else {
+                        runtimeCoordinator.claimAuxiliaryCommand(serviceInstanceId, persistent = true).also { token ->
+                            runtimeSettingsState.rebindAppliedOwnership(token, currentRuntimeOwnership())
+                        }
                     }
-                }
-            } else null
+                } else null
+            }
+        } catch (error: Throwable) {
+            if (error.isFatalProcessError()) throw error
+            if (command.requiresForegroundStart) {
+                runRecoverableCatching { startVpnForeground(VpnForegroundState.Error(retryingCleanup = false)) }
+            }
+            handleServiceCommandFailure(command, action, error)
+            return START_NOT_STICKY
         }
         val foregroundStart = command.requiresForegroundStart
         if (foregroundStart) {
@@ -427,6 +439,10 @@ class TcptunVpnService : VpnService() {
         error: Throwable,
     ) {
         val message = "VPN service command ${action ?: "restore"} failed: ${failureDescription(error)}"
+        if (command == VpnServiceCommand.Stop && error.isRuntimeActorControlFailure()) {
+            forcePhysicalStopAfterActorFailure(message)
+            return
+        }
         if (!command.requiresForegroundStart) {
             runIfActiveServiceOwner {
                 TcptunState.appendLog(message)
@@ -434,38 +450,88 @@ class TcptunVpnService : VpnService() {
             }
             return
         }
-        val cleanup = synchronized(lifecycleCommandLock) {
-            if (destroyed.get() || !isActiveServiceOwner()) return
-            TcptunState.error(message)
-            val token = runtimeCoordinator.claimStop(serviceInstanceId, "failed command cleanup")
-            runtimeSettingsState.clearForStop()
-            token to runtimeCoordinator.dispatchStop(
-                token = token,
-                reason = "failed command cleanup",
-                options = VpnRuntimeStopOptions(setStopped = false),
-                onFailure = { cleanupError ->
-                    TcptunState.appendLog(
-                        "failed command cleanup failed: ${failureDescription(cleanupError)}",
-                    )
-                },
-                stopRuntime = { options, commandToken, commandOwner ->
-                    stopVpn(
-                        setStopped = options.setStopped,
-                        clearSavedConfig = options.clearSavedConfig,
-                        stopSelfService = options.stopSelfService,
-                        globalStateOwner = {
-                            commandOwner() && runtimeCoordinator.isCurrent(commandToken) &&
-                                !destroyed.get() && isActiveServiceOwner()
-                        },
-                        globalStateCommitLock = lifecycleCommandLock,
-                        cleanupOwner = VpnPlatformCleanupOwner.Stop(commandToken),
-                    )
-                },
-            )
+        val cleanup = try {
+            synchronized(lifecycleCommandLock) {
+                if (destroyed.get() || !isActiveServiceOwner()) return
+                TcptunState.error(message)
+                val token = runtimeCoordinator.claimStop(serviceInstanceId, "failed command cleanup")
+                runtimeSettingsState.clearForStop()
+                token to runtimeCoordinator.dispatchStop(
+                    token = token,
+                    reason = "failed command cleanup",
+                    options = VpnRuntimeStopOptions(setStopped = false),
+                    onFailure = { cleanupError ->
+                        TcptunState.appendLog(
+                            "failed command cleanup failed: ${failureDescription(cleanupError)}",
+                        )
+                    },
+                    stopRuntime = { options, commandToken, commandOwner ->
+                        stopVpn(
+                            setStopped = options.setStopped,
+                            clearSavedConfig = options.clearSavedConfig,
+                            stopSelfService = options.stopSelfService,
+                            globalStateOwner = {
+                                commandOwner() && runtimeCoordinator.isCurrent(commandToken) &&
+                                    !destroyed.get() && isActiveServiceOwner()
+                            },
+                            globalStateCommitLock = lifecycleCommandLock,
+                            cleanupOwner = VpnPlatformCleanupOwner.Stop(commandToken),
+                        )
+                    },
+                )
+            }
+        } catch (cleanupError: Throwable) {
+            if (cleanupError.isFatalProcessError()) throw cleanupError
+            if (cleanupError.isRuntimeActorControlFailure()) {
+                forcePhysicalStopAfterActorFailure(message)
+                return
+            }
+            throw cleanupError
         }
         if (!cleanup.second) {
             runIfLifecycleCommandOwner(cleanup.first.lifecycleGeneration) {
                 stopSelfWhenBridgeReleased(reason = "failed command cleanup rejection")
+            }
+        }
+    }
+
+    private fun Throwable.isRuntimeActorControlFailure(): Boolean =
+        generateSequence(this) { it.cause }.any {
+            it is VpnRuntimeActorAdmissionException ||
+                (it is IllegalStateException && it.message == "runtime actor did not respond")
+        }
+
+    /** Terminal fail-closed path used only when Stop cannot enter the logical control lane. */
+    private fun forcePhysicalStopAfterActorFailure(message: String) {
+        runtimeControlUnavailable.set(true)
+        runtimeCoordinator.closeExternalIngress()
+        synchronized(lifecycleCommandLock) {
+            runtimeSettingsState.clearForStop()
+            cleanupStep("persist requested stopped state") { clearDesiredRunningConfig(this) }
+            if (isActiveServiceOwner()) {
+                TcptunState.error("$message; forcing physical cleanup")
+                TcptunState.setConnectionsReady(false)
+            }
+        }
+        cancelPendingBridgeRestart()
+        bridgeSessionRuntime.cancelReadyWaiter("runtime actor unavailable during stop")
+        bridgeRecoveryTask.cancel()
+        bridgeRecoveryCoordinator.resetRecovery()
+        val cleanup = startCrashGuardedThread(
+            threadName = "TcptunActorFailureStop",
+            onFailure = { failure -> cleanupStep("Actor failure physical cleanup") { throw failure } },
+        ) {
+            stopVpn(
+                globalStateOwner = {
+                    !destroyed.get() && isActiveServiceOwner() && runtimeControlUnavailable.get()
+                },
+                globalStateCommitLock = lifecycleCommandLock,
+            )
+            stopSelfWhenBridgeReleased(reason = "runtime actor unavailable")
+        }
+        if (cleanup == null) {
+            cleanupStep("start Actor failure physical cleanup") {
+                throw IllegalStateException("physical cleanup thread could not be started")
             }
         }
     }
@@ -1232,10 +1298,14 @@ class TcptunVpnService : VpnService() {
         ownership: VpnRuntimeOwnership,
         freshRuntimeDesiredSequence: Long? = null,
     ) {
+        val desired = RuntimeSettingsRepository.read(this) as? RuntimeSettingsRead.Success ?: run {
+            TcptunState.appendLog("runtime settings unavailable; keeping current applied settings")
+            return
+        }
         synchronized(lifecycleCommandLock) {
             runtimeSettingsState.reconcileFreshRuntime(
                 ownership,
-                AppliedRuntimeSettings.from(RuntimeSettingsRepository.read(this)),
+                AppliedRuntimeSettings.from(desired.settings),
                 freshRuntimeDesiredSequence,
                 currentRuntimeOwnership(),
             ) { scheduleRuntimeSettingsApply("pending runtime settings reconciliation", it) }
@@ -1508,18 +1578,24 @@ class TcptunVpnService : VpnService() {
                 bridgeHealthRuntime.memberHealthProbeCallback,
             )
             synchronized(lifecycleCommandLock) {
-                runtimeCoordinator.destroy(serviceInstanceId)
+                try {
+                    runtimeCoordinator.destroy(serviceInstanceId)
+                } catch (error: Throwable) {
+                    if (error.isFatalProcessError()) throw error
+                    runtimeCoordinator.closeExternalIngress()
+                    TcptunState.appendLog(
+                        "runtime actor destroy admission failed; continuing physical teardown",
+                    )
+                }
                 runtimeSettingsState.clearForStop()
                 if (isActiveServiceOwner()) TcptunState.clearTcping()
             }
             cancelPendingBridgeRestart()
-            platformTeardownRuntime.shutdown()
             deferredServiceStopGate.clear()
             bridgeSessionRuntime.cancelReadyWaiter("tcptun service destroyed")
             bridgeRecoveryTask.cancel()
             bridgeHealthRuntime.shutdown()
             outboundTcpingRuntime.shutdown()
-            lifecycleExecutor.shutdownNow()
             launchDestroyCleanup()
         } catch (error: Throwable) {
             if (error.isFatalProcessError()) throw error
@@ -1531,6 +1607,24 @@ class TcptunVpnService : VpnService() {
 
     /** Keep JNI stop/close and bridge-lock waits off Android's main service thread. */
     private fun launchDestroyCleanup() {
+        val physicalCleanupCompleted = AtomicBoolean()
+        val cleanupScheduled = executeCrashGuarded(
+            executor = lifecycleExecutor,
+            taskName = "VPN destroy physical cleanup",
+            onFailure = { error -> cleanupStep("VPN destroy physical cleanup") { throw error } },
+        ) {
+            // This task is queued after already-admitted lifecycle work. It lets owned
+            // completions drain through the Actor before the final physical teardown.
+            platformTeardownRuntime.shutdown()
+            stopVpn(
+                setStopped = TcptunState.status != VpnStatus.Error,
+                clearSavedConfig = false,
+                stopSelfService = false,
+                globalStateOwner = ::isActiveServiceOwner,
+            )
+            physicalCleanupCompleted.set(true)
+        }
+        lifecycleExecutor.shutdown()
         val coordinator = startCrashGuardedThread(
             threadName = "TcptunDestroyCoordinator",
             onFailure = { error -> cleanupStep("VPN destroy coordinator") { throw error } },
@@ -1545,6 +1639,7 @@ class TcptunVpnService : VpnService() {
             if (!lifecycleStopped) {
                 TcptunState.appendLog("tcptun lifecycle is still exiting; aborting native session")
                 abortSucceeded = abortBridgeEngineForDestroy()
+                lifecycleExecutor.shutdownNow()
                 lifecycleStopped = lifecycleExecutor.awaitTermination(
                     DESTROY_ABORT_SETTLE_WAIT_MS,
                     TimeUnit.MILLISECONDS,
@@ -1578,16 +1673,22 @@ class TcptunVpnService : VpnService() {
                 TcptunState.appendLog(
                     "tcptun lifecycle did not stop within the destroy deadline; native ownership retained",
                 )
-                runtimeCoordinator.shutdownActor()
+                platformTeardownRuntime.shutdown()
+                if (!runtimeCoordinator.shutdownActor()) {
+                    TcptunState.appendLog("runtime actor did not terminate cleanly")
+                }
                 return@coordinator
             }
 
-            stopVpn(
-                setStopped = TcptunState.status != VpnStatus.Error,
-                clearSavedConfig = false,
-                stopSelfService = false,
-                globalStateOwner = ::isActiveServiceOwner,
-            )
+            platformTeardownRuntime.shutdown()
+            if (!cleanupScheduled || !physicalCleanupCompleted.get()) {
+                stopVpn(
+                    setStopped = TcptunState.status != VpnStatus.Error,
+                    clearSavedConfig = false,
+                    stopSelfService = false,
+                    globalStateOwner = ::isActiveServiceOwner,
+                )
+            }
             if (!bridgeResources.hasOwnedResources && closeBridgeEngine()) {
                 TcptunState.appendLog("tcptun destroy cleanup completed")
                 RuntimeOwnershipDebugRegistry.remove(serviceInstanceId)
@@ -1596,7 +1697,9 @@ class TcptunVpnService : VpnService() {
                     "tcptun destroy cleanup incomplete; native resources retained for safe process teardown",
                 )
             }
-            runtimeCoordinator.shutdownActor()
+            if (!runtimeCoordinator.shutdownActor()) {
+                TcptunState.appendLog("runtime actor did not terminate cleanly")
+            }
         }
         if (coordinator == null) {
             cleanupStep("start VPN destroy coordinator") {
@@ -2169,7 +2272,11 @@ class TcptunVpnService : VpnService() {
             TcptunState.appendLog("runtime settings apply skipped: no running profile")
             return
         }
-        val settings = RuntimeSettingsRepository.read(this)
+        val settings = (RuntimeSettingsRepository.read(this) as? RuntimeSettingsRead.Success)?.settings
+            ?: run {
+                TcptunState.appendLog("runtime settings unavailable; settings apply rejected")
+                return
+            }
         runtimeSettingsState.reconcile(
             claim = request,
             desired = AppliedRuntimeSettings.from(settings),
@@ -2366,9 +2473,11 @@ class TcptunVpnService : VpnService() {
             VpnHealthCheckRequests.requestUiVisibleHealthCheck()
         }
 
-        fun readRuntimeSettings(context: Context): RuntimeSettings = RuntimeSettingsRepository.read(context)
-        fun writeRuntimeSettings(context: Context, settings: RuntimeSettings) =
+        fun readRuntimeSettings(context: Context): RuntimeSettings =
+            RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()
+        fun writeRuntimeSettings(context: Context, settings: RuntimeSettings) {
             RuntimeSettingsRepository.write(context, settings)
+        }
         private fun encodeDesiredRunningPlan(plan: ProfileRunPlan): String =
             DesiredRunningPlanStore.encode(plan)
 

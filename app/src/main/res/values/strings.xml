@@ -215,6 +215,7 @@
     <string name="tcp_udp">TCP + UDP</string>
     <string name="current_effective">Current effective settings</string>
     <string name="back">Back</string>
+    <string name="retry">Retry</string>
     <string name="logs">Logs</string>
     <string name="log_level">Log level (log.level)</string>
     <string name="log_level_note">Applies immediately without restarting the VPN. Debug produces substantially more runtime output and may increase power use; Off disables core logs.</string>
