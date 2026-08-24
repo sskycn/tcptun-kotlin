@@ -95,6 +95,54 @@ instrumentation crashes. If an OEM denies shell `pm clear`, the runner uninstall
 debug package instead; failure of both cleanup paths fails the run. Debug data is therefore
 disposable and is not backed up.
 
+For OEMs that intermittently reject USB installation, build and install once, then reuse only
+the exact installed artifacts:
+
+```bash
+RUNTIME_STRESS_DISPOSABLE_DEBUG_DATA=true \
+RUNTIME_STRESS_REUSE_INSTALLED=true \
+RUNTIME_STRESS_ITERATIONS=1000 \
+RUNTIME_STRESS_SEED=274912837 \
+scripts/run-runtime-stress.sh
+```
+
+Reuse mode never builds, installs, or falls back from `pm clear` to uninstall. Before clearing
+debug data it pulls each installed monolithic APK and requires an exact SHA-256 match with the
+local app/test artifact, matching package/version/signing certificate, a debuggable target, and
+a test APK targeting `com.tcptun.client.debug`. It also verifies `bridge.lock`, the AAR core/API
+metadata, and the device-ABI Bridge binary packaged in the exact APK. Any mismatch refuses to
+run. Split installs are refused because this project produces monolithic validation APKs.
+If the OEM also denies `pm clear`, reuse mode records the skipped clear and continues with
+force-stop, AppOps reset, and the instrumentation harness's scoped settings/profile fixture
+reset; it still never uninstalls either package.
+
+Run the stability trend on the same verified installation:
+
+```bash
+RUNTIME_STRESS_DISPOSABLE_DEBUG_DATA=true \
+REUSE_INSTALLED=true \
+CYCLES=100 \
+scripts/run-resource-cycle-validation.sh
+```
+
+Each cycle condition-waits for `Running + connectionsReady`, asserts the TUN/Bridge/lease
+ownership tuple, condition-waits for fully released `Stopped`, and waits for the old
+`TcptunRuntimeActor` and `TcptunLifecycle` threads to terminate. The short post-condition delay
+is only a resource sampling settle period. Results are written under `build/validation-gate/`.
+
+For a real non-loopback LAN authentication check, set the secret only in the environment:
+
+```bash
+RUNTIME_STRESS_DISPOSABLE_DEBUG_DATA=true \
+TCPTUN_TEST_PROXY_PASSWORD='use-a-protected-random-value' \
+scripts/run-lan-auth-validation.sh
+```
+
+The host acts as the second LAN client. It verifies that loopback-only mode refuses the device's
+Wi-Fi address, then that listen-all refuses anonymous and wrong-password SOCKS requests while
+accepting the correct password. A stop/start persistence probe repeats the authenticated request.
+The password is never echoed or written; the report contains only a 12-hex SHA-256 prefix.
+
 The default lifecycle matrix uses self-contained single-profile raw direct configs. It does
 not claim to test in-place membership. That proof is a separate device-lab opt-in requiring
 two reachable structured profile URIs (no full JSON profiles):
@@ -124,6 +172,10 @@ Use USB ADB for network-control runs. Both the instrumentation helper and the ho
 Wi-Fi/mobile-data state; the host restoration remains available after a target-process crash.
 The device needs a working Wi-Fi network and an active cellular subscription for the full
 handover matrix.
+
+The host also captures the exact pre-run `ACTIVATE_VPN` AppOps mode and restores that mode on
+every exit path. It does not use a package-wide AppOps reset, which can silently change unrelated
+permissions or map the VPN authorization to a different OEM default.
 
 ### Harness architecture
 

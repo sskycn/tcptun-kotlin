@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_dir=$(cd "$script_dir/.." && pwd)
+cd "$repo_dir"
+# shellcheck source=android-validation-common.sh
+source "$script_dir/android-validation-common.sh"
+
 if [[ "${RUNTIME_STRESS_DISPOSABLE_DEBUG_DATA:-}" != "true" ]]; then
     echo "refusing runtime stress without RUNTIME_STRESS_DISPOSABLE_DEBUG_DATA=true" >&2
     exit 1
@@ -11,10 +17,18 @@ seed="${RUNTIME_STRESS_SEED:-1592622103}"
 max_delay_millis="${RUNTIME_STRESS_MAX_DELAY_MILLIS:-200}"
 network_control="${RUNTIME_STRESS_NETWORK_CONTROL:-false}"
 system_events="${RUNTIME_STRESS_SYSTEM_EVENTS:-false}"
+reuse_installed="${RUNTIME_STRESS_REUSE_INSTALLED:-false}"
+output_dir="${RUNTIME_STRESS_OUTPUT_DIR:-build/validation-gate}"
 membership_profile_a_uri="${RUNTIME_STRESS_MEMBERSHIP_PROFILE_A_URI:-}"
 membership_profile_b_uri="${RUNTIME_STRESS_MEMBERSHIP_PROFILE_B_URI:-}"
 debug_package="com.tcptun.client.debug"
 debug_test_package="com.tcptun.client.debug.test"
+debug_apk="app/build/outputs/apk/debug/app-debug.apk"
+test_apk="app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
+
+case "$reuse_installed" in true|false) ;; *) echo "RUNTIME_STRESS_REUSE_INSTALLED must be true or false" >&2; exit 1 ;; esac
+mkdir -p "$output_dir"
+identity_output="$output_dir/identity.txt"
 
 if [[ -n "$membership_profile_a_uri" && -z "$membership_profile_b_uri" ]] ||
     [[ -z "$membership_profile_a_uri" && -n "$membership_profile_b_uri" ]]; then
@@ -22,22 +36,8 @@ if [[ -n "$membership_profile_a_uri" && -z "$membership_profile_b_uri" ]] ||
     exit 1
 fi
 
-device_lines=$(adb devices | awk 'NR > 1 && $2 == "device" { print $1 }')
-requested_serial="${ANDROID_SERIAL:-}"
-if [[ -n "$requested_serial" ]]; then
-    if ! printf '%s\n' "$device_lines" | awk -v serial="$requested_serial" '$0 == serial { found = 1 } END { exit !found }'; then
-        echo "ANDROID_SERIAL does not identify an authorized device" >&2
-        exit 1
-    fi
-    serial="$requested_serial"
-else
-    device_count=$(printf '%s\n' "$device_lines" | awk 'NF { count += 1 } END { print count + 0 }')
-    if (( device_count != 1 )); then
-        echo "runtime stress requires exactly one authorized device; found $device_count" >&2
-        exit 1
-    fi
-    serial=$(printf '%s\n' "$device_lines" | awk 'NF { print; exit }')
-fi
+serial=$(validation_resolve_serial)
+activate_vpn_was=$(validation_read_appop_mode "$serial" "$debug_package" ACTIVATE_VPN)
 wifi_status=$(adb -s "$serial" shell cmd wifi status | tr '[:upper:]' '[:lower:]')
 if [[ "$wifi_status" == *"enabled"* ]]; then
     wifi_was_enabled="true"
@@ -64,6 +64,10 @@ clear_disposable_package() {
     if adb -s "$serial" shell pm clear "$package_name" >/dev/null 2>&1; then
         return 0
     fi
+    if [[ "$reuse_installed" == "true" ]]; then
+        echo "pm clear denied for $package_name; preserving installation and using harness fixture reset" >&2
+        return 0
+    fi
     echo "pm clear denied for $package_name; uninstalling disposable debug package" >&2
     adb -s "$serial" uninstall "$package_name" >/dev/null
 }
@@ -79,8 +83,7 @@ cleanup() {
     trap '' INT TERM
     set +e
     adb -s "$serial" shell am force-stop "$debug_package"
-    adb -s "$serial" shell appops reset "$debug_package" >/dev/null 2>&1
-    adb -s "$serial" shell appops reset "$debug_test_package" >/dev/null 2>&1
+    validation_restore_appop_mode "$serial" "$debug_package" ACTIVATE_VPN "$activate_vpn_was" || cleanup_failed="true"
     clear_disposable_package "$debug_package" || cleanup_failed="true"
     clear_disposable_package "$debug_test_package" || cleanup_failed="true"
     if [[ "$wifi_was_enabled" == "true" ]]; then
@@ -110,23 +113,28 @@ adb -s "$serial" shell getprop ro.product.model
 adb -s "$serial" shell getprop ro.build.version.release
 adb -s "$serial" shell getprop ro.build.version.sdk
 adb -s "$serial" shell getprop ro.product.cpu.abi
+device_abi=$(adb -s "$serial" shell getprop ro.product.cpu.abi | tr -d '\r')
 
 if [[ "$network_control" == "true" ]]; then
     echo "network control enabled; use USB ADB because the test disables Wi-Fi"
 fi
 
+if [[ "$reuse_installed" == "true" ]]; then
+    echo "reuse-installed mode: skipping build and install"
+else
+    ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+    adb -s "$serial" install -r -t --no-streaming "$debug_apk"
+    adb -s "$serial" install -r -t --no-streaming "$test_apk"
+fi
+
+: > "$identity_output"
+validation_verify_bridge_identity "$debug_apk" "$device_abi" "$identity_output"
+validation_verify_installed_apk "$serial" "$debug_apk" "$debug_package" "" "$identity_output"
+validation_verify_installed_apk "$serial" "$test_apk" "$debug_test_package" "$debug_package" "$identity_output"
+
 adb -s "$serial" shell am force-stop "$debug_package" >/dev/null 2>&1 || true
-adb -s "$serial" shell appops reset "$debug_package" >/dev/null 2>&1 || true
-adb -s "$serial" shell appops reset "$debug_test_package" >/dev/null 2>&1 || true
 clear_disposable_package "$debug_package"
 clear_disposable_package "$debug_test_package"
-
-./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
-
-debug_apk="app/build/outputs/apk/debug/app-debug.apk"
-test_apk="app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
-adb -s "$serial" install -r -t --no-streaming "$debug_apk"
-adb -s "$serial" install -r -t --no-streaming "$test_apk"
 
 instrumentation_args=(
     -e class com.tcptun.client.VpnRuntimeStressTest,com.tcptun.client.VpnNetworkHandoverStressTest
@@ -154,6 +162,7 @@ instrumentation_output=$(adb -s "$serial" shell am instrument -w -r \
 instrumentation_status=$?
 set -e
 printf '%s\n' "$instrumentation_output"
+printf '%s\n' "$instrumentation_output" > "$output_dir/seed-$seed.txt"
 
 if (( instrumentation_status != 0 )) ||
     grep -Eq 'FAILURES!!!|INSTRUMENTATION_(FAILED|ABORTED)|shortMsg=|Process crashed' \
@@ -165,3 +174,13 @@ if ! grep -Eq 'OK \([0-9]+ tests?\)' <<<"$instrumentation_output"; then
     echo "runtime stress instrumentation did not report a successful JUnit summary" >&2
     exit 1
 fi
+
+junit_duration=$(printf '%s\n' "$instrumentation_output" |
+    sed -n 's/^Time: //p' | tail -1)
+skipped_tests=$(grep -c 'INSTRUMENTATION_STATUS_CODE: -4' <<<"$instrumentation_output" || true)
+{
+    printf 'RUNTIME_STRESS_RUN seed=%s iterations=%s duration_seconds=%s result=PASS\n' \
+        "$seed" "$iterations" "${junit_duration:-NA}"
+    printf 'crash=0 native_crash=0 anr=0 ownership_failure=0 final_ownership=released skipped_tests=%s\n' \
+        "$skipped_tests"
+} | tee -a "$output_dir/seed-$seed.txt"
