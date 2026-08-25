@@ -97,15 +97,15 @@ class VpnNetworkHandoverStressTest {
 
     @Test
     fun permissionRevokeDuringRunningReleasesOwnership() =
-        withSystemEventHarness { harness, controls ->
+        withSystemEventHarness { harness, _ ->
+            assumeTrue(
+                "real system VPN revoke is manual and requires runtimeStressRevokeMode=system",
+                revokeMode() == RevokeModeSystem,
+            )
             harness.start()
             harness.waitForRunning()
-            controls.revokeVpnPermission()
-            harness.waitUntil("permission revoke cleanup", 20_000) {
-                TcptunVpnService.runtimeOwnershipDebugSnapshots().none {
-                    it.tunOwned || it.bridgeResourcePhase.ownsResources
-                }
-            }
+            println("VPN_REVOKE_ACTION_REQUIRED: revoke VPN authorization in system Settings now")
+            harness.waitForStopped(timeoutMillis = 120_000)
             harness.assertRuntimeInvariants()
             harness.assertNoProcessFailureEvidence()
         }
@@ -113,18 +113,42 @@ class VpnNetworkHandoverStressTest {
     @Test
     fun permissionRevokeDuringRecoveryReleasesOwnership() =
         withNetworkAndSystemEventHarness { harness, controls ->
+            assumeTrue(
+                "real system VPN revoke is manual and requires runtimeStressRevokeMode=system",
+                revokeMode() == RevokeModeSystem,
+            )
             harness.start()
             harness.waitForRunning()
             controls.disableWifi()
             controls.disableCellular()
             assumeTrue("device did not enter Recovery before revoke", waitForRecovery(harness))
-            controls.revokeVpnPermission()
-            harness.waitUntil("Recovery permission revoke cleanup", 30_000) {
-                TcptunVpnService.runtimeOwnershipDebugSnapshots().none {
-                    it.tunOwned || it.bridgeResourcePhase.ownsResources
-                }
-            }
+            println("VPN_REVOKE_ACTION_REQUIRED: revoke VPN authorization in system Settings now")
+            harness.waitForStopped(timeoutMillis = 120_000)
             harness.assertRuntimeInvariants()
+            harness.assertNoProcessFailureEvidence()
+        }
+
+    @Test
+    fun appOpsAuthorizationChangeRecordsBehaviorWithoutAssumingFrameworkRevoke() =
+        withSystemEventHarness { harness, controls ->
+            assumeTrue(
+                "AppOps diagnostic requires runtimeStressRevokeMode=appops",
+                revokeMode() == RevokeModeAppOps,
+            )
+            harness.start()
+            harness.waitForRunning()
+            val logCountBefore = TcptunState.logs.size
+            controls.setVpnAppOpIgnored()
+            Thread.sleep(2_000)
+            harness.assertRuntimeInvariants()
+            val callbackObserved = TcptunState.logs.drop(logCountBefore).any {
+                it.contains("VPN permission revoked")
+            }
+            val snapshots = TcptunVpnService.runtimeOwnershipDebugSnapshots()
+            println(
+                "VPN_APPOPS_OBSERVATION callbackObserved=$callbackObserved " +
+                    "status=${TcptunState.status} ownership=$snapshots",
+            )
             harness.assertNoProcessFailureEvidence()
         }
 
@@ -207,7 +231,7 @@ class VpnNetworkHandoverStressTest {
             if (wifiWasEnabled) enableWifi() else enableCellular()
         }
 
-        fun revokeVpnPermission() =
+        fun setVpnAppOpIgnored() =
             shell("appops set ${harness.context.packageName} ACTIVATE_VPN ignore")
 
         fun allowVpnPermission() =
@@ -228,6 +252,12 @@ class VpnNetworkHandoverStressTest {
     private companion object {
         const val NetworkControlArgument = "runtimeStressNetworkControl"
         const val SystemEventsArgument = "runtimeStressSystemEvents"
+        const val RevokeModeArgument = "runtimeStressRevokeMode"
+        const val RevokeModeAppOps = "appops"
+        const val RevokeModeSystem = "system"
         val TaskIdPattern = Regex("Task\\{[^}]*#(\\d+)[^}]*com\\.tcptun\\.client[^}]*\\}")
     }
+
+    private fun revokeMode(): String =
+        InstrumentationRegistry.getArguments().getString(RevokeModeArgument, RevokeModeAppOps)
 }

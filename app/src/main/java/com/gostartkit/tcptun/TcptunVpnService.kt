@@ -7,6 +7,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.VpnService
 import android.os.Build
+import android.util.Log
 import org.json.JSONObject
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
@@ -305,6 +306,7 @@ class TcptunVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         val command = VpnServiceCommand.fromAction(action)
+        debugLifecycleMarker("onStartCommand command=${command.policyKind}")
         val admittedToken = try {
             synchronized(lifecycleCommandLock) {
                 latestStartId.updateAndGet { current -> maxOf(current, startId) }
@@ -1313,6 +1315,7 @@ class TcptunVpnService : VpnService() {
     }
 
     private fun requestStopVpn() {
+        debugLifecycleMarker("cleanup requested")
         cleanupStep("clear TCPing") { TcptunState.clearTcping() }
         val (command, accepted) = synchronized(lifecycleCommandLock) {
             val token = runtimeCoordinator.claimStop(serviceInstanceId, "explicit VPN stop")
@@ -1431,6 +1434,7 @@ class TcptunVpnService : VpnService() {
 
     override fun onRevoke() {
         try {
+            debugLifecycleMarker("onRevoke observed")
             TcptunState.appendLog("VPN permission revoked")
             requestStopVpn()
         } catch (error: Throwable) {
@@ -1520,7 +1524,14 @@ class TcptunVpnService : VpnService() {
                     },
                     localStep = ::cleanupStep,
                 ),
-            )
+            ).also { attempt ->
+                debugLifecycleMarker(
+                    when (attempt.result) {
+                        VpnPlatformStopResult.Released -> "cleanup released"
+                        VpnPlatformStopResult.RetainedForRetry -> "cleanup retained"
+                    },
+                )
+            }
         }
 
     private fun honorDeferredStopIfReleased() {
@@ -1567,6 +1578,7 @@ class TcptunVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        debugLifecycleMarker("onDestroy observed")
         if (!destroyed.compareAndSet(false, true)) {
             super.onDestroy()
             return
@@ -2377,6 +2389,12 @@ class TcptunVpnService : VpnService() {
 
     private fun createNotificationChannel() = foregroundRuntime.createChannel()
 
+    private fun debugLifecycleMarker(event: String) {
+        if (BuildConfig.DEBUG) {
+            Log.i(DEBUG_LIFECYCLE_TAG, "$event service=$serviceInstanceId")
+        }
+    }
+
     companion object {
         const val ACTION_START = VpnServiceIntents.ActionStart
         const val ACTION_STOP = VpnServiceIntents.ActionStop
@@ -2407,6 +2425,7 @@ class TcptunVpnService : VpnService() {
         private const val DEFERRED_DESTROY_WAIT_MS = 15_000L
         private const val DESTROY_MAX_LIFECYCLE_WAIT_MS = 35_000L
         private const val PREVIOUS_RUNTIME_RELEASE_WAIT_MS = 35_000L
+        internal const val DEBUG_LIFECYCLE_TAG = "TcptunVpnLifecycle"
         private val serviceOwnerLock = Any()
         private val nextServiceInstanceId = AtomicLong()
         private val activeServiceInstanceId = AtomicLong()

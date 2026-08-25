@@ -177,6 +177,52 @@ The host also captures the exact pre-run `ACTIVATE_VPN` AppOps mode and restores
 every exit path. It does not use a package-wide AppOps reset, which can silently change unrelated
 permissions or map the VPN authorization to a different OEM default.
 
+### VPN permission revoke semantics
+
+Changing `ACTIVATE_VPN` with `appops set` changes pre-consent. It is not, by itself, the Android
+framework operation that replaces the prepared VPN owner, so it must not be reported as proof that
+`VpnService.onRevoke()` was delivered. Run the AppOps diagnostic separately:
+
+Keep these system events distinct in every device report:
+
+| Method | What it validates | Immediate `onRevoke()` required? |
+| --- | --- | --- |
+| `ACTIVATE_VPN` AppOps `ignore`/`deny` | Future VPN pre-consent mode | No contract claimed |
+| System VPN authorization revoke | Framework ownership revoke | Yes |
+| Disconnect in system VPN Settings | Active tunnel disconnect behavior | Observe separately; do not relabel as authorization revoke |
+| Package force-stop | Process/service termination and OS resource cleanup | No callback contract claimed |
+| App task removal | Activity task lifecycle while foreground VPN remains owned | No; current policy keeps the VPN running |
+
+The Android framework contract says the prepared owner is notified when another owner replaces it,
+and the system-server revoke path explicitly disconnects the interface before sending the
+`VpnService` callback. Changing the AppOps value only changes the authorization check; it does not
+execute that prepared-owner replacement path by itself.
+
+```bash
+RUNTIME_STRESS_DISPOSABLE_DEBUG_DATA=true \
+VPN_REVOKE_MODE=appops \
+scripts/run-vpn-revoke-validation.sh
+```
+
+This records the AppOps value, framework VPN/connectivity state, safe runtime ownership, and
+whether a callback happened, but its success is diagnostic only. It never requires immediate
+teardown.
+
+For the real user/system revoke path, use a physical device and the interactive mode:
+
+```bash
+RUNTIME_STRESS_DISPOSABLE_DEBUG_DATA=true \
+VPN_REVOKE_MODE=system \
+scripts/run-vpn-revoke-validation.sh
+```
+
+Wait for `VPN_REVOKE_ACTION_REQUIRED`, then revoke VPN authorization in system Settings. Do not
+substitute Disconnect, force-stop, task removal, or an AppOps shell command. The runner waits up
+to two minutes, requires released TUN/Bridge ownership, captures debug-only lifecycle markers,
+and restores the exact prior AppOps mode on exit. Run it on Xiaomi and at least one non-Xiaomi
+physical reference device. Reports are written below `build/validation-gate/vpn-revoke/` and do
+not contain profiles, credentials, URIs, or raw configuration.
+
 ### Harness architecture
 
 - `VpnRuntimeStressHarness` owns test setup/restore, command emission, bounded waits, logcat,
@@ -226,8 +272,9 @@ Every command transition asserts:
 | 14 | underlying callback during Stop | network-control opt-in |
 | 15 | recreation while old native cleanup runs | default stress test; retained JNI fault remains a lab gap |
 | 16 | app task removed while Running | system-event opt-in |
-| 17 | VPN permission revoke while Running | system-event opt-in |
-| 18 | VPN permission revoke during Recovery | network + system-event opt-ins |
+| 17 | AppOps authorization-mode diagnostic (not revoke proof) | system-event opt-in; default appops mode |
+| 18 | Real VPN permission revoke while Running | system-event opt-in + `RUNTIME_STRESS_REVOKE_MODE=system`; manual Settings action |
+| 19 | Real VPN permission revoke during Recovery | network + system-event opt-ins + system revoke mode; manual Settings action |
 
 Recovery tests require the real device to enter the coordinator's Recovering phase after all
 underlying networks are disabled. A device/core combination that does not enter that phase is

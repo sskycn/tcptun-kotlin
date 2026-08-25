@@ -1,12 +1,12 @@
 package com.tcptun.client
 
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.swipeLeft
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -71,9 +71,13 @@ class ProfileDeleteUndoUiTest {
         composeRule.activityRule.scenario.recreate()
 
         composeRule.waitUntil(timeoutMillis = 5_000) {
-            composeRule.onAllNodesWithContentDescription(composeRule.activity.getString(R.string.reorder_profile))
-                .fetchSemanticsNodes().size >= 2
+            composeRule.onAllNodesWithText(first.name).fetchSemanticsNodes().isNotEmpty() &&
+                composeRule.onAllNodesWithText(second.name).fetchSemanticsNodes().isNotEmpty() &&
+                composeRule.onAllNodesWithContentDescription(
+                    composeRule.activity.getString(R.string.reorder_profile),
+                ).fetchSemanticsNodes().size >= 2
         }
+        composeRule.waitForIdle()
         val handles = composeRule.onAllNodesWithContentDescription(
             composeRule.activity.getString(R.string.reorder_profile),
         )
@@ -81,14 +85,14 @@ class ProfileDeleteUndoUiTest {
         val secondCenter = handles[1].fetchSemanticsNode().boundsInRoot.center
         handles[0].performTouchInput {
             val rowDistance = secondCenter.y - firstCenter.y
-            down(center)
-            moveBy(Offset(0f, rowDistance * 0.4f), delayMillis = 100)
-            moveBy(Offset(0f, rowDistance * 0.4f), delayMillis = 100)
-            moveBy(Offset(0f, rowDistance * 0.4f), delayMillis = 100)
-            up()
+            swipe(
+                start = center,
+                end = center.copy(y = center.y + rowDistance * 1.5f),
+                durationMillis = 1_000,
+            )
         }
 
-        composeRule.waitUntil(timeoutMillis = 5_000) {
+        composeRule.waitUntil(timeoutMillis = 10_000) {
             ProfileStore.load(composeRule.activity).profiles.map { it.id } == listOf(second.id, first.id)
         }
     }

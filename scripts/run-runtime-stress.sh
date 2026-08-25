@@ -17,6 +17,7 @@ seed="${RUNTIME_STRESS_SEED:-1592622103}"
 max_delay_millis="${RUNTIME_STRESS_MAX_DELAY_MILLIS:-200}"
 network_control="${RUNTIME_STRESS_NETWORK_CONTROL:-false}"
 system_events="${RUNTIME_STRESS_SYSTEM_EVENTS:-false}"
+revoke_mode="${RUNTIME_STRESS_REVOKE_MODE:-appops}"
 reuse_installed="${RUNTIME_STRESS_REUSE_INSTALLED:-false}"
 output_dir="${RUNTIME_STRESS_OUTPUT_DIR:-build/validation-gate}"
 membership_profile_a_uri="${RUNTIME_STRESS_MEMBERSHIP_PROFILE_A_URI:-}"
@@ -27,6 +28,7 @@ debug_apk="app/build/outputs/apk/debug/app-debug.apk"
 test_apk="app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
 
 case "$reuse_installed" in true|false) ;; *) echo "RUNTIME_STRESS_REUSE_INSTALLED must be true or false" >&2; exit 1 ;; esac
+case "$revoke_mode" in appops|system) ;; *) echo "RUNTIME_STRESS_REVOKE_MODE must be appops or system" >&2; exit 1 ;; esac
 mkdir -p "$output_dir"
 identity_output="$output_dir/identity.txt"
 
@@ -144,6 +146,7 @@ instrumentation_args=(
     -e runtimeStressMaxDelayMillis "$max_delay_millis"
     -e runtimeStressNetworkControl "$network_control"
     -e runtimeStressSystemEvents "$system_events"
+    -e runtimeStressRevokeMode "$revoke_mode"
 )
 
 if [[ -n "$membership_profile_a_uri" ]]; then

@@ -12,6 +12,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -42,6 +43,11 @@ class QrScannerLifecycleUiTest {
             "pm grant $packageName ${Manifest.permission.CAMERA}",
         )
         ParcelFileDescriptor.AutoCloseInputStream(output).use { it.readBytes() }
+        assumeTrue(
+            "shell CAMERA grant is unavailable on this device",
+            instrumentation.targetContext.checkSelfPermission(Manifest.permission.CAMERA) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED,
+        )
     }
 
     @Test
