@@ -4,12 +4,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Coordinates UI-only bridge observation without coupling Activity lifecycle to the VPN Service.
+ * Coordinates UI-only native bridge observation without coupling Activity lifecycle to the VPN
+ * Service.
  *
- * The active bridge keeps the desired Flow Analysis callback, while this process-level slot asks
- * it to install or remove the actual gomobile callback as UI visibility changes. Hidden traffic can
- * also request an asynchronous reconcile from inside a JNI callback; the asynchronous hop avoids
- * re-entering the gomobile bridge before the current callback returns.
+ * The active bridge keeps desired diagnostic callbacks while this process-level slot asks it to
+ * install or remove the actual gomobile callbacks as UI visibility changes. Flow/AppIdentity
+ * callbacks can also request an asynchronous reconcile as a race fallback; the asynchronous hop
+ * avoids re-entering the gomobile bridge before the current JNI callback returns.
  */
 internal object PowerSavingBridgeObservationRuntime {
     private data class Registration(
@@ -33,20 +34,20 @@ internal object PowerSavingBridgeObservationRuntime {
         }
     }
 
-    /** Used by the existing app-visible event; no timer or polling is introduced. */
+    /** Used by existing visibility events; no timer or polling is introduced. */
     fun reconcileNow() {
         val registration = active.get() ?: return
         runRecoverableCatching(registration.reconcile)
             .onFailure { error ->
                 TcptunState.appendLog(
-                    "flow observation reconcile failed: ${failureDescription(error)}",
+                    "bridge observation reconcile failed: ${failureDescription(error)}",
                 )
             }
     }
 
     /**
-     * Called from Flow/AppIdentity callbacks only after power-saving background work is observed.
-     * Coalescing guarantees a burst of callbacks creates at most one short-lived helper thread.
+     * Called from Flow/AppIdentity callbacks only after a hidden-state race is observed. Coalescing
+     * guarantees a burst of callbacks creates at most one short-lived helper thread.
      */
     fun reconcileHiddenAsync() {
         if (
@@ -66,7 +67,7 @@ internal object PowerSavingBridgeObservationRuntime {
                     reconcileScheduled.set(false)
                 }
             },
-            "tcptun-flow-observation",
+            "tcptun-bridge-observation",
         ).apply { isDaemon = true }
         try {
             task.start()
@@ -74,7 +75,7 @@ internal object PowerSavingBridgeObservationRuntime {
             reconcileScheduled.set(false)
             if (error.isFatalProcessError()) throw error
             TcptunState.appendLog(
-                "flow observation reconcile start failed: ${failureDescription(error)}",
+                "bridge observation reconcile start failed: ${failureDescription(error)}",
             )
         }
     }
