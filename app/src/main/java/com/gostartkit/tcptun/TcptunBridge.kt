@@ -266,7 +266,10 @@ class ReflectionTcptunBridge : TcptunBridge {
     }
 
     // Keep Java proxies strongly reachable for as long as Go can call them.
+    /** Desired log callback, retained even while the actual native callback is suspended. */
     private var logCallback: Any? = null
+    /** Proxy currently installed in androidbridge.Engine, or null while observation is suspended. */
+    private var installedLogCallback: Any? = null
     private var statusCallback: Any? = null
     private var socketProtector: Any? = null
     private var appIdentityProvider: Any? = null
@@ -402,6 +405,7 @@ class ReflectionTcptunBridge : TcptunBridge {
                 }
                 closed = true
                 logCallback = null
+                installedLogCallback = null
                 statusCallback = null
                 socketProtector = null
                 appIdentityProvider = null
@@ -430,13 +434,17 @@ class ReflectionTcptunBridge : TcptunBridge {
             }
             null
         }
-        logCallback = callback
-        invokeEngine("setLogCallback", arrayOf(callbackClass), callback)
+        synchronized(flowObservationLock) {
+            logCallback = callback
+            reconcileLogObservationLocked(callbackClass)
+        }
     }
 
     override fun clearLogCallback() {
-        clearCallback("androidbridge.LogCallback", "setLogCallback")
-        logCallback = null
+        synchronized(flowObservationLock) {
+            logCallback = null
+            reconcileLogObservationLocked(callbackClass("androidbridge.LogCallback"))
+        }
     }
 
     override fun setStatusCallback(onStatus: (String) -> Unit) {
@@ -536,9 +544,22 @@ class ReflectionTcptunBridge : TcptunBridge {
     private fun reconcileFlowObservation() {
         synchronized(flowObservationLock) {
             if (closed) return
-            if (flowCallback == null && installedFlowCallback == null) return
+            if (
+                logCallback == null && installedLogCallback == null &&
+                flowCallback == null && installedFlowCallback == null
+            ) {
+                return
+            }
+            reconcileLogObservationLocked(callbackClass("androidbridge.LogCallback"))
             reconcileFlowObservationLocked(callbackClass("androidbridge.FlowCallback"))
         }
+    }
+
+    private fun reconcileLogObservationLocked(callbackClass: Class<*>) {
+        val target = logCallback.takeIf { flowObservationAllowed() }
+        if (installedLogCallback === target) return
+        invokeEngine("setLogCallback", arrayOf(callbackClass), target)
+        installedLogCallback = target
     }
 
     private fun reconcileFlowObservationLocked(callbackClass: Class<*>) {
