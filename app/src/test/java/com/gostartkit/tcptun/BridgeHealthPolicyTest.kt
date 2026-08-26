@@ -140,11 +140,11 @@ class BridgeHealthPolicyTest {
     }
 
     @Test
-    fun structuralRuntimeChangeIgnoresPowerSavingOnly() {
+    fun structuralRuntimeChangeIncludesPowerSavingOnly() {
         val base = RuntimeSettings(powerSavingMode = false)
         val powerOnly = base.copy(powerSavingMode = true)
         val mtuChange = base.copy(mtu = 1280)
-        assertFalse(BridgeHealthPolicy.isStructuralRuntimeChange(base, powerOnly))
+        assertTrue(BridgeHealthPolicy.isStructuralRuntimeChange(base, powerOnly))
         assertTrue(BridgeHealthPolicy.isStructuralRuntimeChange(base, mtuChange))
     }
 

@@ -53,6 +53,7 @@ internal class MemberHealthProbeScheduler(
                 // A delayed wake already covers this request. Keeping the original Future avoids
                 // needless cancel/re-schedule churn when connectivity and profile events arrive in
                 // the same settle window, which is especially common around Doze/network resume.
+                PowerSavingObservability.memberProbeCoalesced()
                 log(
                     "member health probe coalesced with pending wake in " +
                         "${currentNotBefore - now}ms: $reason",
@@ -92,6 +93,7 @@ internal class MemberHealthProbeScheduler(
                     wakeMonitor()
                 }
             } else {
+                PowerSavingObservability.memberProbeScheduled()
                 delayedTask.replace(future)
             }
         }

@@ -59,6 +59,7 @@ class UnderlyingNetworkRuntimeTest {
 
     @Test
     fun networkLossSkipsMemberProbeUntilAnEligibleNetworkReturns() {
+        PowerSavingObservability.resetForTest()
         val harness = Harness()
         harness.runtime.register()
         assertEquals(false, harness.runtime.hasEligibleNetwork)
@@ -74,6 +75,7 @@ class UnderlyingNetworkRuntimeTest {
         assertEquals(false, harness.runtime.hasEligibleNetwork)
         assertEquals(1, harness.probeRequests.size)
         assertEquals(1, harness.probeCancellations)
+        assertEquals(1L, PowerSavingObservability.snapshot().memberProbeCanceledNoNetwork)
         assertTrue(harness.restartRequests.isEmpty())
 
         harness.source.emit("cellular", initial = false, previous = null)

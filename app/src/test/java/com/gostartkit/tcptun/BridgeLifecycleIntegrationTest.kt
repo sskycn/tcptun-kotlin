@@ -167,6 +167,7 @@ class BridgeLifecycleIntegrationTest {
         disabledOutboundTags = listOf("inactive"),
         tunFd = 77,
         mtu = 1400,
+        powerSavingMode = true,
         logLevel = DefaultLogLevel,
     )
 

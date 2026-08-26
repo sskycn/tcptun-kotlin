@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicReference
 internal class NativeObservationCallbackSlot(
     private val allowed: () -> Boolean,
     private val installNative: (Any?) -> Unit,
+    private val onInstalledChanged: (Boolean) -> Unit = {},
 ) {
     var desired: Any? = null
         private set
@@ -25,11 +26,13 @@ internal class NativeObservationCallbackSlot(
         val target = desired.takeIf { allowed() }
         if (installed === target) return
         installNative(target)
+        onInstalledChanged(target != null)
         installed = target
     }
 
     /** Native Close has released callbacks; no setter call is valid after this point. */
     fun releaseAfterNativeClose() {
+        if (installed != null) onInstalledChanged(false)
         desired = null
         installed = null
     }

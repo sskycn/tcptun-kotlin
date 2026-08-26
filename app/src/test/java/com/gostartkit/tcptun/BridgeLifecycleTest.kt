@@ -282,6 +282,7 @@ private class FakeLifecycleBridge(
     override fun sessionId(): Long = 1L
     override fun status(): String = currentStatus
     override fun configure(configJson: String) = Unit
+    override fun setPowerSave(enabled: Boolean) = Unit
     override fun setTun(fd: Int, mtu: Int) = Unit
     override fun start(disabledOutboundTags: List<String>): Long = 1L
     override fun startOutbound(tag: String) = Unit

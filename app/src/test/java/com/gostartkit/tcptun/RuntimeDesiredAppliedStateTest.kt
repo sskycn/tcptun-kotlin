@@ -89,11 +89,22 @@ class RuntimeDesiredAppliedStateTest {
 
     @Test
     fun hotPendingDoesNotReplaceRuntime() {
-        val old = applied(logLevel = "info", powerSaving = true)
-        val desired = applied(logLevel = "debug", powerSaving = false)
+        val old = applied(logLevel = "info")
+        val desired = applied(logLevel = "debug")
 
         assertEquals(
             RuntimeSettingsReconciliationAction.ApplyHot,
+            desiredRuntimeSettingsAction(old, desired, false, false),
+        )
+    }
+
+    @Test
+    fun powerPolicyPendingReplacesRuntime() {
+        val old = applied(powerSaving = true)
+        val desired = applied(powerSaving = false)
+
+        assertEquals(
+            RuntimeSettingsReconciliationAction.Replace,
             desiredRuntimeSettingsAction(old, desired, false, false),
         )
     }

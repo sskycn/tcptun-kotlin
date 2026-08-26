@@ -13,10 +13,10 @@ The fake is under `app/src/test`; it is not packaged into the application.
 
 ## Required bridge contract
 
-The wrapper uses the existing Engine operations for Configure, SetTun, Start, Stop,
+The wrapper uses Engine operations for Configure, SetPowerSave, SetTun, Start, Stop,
 WaitStopped, Abort, Close, callbacks, outbound control, status, and diagnostics. The current
-AAR already exposes `Abort`, `CoreVersion`, and `CoreBuildID`. This project does not add or
-rename gomobile methods.
+AAR exposes `Abort`, `CoreVersion`, and `CoreBuildID`. `SetPowerSave(bool)` is a session-start-only
+integration option: Kotlin calls it before every Start, and settings changes replace the runtime.
 
 `SetTun` receives the Android FD as a native duplicate. Go must never close the original
 Android `ParcelFileDescriptor`; Android closes that descriptor only after the stop controller
@@ -53,8 +53,7 @@ fake native artifact. Bridge and managed-device CI build the real AAR in a separ
 - Keep callback proxies strongly reachable until native cleanup completes.
 - Keep reflection error messages actionable: missing AAR, missing Engine method, and
   validation failure are distinct user-visible failure classes.
-- Increment the Android expected Bridge API version and the build script's `BRIDGE_API_VERSION`
-  together whenever the required Java contract changes incompatibly.
+- Increment `bridge.lock`'s Bridge API version whenever the required Java contract changes.
 
 ## Contract tests
 

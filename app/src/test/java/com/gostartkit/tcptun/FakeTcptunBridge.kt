@@ -46,6 +46,10 @@ internal class FakeTcptunBridge(
         configuredJson = configJson
     }
 
+    override fun setPowerSave(enabled: Boolean) {
+        calls += "setPowerSave:$enabled"
+    }
+
     override fun setTun(fd: Int, mtu: Int) {
         calls += "setTun:$fd:$mtu"
         failures.setTun?.let { throw it }

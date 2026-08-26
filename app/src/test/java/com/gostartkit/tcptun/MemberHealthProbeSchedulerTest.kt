@@ -11,6 +11,7 @@ import org.junit.Test
 class MemberHealthProbeSchedulerTest {
     @Test
     fun shorterDelayedRequestReusesExistingSettleWake() {
+        PowerSavingObservability.resetForTest()
         val executor = CountingScheduledExecutor()
         var now = 1_000L
         val scheduler = scheduler(executor) { now }
@@ -21,6 +22,8 @@ class MemberHealthProbeSchedulerTest {
 
             assertEquals(1, executor.scheduleCalls)
             assertEquals(5_000L, scheduler.notBeforeMs)
+            assertEquals(1L, PowerSavingObservability.snapshot().memberProbeScheduled)
+            assertEquals(1L, PowerSavingObservability.snapshot().memberProbeCoalesced)
         } finally {
             executor.shutdownNow()
         }

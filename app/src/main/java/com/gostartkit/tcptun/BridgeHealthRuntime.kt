@@ -125,6 +125,7 @@ internal class BridgeHealthRuntime(
     }
 
     fun wake() {
+        PowerSavingObservability.bridgeMonitorEventWake()
         monitorWakeGeneration.incrementAndGet()
         synchronized(monitorWaitLock) { monitorWaitLock.notifyAll() }
     }

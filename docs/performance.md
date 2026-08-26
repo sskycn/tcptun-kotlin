@@ -41,13 +41,29 @@ adb shell dumpsys batterystats --charged > batterystats.txt
 adb shell dumpsys power > power-state.txt
 ```
 
-Use at least these scenarios:
+Use the checked-in collector for fixed-duration runs:
+
+```bash
+./scripts/run-power-validation.sh stable-background-screen-off 600
+```
+
+The runner resets batterystats, writes start/end log markers, records APK/core/app identities,
+and captures battery, power, process/thread CPU, alarm/job, wakeup-source, and network snapshots
+under `build/power-validation/`. It intentionally does not toggle radios or the screen: establish
+the named state on the device so an interrupted run cannot leave connectivity changed.
+Set `POWER_VALIDATION_PERFETTO=true` to also capture the lightweight checked-in scheduler,
+CPU-idle/frequency, process, and system-stat trace configuration.
+
+Supported scenarios cover:
 
 - **stable foreground** — VPN Running with the app visible and no user interaction;
 - **stable background** — VPN Running, app backgrounded, screen off;
 - **offline background** — VPN Running/desired while the eligible underlying network is absent;
-- **flow-analysis background** — flow analysis enabled with sustained matching traffic while the
-  app is backgrounded.
+- **network recovery** — loss followed by Wi-Fi or mobile recovery;
+- **flow disabled background** — Flow Analysis disabled;
+- **flow enabled sustained** — Flow Analysis enabled with sustained matching traffic;
+- **sparse after idle** — one short user flow after a long idle period;
+- **QUIC idle/burst/idle** — an idle tunnel, a short traffic burst, then idle again.
 
 Record process CPU time, wakeups/scheduled work visible in the trace, network/radio activity, and
 whether tunnel recovery still succeeds after network return. Do not infer a battery percentage
@@ -55,6 +71,9 @@ improvement from a short run; compare repeatable CPU/wakeup deltas instead.
 
 The intended power-saving invariants are:
 
+- `RuntimeSettings.powerSavingMode` is passed explicitly to the stopped Go Engine before every
+  session. Changing it immediately reconciles observation callbacks and separately triggers one
+  controlled runtime replacement for the Go session-start policy;
 - healthy bridge monitoring is event-driven; there is no routine safety polling timer;
 - member-health scheduling is disabled until an eligible underlying network is selected; losing
   that network cancels the pending settle wake, and network return schedules the normal recovery

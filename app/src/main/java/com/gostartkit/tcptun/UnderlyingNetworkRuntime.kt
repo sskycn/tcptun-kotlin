@@ -145,6 +145,7 @@ internal class UnderlyingNetworkRuntime<N>(
             // A member probe cannot succeed without an eligible underlying network. Waiting for
             // the next connectivity callback avoids waking the process/radio only to fail and
             // enqueue another transient retry while the device is offline or in Doze.
+            PowerSavingObservability.memberProbeCanceledNoNetwork()
             onMemberProbeCancelled()
             log("member health probe skipped: no underlying network")
         }

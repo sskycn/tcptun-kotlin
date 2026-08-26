@@ -208,6 +208,7 @@ internal class BridgeSessionRuntime(
                 disabledOutboundTags = request.disabledOutboundTags,
                 tunFd = request.tunFd,
                 mtu = request.mtu,
+                powerSavingMode = request.settings.powerSavingMode,
                 logLevel = request.settings.logLevel,
             ),
             callbacks = BridgeSessionCallbacks(

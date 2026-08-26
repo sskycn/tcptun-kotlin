@@ -5,6 +5,7 @@ internal data class BridgeSessionStartRequest(
     val disabledOutboundTags: List<String>,
     val tunFd: Int,
     val mtu: Int,
+    val powerSavingMode: Boolean,
     val logLevel: String,
 )
 
@@ -32,6 +33,7 @@ internal class BridgeSessionController(
         canStart: () -> Boolean,
     ): Long {
         check(canStart()) { "tcptun start was cancelled" }
+        bridge.setPowerSave(request.powerSavingMode)
         bridge.setLogCallback(callbacks.onLog)
         bridge.setStatusCallback(callbacks.onStatus)
         TcptunBridgeEvents.DefaultRegistered.forEach { event ->

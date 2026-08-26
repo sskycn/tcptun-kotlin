@@ -189,6 +189,8 @@ private class RecordingStopBridge(
     val calls = mutableListOf<String>()
     private var statusClearFailures = 0
 
+    override fun setPowerSave(enabled: Boolean) = unexpected("setPowerSave")
+
     override fun stop() {
         calls += "stop"
         stopError?.let { throw it }

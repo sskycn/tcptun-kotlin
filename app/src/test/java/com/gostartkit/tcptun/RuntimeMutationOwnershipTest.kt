@@ -69,9 +69,11 @@ class RuntimeMutationOwnershipTest {
     fun structuralSettingRequiresOneReplacementWhileHotSettingDoesNot() {
         val current = RuntimeSettings(mtu = 1400, logLevel = "info", powerSavingMode = true)
         val structural = current.copy(mtu = 1280)
-        val hot = current.copy(logLevel = "debug", powerSavingMode = false)
+        val powerPolicy = current.copy(powerSavingMode = false)
+        val hot = current.copy(logLevel = "debug")
 
         assertTrue(BridgeHealthPolicy.requiresRuntimeRestart(false, current, structural))
+        assertTrue(BridgeHealthPolicy.requiresRuntimeRestart(false, current, powerPolicy))
         assertFalse(BridgeHealthPolicy.requiresRuntimeRestart(false, current, hot))
     }
 

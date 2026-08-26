@@ -114,6 +114,7 @@ internal object TcptunBridgeEvents {
 
 interface TcptunBridge {
     fun configure(configJson: String)
+    fun setPowerSave(enabled: Boolean)
     fun setTun(fd: Int, mtu: Int)
     fun start(disabledOutboundTags: List<String>): Long
     fun startOutbound(tag: String)
@@ -194,6 +195,7 @@ internal class BridgeReflectionApi(private val engineClass: Class<*>) {
     private companion object {
         val RequiredMethods = listOf(
             "configure" to listOf(String::class.java),
+            "setPowerSave" to listOf(java.lang.Boolean.TYPE),
             "setTun" to listOf(java.lang.Long.TYPE, java.lang.Long.TYPE),
             "startConfiguredSessionWithDisabledOutbounds" to listOf(String::class.java),
             "startOutbound" to listOf(String::class.java),
@@ -271,6 +273,7 @@ class ReflectionTcptunBridge : TcptunBridge {
     private var appIdentityProvider: Any? = null
     private val logObservation = NativeObservationCallbackSlot(
         allowed = ::flowObservationAllowed,
+        onInstalledChanged = PowerSavingObservability::nativeLogCallbackChanged,
         installNative = { callback ->
             invokeEngine(
                 "setLogCallback",
@@ -281,6 +284,7 @@ class ReflectionTcptunBridge : TcptunBridge {
     )
     private val flowObservation = NativeObservationCallbackSlot(
         allowed = ::flowObservationAllowed,
+        onInstalledChanged = PowerSavingObservability::nativeFlowCallbackChanged,
         installNative = { callback ->
             invokeEngine(
                 "setFlowCallback",
@@ -301,6 +305,10 @@ class ReflectionTcptunBridge : TcptunBridge {
 
     override fun configure(configJson: String) {
         invokeEngine("configure", arrayOf(String::class.java), configJson)
+    }
+
+    override fun setPowerSave(enabled: Boolean) {
+        invokeEngine("setPowerSave", arrayOf(java.lang.Boolean.TYPE), enabled)
     }
 
     override fun setTun(fd: Int, mtu: Int) {

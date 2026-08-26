@@ -510,8 +510,8 @@ object RuntimeSettingsRepository {
             )
         }
         if (previousPowerSaving != settings.powerSavingMode) {
-            // Power saving is a Kotlin observation policy, so apply its callback gate immediately
-            // even when settings are changed while no Activity visibility transition occurs.
+            // Kotlin observation policy changes immediately. The native runtime-start policy is
+            // reconciled independently by the service through a controlled replacement.
             PowerSavingBridgeObservationRuntime.reconcileNow()
         }
     }

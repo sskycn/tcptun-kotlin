@@ -21,6 +21,7 @@ class BridgeSessionControllerTest {
         assertEquals(41L, sessionId)
         assertEquals(
             listOf(
+                "setPowerSave:true",
                 "setLogCallback",
                 "setStatusCallback",
                 "register:${TcptunBridgeEvents.RemoteEndpointsChanged}",
@@ -132,6 +133,7 @@ class BridgeSessionControllerTest {
         disabledOutboundTags = listOf("profile-b"),
         tunFd = 37,
         mtu = 1400,
+        powerSavingMode = true,
         logLevel = "debug",
     )
 
@@ -160,6 +162,10 @@ private class RecordingSessionBridge(
 
     override fun configure(configJson: String) {
         calls += "configure:$configJson"
+    }
+
+    override fun setPowerSave(enabled: Boolean) {
+        calls += "setPowerSave:$enabled"
     }
 
     override fun setTun(fd: Int, mtu: Int) {

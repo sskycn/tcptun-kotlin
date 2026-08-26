@@ -12,6 +12,22 @@ import java.net.ServerSocket
 @RunWith(AndroidJUnit4::class)
 class AarLifecycleTest {
     @Test
+    fun powerSavePolicyIsExplicitAndSessionStartOnly() {
+        val engine = Androidbridge.newEngine()
+        try {
+            engine.setPowerSave(false)
+            engine.configure(directConfig(availablePort()))
+            val sessionId = engine.startConfiguredSessionWithDisabledOutbounds("[]")
+            assertTrue(runCatching { engine.setPowerSave(true) }.isFailure)
+            engine.stop()
+            engine.waitStopped(sessionId, 2_000)
+            engine.setPowerSave(true)
+        } finally {
+            engine.close()
+        }
+    }
+
+    @Test
     fun engineSupportsRepeatedStartStopAndIdempotentClose() {
         val engine = Androidbridge.newEngine()
         try {

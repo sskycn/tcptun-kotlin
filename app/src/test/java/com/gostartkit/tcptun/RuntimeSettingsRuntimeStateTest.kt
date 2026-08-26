@@ -9,6 +9,24 @@ import org.junit.Test
 
 class RuntimeSettingsRuntimeStateTest {
     @Test
+    fun powerSavingChangeRequiresFreshNativeRuntime() {
+        val state = RuntimeSettingsRuntimeState()
+        val runtime = ownership(generation = 1, epoch = 10)
+        assertTrue(state.publishFreshRuntime(runtime, applied(powerSavingMode = false), runtime))
+        state.requestDesired(false)
+        val request = requireNotNull(state.bindLatest(runtime))
+
+        assertEquals(
+            RuntimeSettingsReconciliationAction.Replace,
+            state.reconciliationAction(
+                request,
+                desired = applied(powerSavingMode = true),
+                freshRuntimeSatisfiesForce = false,
+            ),
+        )
+    }
+
+    @Test
     fun staleLogApplyCheckpointsActualBeforeLatestDesiredRestoresNative() {
         val state = RuntimeSettingsRuntimeState()
         val runtime = ownership(generation = 1, epoch = 10)
@@ -464,9 +482,11 @@ class RuntimeSettingsRuntimeStateTest {
     private fun applied(
         logLevel: String = "info",
         flowAnalysisApp: String = "",
+        powerSavingMode: Boolean = true,
     ) = AppliedRuntimeSettings(
         logLevel = logLevel,
         flowAnalysisApp = flowAnalysisApp,
+        powerSavingMode = powerSavingMode,
     )
 
     private fun token(generation: Int, serviceInstanceId: Long = 1) = VpnRuntimeCommandToken(

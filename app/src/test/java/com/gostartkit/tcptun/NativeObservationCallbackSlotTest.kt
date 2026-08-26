@@ -10,9 +10,11 @@ class NativeObservationCallbackSlotTest {
     fun desiredCallbackSurvivesHiddenSuspensionAndRestoresWithoutRestart() {
         var allowed = true
         val installs = mutableListOf<Any?>()
+        val transitions = mutableListOf<Boolean>()
         val slot = NativeObservationCallbackSlot(
             allowed = { allowed },
             installNative = installs::add,
+            onInstalledChanged = transitions::add,
         )
         val callback = Any()
 
@@ -28,6 +30,7 @@ class NativeObservationCallbackSlotTest {
         assertSame(callback, installs[2])
         assertSame(callback, slot.desired)
         assertSame(callback, slot.installed)
+        assertEquals(listOf(true, false, true), transitions)
     }
 
     @Test

@@ -27,6 +27,7 @@ class BridgeAbiContractTest {
 
         listOf(
             MethodContract("configure", void, string),
+            MethodContract("setPowerSave", void, bool),
             MethodContract("setTun", void, long, long),
             MethodContract("startConfiguredSessionWithDisabledOutbounds", long, string),
             MethodContract("startOutbound", void, string),

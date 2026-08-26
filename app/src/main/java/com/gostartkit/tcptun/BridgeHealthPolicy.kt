@@ -111,6 +111,7 @@ internal object BridgeHealthPolicy {
 
     fun isStructuralRuntimeChange(previous: RuntimeSettings, next: RuntimeSettings): Boolean {
         return previous.mtu != next.mtu ||
+            previous.powerSavingMode != next.powerSavingMode ||
             previous.socksPort != next.socksPort ||
             previous.localProxyProtocol != next.localProxyProtocol ||
             previous.socksListenAll != next.socksListenAll ||
