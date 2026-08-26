@@ -68,7 +68,9 @@ The intended power-saving invariants are:
   lookup, Flow event JSON encoding, callback queue work, and gomobile/JNI delivery. Application
   identity remains active when route rules require it, so app-routing correctness is not gated by
   UI visibility;
-- with power saving enabled and the UI hidden, log history is buffered in memory instead of
-  publishing a new `TcptunRuntimeState` for each log line; foreground visibility flushes it once;
+- the native log callback is also removed while a power-saving VPN is hidden, so Go no longer
+  crosses JNI for diagnostic log lines. Go-side status-log observation still runs before callback
+  delivery, preserving reconnect/error Status events; Kotlin/service logs that are produced while
+  hidden remain bounded and are flushed to the UI on foreground return;
 - tunnel lifecycle, status/error state, network handover, app-routing decisions, and restart
   decisions are never gated by UI visibility.
