@@ -98,9 +98,9 @@ class RouteManagementUiTest {
                     value = "api.example.com",
                 ),
                 ManagedRouteRule(
-                    id = "merge-cdn",
+                    id = "merge-api-duplicate",
                     type = ManagedRouteRuleType.Domain,
-                    value = "cdn.example.com",
+                    value = "api.example.com",
                 ),
             ),
         ).getOrThrow()

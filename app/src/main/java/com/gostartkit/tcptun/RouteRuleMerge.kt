@@ -17,11 +17,9 @@ data class SmartRouteMergeResult(
 }
 
 /**
- * Conservatively combines domain and exact IP rules that have identical route
- * behavior. Domain rules are widened only across sibling hosts under the same
- * registrable domain. IP rules are widened only inside one /24 (IPv4) or /64
- * (IPv6) bucket. The replacement stays at the earliest source position so the
- * rest of the user-defined priority order remains stable.
+ * Removes equivalent duplicate domain and exact IP rules. Smart merge must not
+ * widen a matcher: moving a wider suffix or CIDR to the earliest source
+ * position can capture a non-participating rule and change first-match routing.
  */
 internal fun smartMergeManagedRouteRules(rules: List<ManagedRouteRule>): SmartRouteMergeResult {
     val indexedRules = rules.mapIndexed { index, rule -> IndexedRouteRule(index, rule.normalized()) }
@@ -65,18 +63,14 @@ private data class RouteBehavior(
 )
 
 private data class DomainMergeKey(
-    val registrableDomain: String,
+    val type: ManagedRouteRuleType,
+    val domain: String,
     val behavior: RouteBehavior,
 )
 
 private data class IpMergeKey(
-    val bucket: List<Byte>,
+    val ip: String,
     val behavior: RouteBehavior,
-)
-
-private data class IpMergeCandidate(
-    val indexedRule: IndexedRouteRule,
-    val ip: NumericRouteIpCandidate,
 )
 
 private data class IndexedMergeGroup(
@@ -88,61 +82,36 @@ private fun buildDomainMergeGroups(rules: List<IndexedRouteRule>): List<IndexedM
     .filter { it.rule.type == ManagedRouteRuleType.Domain || it.rule.type == ManagedRouteRuleType.DomainSuffix }
     .groupBy { indexed ->
         DomainMergeKey(
-            registrableDomain = registrableRouteDomain(indexed.rule.value),
+            type = indexed.rule.type,
+            domain = indexed.rule.value,
             behavior = indexed.rule.routeBehavior(),
         )
     }
-    .mapNotNull { (key, domainRules) ->
+    .mapNotNull { (_, domainRules) ->
         if (domainRules.size < 2) return@mapNotNull null
-        val distinctDomains = domainRules.map { it.rule.value }.distinct()
-        val widened = distinctDomains.size > 1
         val sources = domainRules.distinctBy(IndexedRouteRule::index)
         val earliest = sources.minBy(IndexedRouteRule::index).rule
-        val merged = earliest.copy(
-            type = if (widened || sources.any { it.rule.type == ManagedRouteRuleType.DomainSuffix }) {
-                ManagedRouteRuleType.DomainSuffix
-            } else {
-                ManagedRouteRuleType.Domain
-            },
-            value = if (widened) key.registrableDomain else distinctDomains.single(),
-        ).normalized()
-        IndexedMergeGroup(sources, merged)
+        IndexedMergeGroup(sources, earliest)
     }
 
 private fun buildIpMergeGroups(rules: List<IndexedRouteRule>): List<IndexedMergeGroup> {
     val exactIps = rules.mapNotNull { indexed ->
         if (indexed.rule.type != ManagedRouteRuleType.IP) return@mapNotNull null
-        parseNumericRouteIp(indexed.rule.value)?.let { ip -> IpMergeCandidate(indexed, ip) }
+        parseNumericRouteIp(indexed.rule.value)?.let { ip -> indexed to ip.canonical }
     }
     return exactIps
-        .groupBy { candidate ->
+        .groupBy { (indexed, canonicalIp) ->
             IpMergeKey(
-                bucket = numericRouteIpBucket(candidate.ip),
-                behavior = candidate.indexedRule.rule.routeBehavior(),
+                ip = canonicalIp,
+                behavior = indexed.rule.routeBehavior(),
             )
         }
-        .mapNotNull { (key, candidates) ->
+        .mapNotNull { (_, candidates) ->
             if (candidates.size < 2) return@mapNotNull null
-            val distinctIps = candidates.distinctBy { it.ip.bytes.toList() }
-            val widened = distinctIps.size > 1
-            val cidr = if (widened) smallestContainingRouteCidr(distinctIps.map(IpMergeCandidate::ip)) else ""
-            val matchingCidrs = if (widened) {
-                rules.filter { indexed ->
-                    indexed.rule.type == ManagedRouteRuleType.IPCidr &&
-                        indexed.rule.value == cidr &&
-                        indexed.rule.routeBehavior() == key.behavior
-                }
-            } else {
-                emptyList()
-            }
-            val sources = (candidates.map(IpMergeCandidate::indexedRule) + matchingCidrs)
+            val sources = candidates.map { it.first }
                 .distinctBy(IndexedRouteRule::index)
             val earliest = sources.minBy(IndexedRouteRule::index).rule
-            val merged = earliest.copy(
-                type = if (widened) ManagedRouteRuleType.IPCidr else ManagedRouteRuleType.IP,
-                value = if (widened) cidr else distinctIps.single().ip.canonical,
-            ).normalized()
-            IndexedMergeGroup(sources, merged)
+            IndexedMergeGroup(sources, earliest)
         }
 }
 
