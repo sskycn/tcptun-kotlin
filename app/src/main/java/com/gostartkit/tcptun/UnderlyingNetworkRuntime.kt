@@ -127,11 +127,16 @@ internal class UnderlyingNetworkRuntime<N>(
                 BridgeHealthPolicy.NETWORK_HANDOVER_SETTLE_MS,
                 update.ownership,
             )
-        } else {
+        } else if (update.network != null) {
             onMemberProbeRequested(
                 update.reason,
                 BridgeHealthPolicy.MEMBER_HEALTH_STARTUP_DELAY_MS,
             )
+        } else {
+            // A member probe cannot succeed without an eligible underlying network. Waiting for
+            // the next connectivity callback avoids waking the process/radio only to fail and
+            // enqueue another transient retry while the device is offline or in Doze.
+            log("member health probe skipped: no underlying network")
         }
     }
 
