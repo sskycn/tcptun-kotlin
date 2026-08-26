@@ -2,12 +2,11 @@ package com.tcptun.client
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RouteRuleMergeTest {
     @Test
-    fun mergesSiblingDomainsWithSameBehaviorAtEarliestPosition() {
+    fun doesNotWidenSiblingDomainsWithoutAConflictProof() {
         val rules = listOf(
             ManagedRouteRule(id = "before", value = "before.example"),
             ManagedRouteRule(id = "api", type = ManagedRouteRuleType.Domain, value = "api.example.com"),
@@ -17,15 +16,12 @@ class RouteRuleMergeTest {
 
         val result = smartMergeManagedRouteRules(rules)
 
-        assertTrue(result.changed)
-        assertEquals(1, result.removedRuleCount)
-        assertEquals(listOf("before", "api", "middle"), result.rules.map(ManagedRouteRule::id))
-        assertEquals(ManagedRouteRuleType.DomainSuffix, result.rules[1].type)
-        assertEquals("example.com", result.rules[1].value)
+        assertFalse(result.changed)
+        assertEquals(rules, result.rules)
     }
 
     @Test
-    fun mergesNearbyIpsAndAbsorbsEquivalentCidr() {
+    fun doesNotMoveCidrAheadOfItsConfiguredPosition() {
         val rules = listOf(
             ManagedRouteRule(id = "ip-1", type = ManagedRouteRuleType.IP, value = "203.0.113.4"),
             ManagedRouteRule(id = "cidr", type = ManagedRouteRuleType.IPCidr, value = "203.0.113.4/31"),
@@ -34,15 +30,12 @@ class RouteRuleMergeTest {
 
         val result = smartMergeManagedRouteRules(rules)
 
-        assertEquals(1, result.rules.size)
-        assertEquals("ip-1", result.rules.single().id)
-        assertEquals(ManagedRouteRuleType.IPCidr, result.rules.single().type)
-        assertEquals("203.0.113.4/31", result.rules.single().value)
-        assertEquals(2, result.removedRuleCount)
+        assertFalse(result.changed)
+        assertEquals(rules, result.rules)
     }
 
     @Test
-    fun mergesSiblingDomainSuffixRulesUsedByTheDefaultEditorType() {
+    fun doesNotWidenSiblingDomainSuffixRules() {
         val rules = listOf(
             ManagedRouteRule(id = "api", value = "api.example.com"),
             ManagedRouteRule(id = "cdn", value = "cdn.example.com"),
@@ -50,10 +43,8 @@ class RouteRuleMergeTest {
 
         val result = smartMergeManagedRouteRules(rules)
 
-        assertEquals(1, result.rules.size)
-        assertEquals("api", result.rules.single().id)
-        assertEquals(ManagedRouteRuleType.DomainSuffix, result.rules.single().type)
-        assertEquals("example.com", result.rules.single().value)
+        assertFalse(result.changed)
+        assertEquals(rules, result.rules)
     }
 
     @Test
@@ -104,5 +95,78 @@ class RouteRuleMergeTest {
         assertEquals("first", result.rules.single().id)
         assertEquals(ManagedRouteRuleType.Domain, result.rules.single().type)
         assertEquals("api.example.com", result.rules.single().value)
+    }
+
+    @Test
+    fun removesDuplicateExactIpsWithoutWidening() {
+        val rules = listOf(
+            ManagedRouteRule(id = "first", type = ManagedRouteRuleType.IP, value = "203.0.113.7"),
+            ManagedRouteRule(id = "duplicate", type = ManagedRouteRuleType.IP, value = "203.0.113.7"),
+        )
+
+        val result = smartMergeManagedRouteRules(rules)
+
+        assertEquals(1, result.rules.size)
+        assertEquals("first", result.rules.single().id)
+        assertEquals(ManagedRouteRuleType.IP, result.rules.single().type)
+        assertEquals("203.0.113.7", result.rules.single().value)
+    }
+
+    @Test
+    fun doesNotWidenSiblingDomainsAcrossNonParticipatingRule() {
+        val rules = listOf(
+            ManagedRouteRule(
+                id = "api-proxy",
+                type = ManagedRouteRuleType.Domain,
+                value = "api.example.com",
+                outbound = ManagedRouteOutbound.Proxy,
+            ),
+            ManagedRouteRule(
+                id = "x-direct",
+                type = ManagedRouteRuleType.Domain,
+                value = "x.example.com",
+                outbound = ManagedRouteOutbound.Direct,
+            ),
+            ManagedRouteRule(
+                id = "cdn-proxy",
+                type = ManagedRouteRuleType.Domain,
+                value = "cdn.example.com",
+                outbound = ManagedRouteOutbound.Proxy,
+            ),
+        )
+
+        val result = smartMergeManagedRouteRules(rules)
+
+        assertFalse(result.changed)
+        assertEquals(rules, result.rules)
+    }
+
+    @Test
+    fun doesNotWidenExactIpsAcrossNonParticipatingRule() {
+        val rules = listOf(
+            ManagedRouteRule(
+                id = "first-proxy",
+                type = ManagedRouteRuleType.IP,
+                value = "10.0.0.1",
+                outbound = ManagedRouteOutbound.Proxy,
+            ),
+            ManagedRouteRule(
+                id = "middle-direct",
+                type = ManagedRouteRuleType.IP,
+                value = "10.0.0.100",
+                outbound = ManagedRouteOutbound.Direct,
+            ),
+            ManagedRouteRule(
+                id = "last-proxy",
+                type = ManagedRouteRuleType.IP,
+                value = "10.0.0.200",
+                outbound = ManagedRouteOutbound.Proxy,
+            ),
+        )
+
+        val result = smartMergeManagedRouteRules(rules)
+
+        assertFalse(result.changed)
+        assertEquals(rules, result.rules)
     }
 }
