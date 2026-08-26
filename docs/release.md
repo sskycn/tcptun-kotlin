@@ -34,6 +34,17 @@ Run:
 make publish VERSION=vX.Y.Z
 ```
 
+To publish with a specific `tcptun-go` tag or commit, set `TCPTUN_GO_VERSION`:
+
+```bash
+make publish VERSION=vX.Y.Z TCPTUN_GO_VERSION=vA.B.C
+```
+
+The release script resolves the requested ref, rebuilds the Bridge from a temporary
+clean worktree, updates `bridge.lock`, and includes that lock change in the release
+commit. `TCPTUN_GO_DIR` can still be used to select the local Go checkout, and
+`TCPTUN_GO_REMOTE` selects the remote used to fetch the requested ref.
+
 For a local commit and tag without pushing:
 
 ```bash
