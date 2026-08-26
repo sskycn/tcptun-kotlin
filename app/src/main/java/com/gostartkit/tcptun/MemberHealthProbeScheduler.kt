@@ -14,6 +14,7 @@ internal class MemberHealthProbeScheduler(
     private val wakeMonitor: () -> Unit,
     private val log: (String) -> Unit,
     private val maxDelayMs: Long,
+    private val elapsedRealtimeMs: () -> Long = { SystemClock.elapsedRealtime() },
 ) {
     private val lock = Any()
     private val notBeforeElapsedMs = AtomicLong(0L)
@@ -41,13 +42,26 @@ internal class MemberHealthProbeScheduler(
                 wakeMonitor()
                 return
             }
-            val notBefore = SystemClock.elapsedRealtime() + delayMs
-            notBeforeElapsedMs.updateAndGet { current -> maxOf(current, notBefore) }
+
+            val now = elapsedRealtimeMs()
+            val candidateNotBefore = now + delayMs
+            val currentNotBefore = notBeforeElapsedMs.get()
+            if (currentNotBefore > now && candidateNotBefore <= currentNotBefore) {
+                // A delayed wake already covers this request. Keeping the original Future avoids
+                // needless cancel/re-schedule churn when connectivity and profile events arrive in
+                // the same settle window, which is especially common around Doze/network resume.
+                log(
+                    "member health probe coalesced with pending wake in " +
+                        "${currentNotBefore - now}ms: $reason",
+                )
+                return
+            }
+
+            val scheduledNotBefore = maxOf(currentNotBefore, candidateNotBefore)
+            notBeforeElapsedMs.set(scheduledNotBefore)
             val scheduledGeneration = generation.incrementAndGet()
-            val scheduledDelay = (
-                notBeforeElapsedMs.get() - SystemClock.elapsedRealtime()
-            ).coerceAtLeast(0L)
-            log("member health probe scheduled in ${delayMs}ms: $reason")
+            val scheduledDelay = (scheduledNotBefore - elapsedRealtimeMs()).coerceAtLeast(0L)
+            log("member health probe scheduled in ${scheduledDelay}ms: $reason")
             val future = scheduleCrashGuardedFuture(
                 executor = executor,
                 delay = scheduledDelay,
@@ -55,14 +69,15 @@ internal class MemberHealthProbeScheduler(
                 taskName = "delayed member health probe",
                 onFailure = { error -> log(failureDescription(error)) },
             ) delayedProbe@{
-                if (
-                    scheduledGeneration != generation.get() || !canRun() || !requestCurrent()
-                ) return@delayedProbe
+                if (scheduledGeneration != generation.get()) return@delayedProbe
+                notBeforeElapsedMs.compareAndSet(scheduledNotBefore, 0L)
+                if (!canRun() || !requestCurrent()) return@delayedProbe
                 markProbeForced()
                 log("bridge health check requested: $reason")
                 wakeMonitor()
             }
             if (future == null) {
+                notBeforeElapsedMs.compareAndSet(scheduledNotBefore, 0L)
                 if (requestCurrent()) {
                     log("member health probe scheduling failed; requesting an immediate check")
                     markProbeForced()
@@ -84,6 +99,7 @@ internal class MemberHealthProbeScheduler(
 
     fun cancel() {
         synchronized(lock) {
+            notBeforeElapsedMs.set(0L)
             generation.incrementAndGet()
             delayedTask.cancel()
         }
