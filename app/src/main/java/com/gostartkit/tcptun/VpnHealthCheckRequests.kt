@@ -41,6 +41,9 @@ internal object VpnHealthCheckRequests {
     }
 
     fun requestUiVisibleHealthCheck() {
+        // MainActivity calls this only after acquiring its visibility lease. Re-install any
+        // UI-only native callback that was suspended while a power-saving VPN was hidden.
+        PowerSavingBridgeObservationRuntime.reconcileNow()
         forceUpstreamProbe.set(true)
         forceMemberProbe.set(true)
         forceStatusReconcile.set(true)
