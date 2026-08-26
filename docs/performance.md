@@ -60,9 +60,15 @@ The intended power-saving invariants are:
   succeed;
 - overlapping member-health settle requests share an existing delayed wake when that wake already
   covers the new request;
-- with power saving enabled and the UI hidden, flow events remain in the bounded in-memory history
-  but the 100 ms UI snapshot publisher stays idle until foreground visibility returns;
+- with power saving enabled and the UI hidden, the actual native Flow Analysis callback is removed
+  from the Go bridge. Events already collected before hiding remain in the bounded UI history, but
+  new hidden-period Flow Analysis events are intentionally not collected; foreground visibility
+  restores native observation immediately;
+- removing the Flow Analysis callback also lets a Flow-Analysis-only runtime skip app-identity
+  lookup, Flow event JSON encoding, callback queue work, and gomobile/JNI delivery. Application
+  identity remains active when route rules require it, so app-routing correctness is not gated by
+  UI visibility;
 - with power saving enabled and the UI hidden, log history is buffered in memory instead of
   publishing a new `TcptunRuntimeState` for each log line; foreground visibility flushes it once;
-- tunnel lifecycle, status/error state, network handover, and restart decisions are never gated by
-  UI visibility.
+- tunnel lifecycle, status/error state, network handover, app-routing decisions, and restart
+  decisions are never gated by UI visibility.
