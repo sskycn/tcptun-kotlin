@@ -23,8 +23,11 @@ internal class VpnRuntimeStressHarness : AutoCloseable {
     private val arguments = InstrumentationRegistry.getArguments()
 
     val membershipFixture = loadMembershipFixture()
-    val lifecycleProfileA = directProfile("runtime-stress-a", "Runtime stress A")
-    val lifecycleProfileB = directProfile("runtime-stress-b", "Runtime stress B")
+    private val suppliedLifecycleProfiles = loadLifecycleProfiles()
+    val lifecycleProfileA = suppliedLifecycleProfiles?.first
+        ?: directProfile("runtime-stress-a", "Runtime stress A")
+    val lifecycleProfileB = suppliedLifecycleProfiles?.second
+        ?: directProfile("runtime-stress-b", "Runtime stress B")
     val lifecyclePlanA = ProfileRunPlan(listOf(lifecycleProfileA)).normalized()
     val lifecyclePlanB = ProfileRunPlan(listOf(lifecycleProfileB)).normalized()
 
@@ -281,8 +284,18 @@ internal class VpnRuntimeStressHarness : AutoCloseable {
         )
     }
 
+    private fun loadLifecycleProfiles(): Pair<AppConfig, AppConfig>? {
+        val encoded = arguments.getString(LifecycleProfileArgument).orEmpty().trim()
+        if (encoded.isBlank()) return null
+        val uri = String(Base64.decode(encoded, Base64.DEFAULT), Charsets.UTF_8)
+        val decoded = ProfileUriCodec.decode(uri).getOrThrow()
+        return decoded.copy(id = "runtime-stress-a", name = "Runtime stress A") to
+            decoded.copy(id = "runtime-stress-b", name = "Runtime stress B")
+    }
+
     private companion object {
         const val InvariantSettleMillis = 500L
+        const val LifecycleProfileArgument = "runtimeStressLifecycleProfileBase64"
         const val MembershipProfileAArgument = "runtimeStressMembershipProfileABase64"
         const val MembershipProfileBArgument = "runtimeStressMembershipProfileBBase64"
     }

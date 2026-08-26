@@ -56,8 +56,9 @@ improvement from a short run; compare repeatable CPU/wakeup deltas instead.
 The intended power-saving invariants are:
 
 - healthy bridge monitoring is event-driven; there is no routine safety polling timer;
-- losing the eligible underlying network does not enqueue a member-health probe that cannot
-  succeed;
+- member-health scheduling is disabled until an eligible underlying network is selected; losing
+  that network cancels the pending settle wake, and network return schedules the normal recovery
+  probe from the connectivity event;
 - overlapping member-health settle requests share an existing delayed wake when that wake already
   covers the new request;
 - with power saving enabled and the UI hidden, the actual native Flow Analysis callback is removed

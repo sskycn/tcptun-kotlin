@@ -142,10 +142,24 @@ The host acts as the second LAN client. It verifies that loopback-only mode refu
 Wi-Fi address, then that listen-all refuses anonymous and wrong-password SOCKS requests while
 accepting the correct password. A stop/start persistence probe repeats the authenticated request.
 The password is never echoed or written; the report contains only a 12-hex SHA-256 prefix.
+Host/instrumentation phase acknowledgements use short `debug.tcptun.lan.*` properties and are
+reset to `none` on every exit path. This avoids OEM SELinux differences around shell-created
+files in `/data/local/tmp`; the properties never contain credentials or endpoint data.
 
 The default lifecycle matrix uses self-contained single-profile raw direct configs. It does
-not claim to test in-place membership. That proof is a separate device-lab opt-in requiring
-two reachable structured profile URIs (no full JSON profiles):
+not claim real endpoint connectivity. Supply one protected structured profile URI to exercise
+the lifecycle, handover, and Recovery matrix against a real endpoint without enabling the
+two-profile membership assertion:
+
+```bash
+RUNTIME_STRESS_DISPOSABLE_DEBUG_DATA=true \
+RUNTIME_STRESS_NETWORK_CONTROL=true \
+RUNTIME_STRESS_LIFECYCLE_PROFILE_URI='native://protected-lab-endpoint.example:9443' \
+scripts/run-runtime-stress.sh
+```
+
+In-place membership is a separate device-lab opt-in requiring two reachable, independently
+configured structured profile URIs (no full JSON profiles):
 
 ```bash
 RUNTIME_STRESS_DISPOSABLE_DEBUG_DATA=true \
@@ -170,8 +184,9 @@ scripts/run-runtime-stress.sh
 
 Use USB ADB for network-control runs. Both the instrumentation helper and the host trap restore
 Wi-Fi/mobile-data state; the host restoration remains available after a target-process crash.
-The device needs a working Wi-Fi network and an active cellular subscription for the full
-handover matrix.
+Dual-SIM devices are considered data-enabled when any `mobile_data` or `mobile_dataN` setting is
+enabled, avoiding restoration from an inactive generic key on OEM builds. The device needs a
+working Wi-Fi network and an active cellular subscription for the full handover matrix.
 
 The host also captures the exact pre-run `ACTIVATE_VPN` AppOps mode and restores that mode on
 every exit path. It does not use a package-wide AppOps reset, which can silently change unrelated
@@ -221,7 +236,9 @@ substitute Disconnect, force-stop, task removal, or an AppOps shell command. The
 to two minutes, requires released TUN/Bridge ownership, captures debug-only lifecycle markers,
 and restores the exact prior AppOps mode on exit. Run it on Xiaomi and at least one non-Xiaomi
 physical reference device. Reports are written below `build/validation-gate/vpn-revoke/` and do
-not contain profiles, credentials, URIs, or raw configuration.
+not contain profiles, credentials, URIs, or raw configuration. If no `onRevoke` marker is seen,
+the interactive run is reported as `INCOMPLETE` with `ACTION_NOT_OBSERVED`; it is not labeled as
+a product cleanup failure. A failure after an observed callback remains a cleanup-contract failure.
 
 ### Harness architecture
 
@@ -262,8 +279,8 @@ Every command transition asserts:
 | 4 | repeated valid single-profile UpdateConnections/replacement | default stress test and storm |
 | 5 | A → A+B → B in-place membership; bridge epoch unchanged | structured-endpoint opt-in |
 | 6 | UpdateConnections → Stop | default stress test and storm |
-| 7 | Recovery → Stop | network-control opt-in |
-| 8 | Recovery → Start replacement | network-control opt-in |
+| 7 | Recovery → Stop; restored network cannot restart the old runtime | independent network-control test |
+| 8 | Recovery → Start replacement; B is authoritative after restore | independent network-control test |
 | 9 | ApplyRuntimeSettings during Recovery gap | network-control opt-in |
 | 10 | FlowAnalysis update during Recovery gap | network-control opt-in |
 | 11 | TCPing while auxiliary ownership changes | storm and network-control opt-in |

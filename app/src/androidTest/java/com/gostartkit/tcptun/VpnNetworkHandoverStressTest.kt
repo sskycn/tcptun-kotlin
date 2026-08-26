@@ -42,7 +42,7 @@ class VpnNetworkHandoverStressTest {
         }
 
     @Test
-    fun recoveryGapCommandsAreSupersededByStopAndReplacement() =
+    fun recoveryGapCommandsAreSupersededByStop() =
         withNetworkHarness { harness, controls ->
             harness.start()
             harness.waitForRunning()
@@ -57,17 +57,28 @@ class VpnNetworkHandoverStressTest {
             harness.waitForStopped(timeoutMillis = 30_000)
 
             controls.restoreOneNetwork()
+            assertRemainsStoppedAfterNetworkRestore(harness)
+            harness.assertNoProcessFailureEvidence()
+        }
+
+    @Test
+    fun recoveryGapReplacementWinsAfterNetworkRestore() =
+        withNetworkHarness { harness, controls ->
             harness.start(harness.lifecyclePlanA)
-            harness.waitForRunning(timeoutMillis = 45_000)
+            harness.waitForRunning()
             controls.disableWifi()
             controls.disableCellular()
-            assumeTrue("device did not enter a second Recovery gap", waitForRecovery(harness))
+            assumeTrue("device did not enter Recovery before replacement", waitForRecovery(harness))
 
             harness.applySettings()
             harness.updateFlowAnalysis()
+            harness.tcping()
             harness.start(harness.lifecyclePlanB)
             controls.restoreOneNetwork()
-            harness.waitForRunning(timeoutMillis = 45_000)
+            harness.waitUntil("replacement plan B Running", 45_000) {
+                TcptunState.status == VpnStatus.Running &&
+                    ProfileStore.load(harness.context).activeIds == harness.lifecyclePlanB.activeIds
+            }
             harness.assertRuntimeInvariants()
             harness.assertNoProcessFailureEvidence()
         }
@@ -215,9 +226,31 @@ class VpnNetworkHandoverStressTest {
         return false
     }
 
+    private fun assertRemainsStoppedAfterNetworkRestore(harness: VpnRuntimeStressHarness) {
+        val deadline = System.currentTimeMillis() + 5_000L
+        while (System.currentTimeMillis() < deadline) {
+            harness.assertRuntimeInvariants()
+            assertEquals(VpnStatus.Stopped, TcptunState.status)
+            check(TcptunVpnService.runtimeOwnershipDebugSnapshots().all {
+                !it.tunOwned &&
+                    !it.bridgeResourcePhase.ownsResources &&
+                    !it.teardownPending &&
+                    it.leaseOwner == 0L
+            })
+            Thread.sleep(100)
+        }
+    }
+
     private class DeviceControls(private val harness: VpnRuntimeStressHarness) : AutoCloseable {
         private val wifiWasEnabled = "enabled" in harness.runShell("cmd wifi status").lowercase()
-        private val cellularWasEnabled = harness.runShell("settings get global mobile_data").trim() == "1"
+        private val cellularWasEnabled = harness.runShell("settings list global")
+            .lineSequence()
+            .map { it.trim() }
+            .any { line ->
+                val key = line.substringBefore('=', missingDelimiterValue = "")
+                val value = line.substringAfter('=', missingDelimiterValue = "")
+                key.matches(Regex("mobile_data[0-9]*")) && value == "1"
+            }
 
         fun enableWifi() = shell("svc wifi enable")
 

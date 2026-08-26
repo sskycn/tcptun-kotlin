@@ -27,6 +27,7 @@ internal class BridgeHealthRuntime(
     private val isOwnershipCurrent: (VpnRuntimeOwnership) -> Boolean,
     private val currentPlan: () -> ProfileRunPlan?,
     private val currentSettings: () -> AppliedRuntimeSettings,
+    private val memberProbesAllowed: () -> Boolean,
     private val canHandleStatusEvent: () -> Boolean,
     private val restoreConnectionsReady: (VpnRuntimeOwnership) -> Unit,
     private val dispatchDiagnostics: (() -> Unit) -> Boolean,
@@ -58,7 +59,7 @@ internal class BridgeHealthRuntime(
     )
     private val memberHealthProbeScheduler = MemberHealthProbeScheduler(
         executor = lifecycleExecutor,
-        canRun = { currentOwnership() != null },
+        canRun = { currentOwnership() != null && memberProbesAllowed() },
         markProbeForced = VpnHealthCheckRequests::markMemberProbeForced,
         wakeMonitor = ::wake,
         log = log,
@@ -133,6 +134,11 @@ internal class BridgeHealthRuntime(
         memberHealthProbeScheduler.schedule(reason, requestedDelayMs) {
             isOwnershipCurrent(ownership)
         }
+    }
+
+    fun cancelMemberProbe() {
+        memberHealthProbeScheduler.cancel()
+        VpnHealthCheckRequests.clearMemberProbeForce()
     }
 
     fun reset() {

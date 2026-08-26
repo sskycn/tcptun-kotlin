@@ -61,22 +61,28 @@ class UnderlyingNetworkRuntimeTest {
     fun networkLossSkipsMemberProbeUntilAnEligibleNetworkReturns() {
         val harness = Harness()
         harness.runtime.register()
+        assertEquals(false, harness.runtime.hasEligibleNetwork)
         harness.source.emit("wifi", initial = true)
         harness.runQueued()
+        assertTrue(harness.runtime.hasEligibleNetwork)
         assertEquals(1, harness.probeRequests.size)
 
         harness.source.emit(null, initial = false, previous = "wifi")
         harness.runQueued()
 
         assertEquals(listOf("wifi", null), harness.appliedNetworks)
+        assertEquals(false, harness.runtime.hasEligibleNetwork)
         assertEquals(1, harness.probeRequests.size)
+        assertEquals(1, harness.probeCancellations)
         assertTrue(harness.restartRequests.isEmpty())
 
         harness.source.emit("cellular", initial = false, previous = null)
         harness.runQueued()
 
         assertEquals(listOf("wifi", null, "cellular"), harness.appliedNetworks)
+        assertTrue(harness.runtime.hasEligibleNetwork)
         assertEquals(2, harness.probeRequests.size)
+        assertEquals(1, harness.probeCancellations)
     }
 
     @Test
@@ -133,6 +139,7 @@ class UnderlyingNetworkRuntimeTest {
         val diagnosticNetworks = mutableListOf<String?>()
         val restartRequests = mutableListOf<VpnRuntimeOwnership>()
         val probeRequests = mutableListOf<String>()
+        var probeCancellations = 0
         var onApply: () -> Unit = {}
         val runtime = UnderlyingNetworkRuntime<String>(
             selectionSourceFactory = { listener -> source.also { it.listener = listener } },
@@ -151,6 +158,7 @@ class UnderlyingNetworkRuntimeTest {
             vpnRunning = { activeOwnership != null },
             onRestartRequested = { _, _, ownership -> restartRequests += ownership },
             onMemberProbeRequested = { reason, _ -> probeRequests += reason },
+            onMemberProbeCancelled = { probeCancellations += 1 },
             log = {},
         )
 

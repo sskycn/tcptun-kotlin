@@ -32,6 +32,12 @@ android {
     }
 }
 
+androidComponents {
+    beforeVariants(selector().withBuildType("debug")) { variantBuilder ->
+        variantBuilder.enable = false
+    }
+}
+
 dependencies {
     implementation(libs.androidx.benchmark.macro.junit4)
     implementation(libs.androidx.junit)

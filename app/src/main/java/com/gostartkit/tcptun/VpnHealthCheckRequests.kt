@@ -62,6 +62,10 @@ internal object VpnHealthCheckRequests {
 
     fun consumeMemberProbeForce(): Boolean = forceMemberProbe.compareAndSet(true, false)
 
+    fun clearMemberProbeForce() {
+        forceMemberProbe.set(false)
+    }
+
     fun consumeStatusReconcileForce(): Boolean = forceStatusReconcile.compareAndSet(true, false)
 
     fun restoreStatusReconcileForce() {

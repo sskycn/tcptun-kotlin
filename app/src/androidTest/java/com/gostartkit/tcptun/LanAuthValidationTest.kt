@@ -22,7 +22,7 @@ class LanAuthValidationTest {
             ?: error("LAN validation port is invalid")
 
         VpnRuntimeStressHarness().use { harness ->
-            clearAckFiles(harness)
+            clearAckProperties(harness)
             val initial = TcptunVpnService.readRuntimeSettings(harness.context)
             TcptunVpnService.writeRuntimeSettings(
                 harness.context,
@@ -38,7 +38,7 @@ class LanAuthValidationTest {
             harness.start()
             harness.waitForRunning(timeoutMillis = 30_000)
             println("LAN_PHASE=LOOPBACK_ONLY_READY")
-            waitForAck(harness, LoopbackAck)
+            waitForAck(harness, LoopbackAckProperty)
 
             harness.stop()
             harness.waitForStopped(timeoutMillis = 30_000)
@@ -49,7 +49,7 @@ class LanAuthValidationTest {
             harness.start()
             harness.waitForRunning(timeoutMillis = 30_000)
             println("LAN_PHASE=AUTH_REQUIRED_READY")
-            waitForAck(harness, AuthAck)
+            waitForAck(harness, AuthAckProperty)
 
             harness.stop()
             harness.waitForStopped(timeoutMillis = 30_000)
@@ -60,28 +60,32 @@ class LanAuthValidationTest {
             harness.start()
             harness.waitForRunning(timeoutMillis = 30_000)
             println("LAN_PHASE=PERSISTED_RESTART_READY")
-            waitForAck(harness, PersistenceAck)
+            waitForAck(harness, PersistenceAckProperty)
             harness.assertNoProcessFailureEvidence()
-            clearAckFiles(harness)
+            clearAckProperties(harness)
         }
     }
 
-    private fun waitForAck(harness: VpnRuntimeStressHarness, path: String) {
-        harness.waitUntil("host acknowledgement $path", 45_000) {
-            harness.runShell("test -f $path && echo ready").trim() == "ready"
+    private fun waitForAck(harness: VpnRuntimeStressHarness, property: String) {
+        harness.waitUntil("host acknowledgement $property", 45_000) {
+            harness.runShell("getprop $property").trim() == AckReady
         }
     }
 
-    private fun clearAckFiles(harness: VpnRuntimeStressHarness) {
-        harness.runShell("rm -f $LoopbackAck $AuthAck $PersistenceAck")
+    private fun clearAckProperties(harness: VpnRuntimeStressHarness) {
+        listOf(LoopbackAckProperty, AuthAckProperty, PersistenceAckProperty).forEach {
+            harness.runShell("setprop $it $AckCleared")
+        }
     }
 
     private companion object {
         const val EnabledArgument = "lanAuthValidationEnabled"
         const val PasswordArgument = "lanAuthValidationPassword"
         const val PortArgument = "lanAuthValidationPort"
-        const val LoopbackAck = "/data/local/tmp/tcptun-lan-loopback-ack"
-        const val AuthAck = "/data/local/tmp/tcptun-lan-auth-ack"
-        const val PersistenceAck = "/data/local/tmp/tcptun-lan-persistence-ack"
+        const val LoopbackAckProperty = "debug.tcptun.lan.lb"
+        const val AuthAckProperty = "debug.tcptun.lan.auth"
+        const val PersistenceAckProperty = "debug.tcptun.lan.persist"
+        const val AckReady = "ready"
+        const val AckCleared = "none"
     }
 }

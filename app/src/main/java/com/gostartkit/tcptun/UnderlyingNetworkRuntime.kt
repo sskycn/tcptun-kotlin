@@ -59,6 +59,7 @@ internal class UnderlyingNetworkRuntime<N>(
     private val vpnRunning: () -> Boolean,
     private val onRestartRequested: (String, Long, VpnRuntimeOwnership) -> Unit,
     private val onMemberProbeRequested: (String, Long) -> Unit,
+    private val onMemberProbeCancelled: () -> Unit,
     private val log: (String) -> Unit,
 ) {
     private val updateGate = UnderlyingNetworkUpdateGate<N>()
@@ -68,6 +69,11 @@ internal class UnderlyingNetworkRuntime<N>(
 
     @Volatile
     private var acceptingSelections = false
+    @Volatile
+    private var eligibleNetworkAvailable = false
+
+    val hasEligibleNetwork: Boolean
+        get() = eligibleNetworkAvailable
 
     fun register() {
         acceptingSelections = true
@@ -76,6 +82,7 @@ internal class UnderlyingNetworkRuntime<N>(
 
     fun unregister(updateDiagnostics: Boolean = true) {
         acceptingSelections = false
+        eligibleNetworkAvailable = false
         updateGate.invalidate()
         if (!selectionSource.isInitialized()) return
         val unregistered = selectionSource.value.unregister()
@@ -105,6 +112,7 @@ internal class UnderlyingNetworkRuntime<N>(
 
     private fun applyUpdate(update: UnderlyingNetworkUpdate<N>) {
         if (!isCurrent(update)) return
+        if (update.network == null) eligibleNetworkAvailable = false
         updateDiagnostics(update.network)
         log("underlying network selected: ${update.network ?: "none"}")
         if (!isCurrent(update)) return
@@ -115,6 +123,7 @@ internal class UnderlyingNetworkRuntime<N>(
             log("set underlying network failed: ${failureDescription(error)}")
         }
         if (!isCurrent(update)) return
+        if (update.network != null) eligibleNetworkAvailable = true
         if (BridgeHealthPolicy.shouldRestartForNetworkHandover(
                 initialSelection = update.selection.initial,
                 networkAvailable = update.network != null,
@@ -136,6 +145,7 @@ internal class UnderlyingNetworkRuntime<N>(
             // A member probe cannot succeed without an eligible underlying network. Waiting for
             // the next connectivity callback avoids waking the process/radio only to fail and
             // enqueue another transient retry while the device is offline or in Doze.
+            onMemberProbeCancelled()
             log("member health probe skipped: no underlying network")
         }
     }

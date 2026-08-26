@@ -124,15 +124,47 @@ if [[ -n "$logcat_pid" ]]; then
     logcat_pid=""
 fi
 
+callback_observed=false
+if grep -Fq 'onRevoke observed' "$output_dir/lifecycle-logcat.txt"; then
+    callback_observed=true
+fi
+
+instrumentation_failed=false
 if (( instrumentation_status != 0 )) ||
     grep -Eq 'FAILURES!!!|INSTRUMENTATION_(FAILED|ABORTED)|shortMsg=|Process crashed' \
         "$output_dir/instrumentation.txt"; then
-    printf 'mode=%s\nresult=FAIL\n' "$mode" | tee "$output_dir/summary.txt"
+    instrumentation_failed=true
+fi
+instrumentation_complete=false
+if grep -Eq 'OK \([0-9]+ tests?\)' "$output_dir/instrumentation.txt"; then
+    instrumentation_complete=true
+fi
+
+if [[ "$mode" == "system" && "$callback_observed" != "true" ]]; then
+    {
+        printf 'mode=system\n'
+        printf 'result=INCOMPLETE\n'
+        printf 'action_observed=false\n'
+        printf 'framework_callback=not_observed\n'
+        printf 'classification=ACTION_NOT_OBSERVED\n'
+    } | tee "$output_dir/summary.txt"
+    exit 2
+fi
+if [[ "$instrumentation_failed" == "true" ]]; then
+    {
+        printf 'mode=%s\n' "$mode"
+        printf 'result=FAIL\n'
+        printf 'framework_callback=%s\n' "$callback_observed"
+    } | tee "$output_dir/summary.txt"
     exit 1
 fi
-if ! grep -Eq 'OK \([0-9]+ tests?\)' "$output_dir/instrumentation.txt"; then
-    printf 'mode=%s\nresult=INCOMPLETE\n' "$mode" | tee "$output_dir/summary.txt"
-    exit 1
+if [[ "$instrumentation_complete" != "true" ]]; then
+    {
+        printf 'mode=%s\n' "$mode"
+        printf 'result=INCOMPLETE\n'
+        printf 'framework_callback=%s\n' "$callback_observed"
+    } | tee "$output_dir/summary.txt"
+    exit 2
 fi
 
 if [[ "$mode" == "appops" ]]; then
@@ -142,13 +174,15 @@ if [[ "$mode" == "appops" ]]; then
         printf 'mode=appops\n'
         printf 'result=PASS_DIAGNOSTIC_ONLY\n'
         printf 'framework_revoke_contract=NOT_CLAIMED\n'
+        printf 'framework_callback=%s\n' "$callback_observed"
         printf '%s\n' "${observation:-observation marker unavailable}"
     } | tee "$output_dir/summary.txt"
 else
     {
         printf 'mode=system\n'
         printf 'result=PASS\n'
-        printf 'framework_callback=observed_by_cleanup_contract\n'
+        printf 'action_observed=true\n'
+        printf 'framework_callback=observed\n'
         printf 'final_ownership=released\n'
     } | tee "$output_dir/summary.txt"
 fi

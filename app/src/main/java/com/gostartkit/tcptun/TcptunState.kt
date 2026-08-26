@@ -131,6 +131,38 @@ internal class UiVisibilityLease(
     }
 }
 
+/** Owns one deferred publication token so an invalidated Future cannot clear a replacement. */
+internal class DeferredPublicationGate {
+    private var generation = 0L
+    private var scheduledToken: Long? = null
+
+    @Synchronized
+    fun schedule(): Long? {
+        if (scheduledToken != null) return null
+        val token = nextGeneration()
+        scheduledToken = token
+        return token
+    }
+
+    @Synchronized
+    fun consumeScheduled(token: Long): Boolean {
+        if (scheduledToken != token) return false
+        scheduledToken = null
+        return true
+    }
+
+    @Synchronized
+    fun invalidateScheduled() {
+        scheduledToken = null
+        nextGeneration()
+    }
+
+    private fun nextGeneration(): Long {
+        generation = if (generation == Long.MAX_VALUE) 1L else generation + 1L
+        return generation
+    }
+}
+
 object TcptunState {
     private const val MAX_LOGS = 80
     private const val MAX_LOG_LENGTH = 4_096
@@ -174,7 +206,7 @@ object TcptunState {
     private var flowSequence = -1L
     private var bridgeDroppedFlowEvents = 0L
     private val flowEvents = BoundedRingBuffer<FlowAnalysisEvent>(MAX_FLOW_EVENTS)
-    private val flowPublishScheduled = AtomicBoolean()
+    private val flowPublicationGate = DeferredPublicationGate()
     private val flowPublishExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "tcptun-flow-publisher").apply { isDaemon = true }
     }
@@ -280,25 +312,42 @@ object TcptunState {
     }
 
     private fun scheduleFlowSnapshot() {
-        if (!flowPublishScheduled.compareAndSet(false, true)) return
-        flowPublishExecutor.schedule(
-            { publishFlowEventsNow() },
-            FLOW_PUBLISH_INTERVAL_MILLIS,
-            TimeUnit.MILLISECONDS,
-        )
+        val token = flowPublicationGate.schedule() ?: return
+        try {
+            flowPublishExecutor.schedule(
+                { publishScheduledFlowEvents(token) },
+                FLOW_PUBLISH_INTERVAL_MILLIS,
+                TimeUnit.MILLISECONDS,
+            )
+        } catch (error: Throwable) {
+            flowPublicationGate.consumeScheduled(token)
+            if (error.isFatalProcessError()) throw error
+            appendLog("flow analysis publication scheduling failed: ${failureDescription(error)}")
+        }
+    }
+
+    @Synchronized
+    private fun publishScheduledFlowEvents(token: Long) {
+        if (!flowPublicationGate.consumeScheduled(token)) return
+        publishFlowEventsSnapshot()
     }
 
     @Synchronized
     internal fun publishFlowEventsNow() {
+        flowPublicationGate.invalidateScheduled()
+        publishFlowEventsSnapshot()
+    }
+
+    private fun publishFlowEventsSnapshot() {
         _flowAnalysis.value = FlowAnalysisState(
             events = flowEvents.snapshot(),
             droppedEvents = maxOf(bridgeDroppedFlowEvents, flowEvents.droppedCount),
         )
-        flowPublishScheduled.set(false)
     }
 
     @Synchronized
     fun clearFlowEvents() {
+        flowPublicationGate.invalidateScheduled()
         flowEvents.clear()
         bridgeDroppedFlowEvents = 0L
         _flowAnalysis.value = FlowAnalysisState()

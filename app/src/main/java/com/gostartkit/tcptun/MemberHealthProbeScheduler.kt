@@ -32,8 +32,11 @@ internal class MemberHealthProbeScheduler(
         val delayMs = requestedDelayMs.coerceIn(0L, maxDelayMs)
         if (!canRun() || !requestCurrent()) return
         synchronized(lock) {
+            // Recheck after acquiring ownership of the schedule. In particular, network loss sets
+            // canRun=false before calling cancel(); either this check observes the loss or that
+            // cancel waits for and invalidates the Future created below.
+            if (!canRun() || !requestCurrent()) return
             if (delayMs == 0L) {
-                if (!requestCurrent()) return
                 markProbeForced()
                 notBeforeElapsedMs.set(0L)
                 generation.incrementAndGet()
@@ -69,16 +72,21 @@ internal class MemberHealthProbeScheduler(
                 taskName = "delayed member health probe",
                 onFailure = { error -> log(failureDescription(error)) },
             ) delayedProbe@{
-                if (scheduledGeneration != generation.get()) return@delayedProbe
-                notBeforeElapsedMs.compareAndSet(scheduledNotBefore, 0L)
-                if (!canRun() || !requestCurrent()) return@delayedProbe
-                markProbeForced()
-                log("bridge health check requested: $reason")
-                wakeMonitor()
+                // Linearize callback execution with cancel/reschedule. Future.cancel(false) does
+                // not stop a callback that has already started, so a generation check outside this
+                // lock would still allow a stale callback to mark/wake after cancel() returned.
+                synchronized(lock) {
+                    if (scheduledGeneration != generation.get()) return@delayedProbe
+                    notBeforeElapsedMs.compareAndSet(scheduledNotBefore, 0L)
+                    if (!canRun() || !requestCurrent()) return@delayedProbe
+                    markProbeForced()
+                    log("bridge health check requested: $reason")
+                    wakeMonitor()
+                }
             }
             if (future == null) {
                 notBeforeElapsedMs.compareAndSet(scheduledNotBefore, 0L)
-                if (requestCurrent()) {
+                if (canRun() && requestCurrent()) {
                     log("member health probe scheduling failed; requesting an immediate check")
                     markProbeForced()
                     wakeMonitor()

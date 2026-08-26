@@ -16,6 +16,14 @@ class AndroidAppIdentityProviderTest {
     }
 
     @Test
+    fun appRoutingIdentityRemainsRequiredAcrossFlowAnalysisModes() {
+        assertTrue(appIdentityLookupRequired("com.example.analysis", hasAppRouteRules = false))
+        assertTrue(appIdentityLookupRequired("com.example.analysis", hasAppRouteRules = true))
+        assertTrue(appIdentityLookupRequired("", hasAppRouteRules = true))
+        assertFalse(appIdentityLookupRequired("", hasAppRouteRules = false))
+    }
+
+    @Test
     fun parsesTcpIpv4ProxySource() {
         val flow = parseProxyFlowSource("tcp", "127.0.0.1:54321")
 

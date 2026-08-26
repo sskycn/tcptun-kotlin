@@ -121,6 +121,7 @@ class TcptunVpnService : VpnService() {
             requestBridgeRestart(reason, settleDelayMs, ownership = ownership)
         },
         onMemberProbeRequested = ::requestMemberHealthProbe,
+        onMemberProbeCancelled = { bridgeHealthRuntime.cancelMemberProbe() },
         log = TcptunState::appendLog,
     )
     private val runtimeSettingsState = RuntimeSettingsRuntimeState()
@@ -130,31 +131,34 @@ class TcptunVpnService : VpnService() {
         isOwnershipCurrent = ::ownsRuntime,
         hasActiveConfig = { bridgeResources.activeConfigJson != null },
     )
-    private val bridgeHealthRuntime = BridgeHealthRuntime(
-        lifecycleExecutor = lifecycleExecutor,
-        bridgePort = healthBridgePort,
-        currentOwnership = ::currentRuntimeOwnership,
-        isOwnershipCurrent = ::ownsRuntime,
-        currentPlan = { runningPlan },
-        currentSettings = { runtimeSettingsState.effectiveSettings },
-        canHandleStatusEvent = { !bridgeRestarting },
-        restoreConnectionsReady = ::restoreConnectionsReadyAfterHealthySnapshot,
-        dispatchDiagnostics = { task ->
-            executeLifecycleTask(
-                command = VpnRuntimeCommand.RefreshDiagnostics,
-                onFailure = { error ->
-                    if (!destroyed.get()) TcptunState.appendLog(failureDescription(error))
-                },
-                task = task,
-            )
-        },
-        onRestartRequired = { ownership, reason, cancelIfHealthy ->
-            requestBridgeRestart(reason, cancelIfHealthy = cancelIfHealthy, ownership = ownership)
-        },
-        log = { message ->
-            if (!destroyed.get()) TcptunState.appendLog(message)
-        },
-    )
+    private val bridgeHealthRuntime: BridgeHealthRuntime by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        BridgeHealthRuntime(
+            lifecycleExecutor = lifecycleExecutor,
+            bridgePort = healthBridgePort,
+            currentOwnership = ::currentRuntimeOwnership,
+            isOwnershipCurrent = ::ownsRuntime,
+            currentPlan = { runningPlan },
+            currentSettings = { runtimeSettingsState.effectiveSettings },
+            memberProbesAllowed = { underlyingNetworkRuntime.hasEligibleNetwork },
+            canHandleStatusEvent = { !bridgeRestarting },
+            restoreConnectionsReady = ::restoreConnectionsReadyAfterHealthySnapshot,
+            dispatchDiagnostics = { task ->
+                executeLifecycleTask(
+                    command = VpnRuntimeCommand.RefreshDiagnostics,
+                    onFailure = { error ->
+                        if (!destroyed.get()) TcptunState.appendLog(failureDescription(error))
+                    },
+                    task = task,
+                )
+            },
+            onRestartRequired = { ownership, reason, cancelIfHealthy ->
+                requestBridgeRestart(reason, cancelIfHealthy = cancelIfHealthy, ownership = ownership)
+            },
+            log = { message ->
+                if (!destroyed.get()) TcptunState.appendLog(message)
+            },
+        )
+    }
     private val tcpingBridgePort = LockedTcpingBridgePort(bridgeLock, { bridge }, ::ownsRuntime)
     private val outboundTcpingRuntime = OutboundTcpingRuntime(
         bridgePort = tcpingBridgePort,

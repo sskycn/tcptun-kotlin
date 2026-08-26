@@ -53,10 +53,9 @@ cleanup() {
         kill "$instrumentation_pid" >/dev/null 2>&1
         wait "$instrumentation_pid" >/dev/null 2>&1
     fi
-    adb -s "$serial" shell rm -f \
-        /data/local/tmp/tcptun-lan-loopback-ack \
-        /data/local/tmp/tcptun-lan-auth-ack \
-        /data/local/tmp/tcptun-lan-persistence-ack
+    adb -s "$serial" shell setprop debug.tcptun.lan.lb none
+    adb -s "$serial" shell setprop debug.tcptun.lan.auth none
+    adb -s "$serial" shell setprop debug.tcptun.lan.persist none
     adb -s "$serial" shell am force-stop "$debug_package" >/dev/null 2>&1
     validation_restore_appop_mode "$serial" "$debug_package" ACTIVATE_VPN "$activate_vpn_was" >/dev/null 2>&1
     exit "$status"
@@ -105,7 +104,7 @@ if probe_proxy "" >/dev/null 2>&1; then
     exit 1
 fi
 loopback_result="PASS (LAN access refused)"
-adb -s "$serial" shell touch /data/local/tmp/tcptun-lan-loopback-ack
+adb -s "$serial" shell setprop debug.tcptun.lan.lb ready
 
 wait_for_phase AUTH_REQUIRED_READY
 if probe_proxy "" >/dev/null 2>&1; then
@@ -120,12 +119,12 @@ fi
 wrong_result="PASS (authentication refused)"
 probe_proxy ":$password" >/dev/null
 correct_result="PASS"
-adb -s "$serial" shell touch /data/local/tmp/tcptun-lan-auth-ack
+adb -s "$serial" shell setprop debug.tcptun.lan.auth ready
 
 wait_for_phase PERSISTED_RESTART_READY
 probe_proxy ":$password" >/dev/null
 persistence_result="PASS"
-adb -s "$serial" shell touch /data/local/tmp/tcptun-lan-persistence-ack
+adb -s "$serial" shell setprop debug.tcptun.lan.persist ready
 
 wait "$instrumentation_pid"
 instrumentation_pid=""

@@ -136,6 +136,7 @@ class BridgeHealthRuntimeTest {
             isOwnershipCurrent = { it == activeOwnership },
             currentPlan = { null },
             currentSettings = { AppliedRuntimeSettings() },
+            memberProbesAllowed = { true },
             canHandleStatusEvent = { acceptStatusEvents },
             restoreConnectionsReady = {},
             dispatchDiagnostics = { task ->

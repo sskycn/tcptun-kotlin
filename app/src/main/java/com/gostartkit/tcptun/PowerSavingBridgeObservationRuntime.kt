@@ -3,6 +3,38 @@ package com.tcptun.client
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
+/** Desired/native-installed two-level state. Callers serialize access around one or more slots. */
+internal class NativeObservationCallbackSlot(
+    private val allowed: () -> Boolean,
+    private val installNative: (Any?) -> Unit,
+) {
+    var desired: Any? = null
+        private set
+    var installed: Any? = null
+        private set
+
+    val hasState: Boolean
+        get() = desired != null || installed != null
+
+    fun set(callback: Any?) {
+        desired = callback
+        reconcile()
+    }
+
+    fun reconcile() {
+        val target = desired.takeIf { allowed() }
+        if (installed === target) return
+        installNative(target)
+        installed = target
+    }
+
+    /** Native Close has released callbacks; no setter call is valid after this point. */
+    fun releaseAfterNativeClose() {
+        desired = null
+        installed = null
+    }
+}
+
 /**
  * Coordinates UI-only native bridge observation without coupling Activity lifecycle to the VPN
  * Service.

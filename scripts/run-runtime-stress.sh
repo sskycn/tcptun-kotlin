@@ -20,6 +20,7 @@ system_events="${RUNTIME_STRESS_SYSTEM_EVENTS:-false}"
 revoke_mode="${RUNTIME_STRESS_REVOKE_MODE:-appops}"
 reuse_installed="${RUNTIME_STRESS_REUSE_INSTALLED:-false}"
 output_dir="${RUNTIME_STRESS_OUTPUT_DIR:-build/validation-gate}"
+lifecycle_profile_uri="${RUNTIME_STRESS_LIFECYCLE_PROFILE_URI:-}"
 membership_profile_a_uri="${RUNTIME_STRESS_MEMBERSHIP_PROFILE_A_URI:-}"
 membership_profile_b_uri="${RUNTIME_STRESS_MEMBERSHIP_PROFILE_B_URI:-}"
 debug_package="com.tcptun.client.debug"
@@ -46,8 +47,9 @@ if [[ "$wifi_status" == *"enabled"* ]]; then
 else
     wifi_was_enabled="false"
 fi
-mobile_data_value=$(adb -s "$serial" shell settings get global mobile_data | tr -d '\r' | xargs)
-if [[ "$mobile_data_value" == "1" ]]; then
+mobile_data_values=$(adb -s "$serial" shell settings list global | tr -d '\r' |
+    sed -n -E 's/^mobile_data([0-9]*)=(.*)$/\2/p')
+if grep -qx '1' <<<"$mobile_data_values"; then
     mobile_data_was_enabled="true"
 else
     mobile_data_was_enabled="false"
@@ -121,6 +123,10 @@ if [[ "$network_control" == "true" ]]; then
     echo "network control enabled; use USB ADB because the test disables Wi-Fi"
 fi
 
+adb -s "$serial" shell am force-stop "$debug_package" >/dev/null 2>&1 || true
+clear_disposable_package "$debug_package"
+clear_disposable_package "$debug_test_package"
+
 if [[ "$reuse_installed" == "true" ]]; then
     echo "reuse-installed mode: skipping build and install"
 else
@@ -134,10 +140,6 @@ validation_verify_bridge_identity "$debug_apk" "$device_abi" "$identity_output"
 validation_verify_installed_apk "$serial" "$debug_apk" "$debug_package" "" "$identity_output"
 validation_verify_installed_apk "$serial" "$test_apk" "$debug_test_package" "$debug_package" "$identity_output"
 
-adb -s "$serial" shell am force-stop "$debug_package" >/dev/null 2>&1 || true
-clear_disposable_package "$debug_package"
-clear_disposable_package "$debug_test_package"
-
 instrumentation_args=(
     -e class com.tcptun.client.VpnRuntimeStressTest,com.tcptun.client.VpnNetworkHandoverStressTest
     -e runtimeStressEnabled true
@@ -148,6 +150,13 @@ instrumentation_args=(
     -e runtimeStressSystemEvents "$system_events"
     -e runtimeStressRevokeMode "$revoke_mode"
 )
+
+if [[ -n "$lifecycle_profile_uri" ]]; then
+    lifecycle_profile_base64=$(printf '%s' "$lifecycle_profile_uri" | base64 | tr -d '\r\n')
+    instrumentation_args+=(
+        -e runtimeStressLifecycleProfileBase64 "$lifecycle_profile_base64"
+    )
+fi
 
 if [[ -n "$membership_profile_a_uri" ]]; then
     membership_profile_a_base64=$(printf '%s' "$membership_profile_a_uri" | base64 | tr -d '\r\n')

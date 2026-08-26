@@ -500,6 +500,7 @@ object RuntimeSettingsRepository {
     }
 
     private fun publishDiagnostics(settings: RuntimeSettings) {
+        val previousPowerSaving = TcptunState.diagnostics.powerSavingMode
         TcptunState.updateDiagnostics {
             it.copy(
                 mtu = settings.mtu,
@@ -507,6 +508,11 @@ object RuntimeSettingsRepository {
                 localProxyAddress = localSocksConnectAddress(settings),
                 localProxyPort = settings.socksPort,
             )
+        }
+        if (previousPowerSaving != settings.powerSavingMode) {
+            // Power saving is a Kotlin observation policy, so apply its callback gate immediately
+            // even when settings are changed while no Activity visibility transition occurs.
+            PowerSavingBridgeObservationRuntime.reconcileNow()
         }
     }
 }
