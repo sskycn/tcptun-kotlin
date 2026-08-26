@@ -32,6 +32,44 @@ class RuntimeSettingsAuthoritativeReadTest {
     }
 
     @Test
+    fun encryptedSettingsFromOlderSchemaUseDefaultsForMissingPublicFields() {
+        val preferences = encryptedPreferences().apply {
+            values.remove(RuntimeSettingsStorageKeys.PowerSaving)
+            values.remove(RuntimeSettingsStorageKeys.LocalProxyProtocol)
+            values.remove(RuntimeSettingsStorageKeys.FlowAnalysisApp)
+        }
+        val secrets = FakeSecretStorage().apply {
+            values[SecretId] = "real-user\u0000real-secret"
+        }
+
+        val result = engine(preferences, secrets).read() as RuntimeSettingsRead.Success
+
+        assertEquals(true, result.settings.powerSavingMode)
+        assertEquals(DefaultLocalProxyProtocol, result.settings.localProxyProtocol)
+        assertEquals("", result.settings.flowAnalysisApp)
+        assertEquals("real-user", result.settings.socksUsername)
+        assertEquals("real-secret", result.settings.socksPassword)
+    }
+
+    @Test
+    fun encryptedAnonymousLanListenerIsRepairedBeforeBecomingAuthoritative() {
+        val preferences = encryptedPreferences().apply {
+            values[RuntimeSettingsStorageKeys.SocksListenAll] = true
+        }
+        val secrets = FakeSecretStorage().apply {
+            values[SecretId] = "\u0000"
+        }
+
+        val result = engine(preferences, secrets).read() as RuntimeSettingsRead.Success
+
+        assertTrue(result.settings.socksListenAll)
+        assertTrue(result.settings.socksPassword.isNotEmpty())
+        assertEquals("runtime.next", preferences.values[RuntimeSettingsStorageKeys.SecretsId])
+        assertFalse(secrets.values.containsKey(SecretId))
+        assertTrue(secrets.values.getValue("runtime.next").substringAfter('\u0000').isNotEmpty())
+    }
+
+    @Test
     fun missingEncryptedSecretIsUnavailableInsteadOfDefaults() {
         val result = engine(encryptedPreferences(), FakeSecretStorage()).read()
 

@@ -113,6 +113,17 @@
     <string name="ip_client_status">状态</string>
     <string name="ip_no_connected_clients">暂无已连接客户端</string>
     <string name="ip_client_number">客户端 %1$d</string>
+    <string name="ip_proxy_configuration">代理配置</string>
+    <string name="ip_proxy_protocol">协议</string>
+    <string name="ip_proxy_protocol_socks5">SOCKS5</string>
+    <string name="ip_proxy_protocol_mixed">SOCKS5 / HTTP</string>
+    <string name="ip_proxy_server">服务器</string>
+    <string name="ip_proxy_port">端口</string>
+    <string name="ip_proxy_username">用户名</string>
+    <string name="ip_proxy_password">密码</string>
+    <string name="copy_proxy_configuration">复制 tcptun-go JSON</string>
+    <string name="proxy_configuration_copied">tcptun-go 代理 JSON 已复制</string>
+    <string name="proxy_configuration_copy_failed">无法复制 tcptun-go 代理 JSON</string>
     <string name="proxy_access_address">代理地址</string>
     <string name="proxy_local_only_address">仅本机代理</string>
     <string name="proxy_hotspot_address">热点代理地址</string>

@@ -115,6 +115,17 @@
     <string name="ip_client_status">Status</string>
     <string name="ip_no_connected_clients">No connected clients</string>
     <string name="ip_client_number">Client %1$d</string>
+    <string name="ip_proxy_configuration">Proxy configuration</string>
+    <string name="ip_proxy_protocol">Protocol</string>
+    <string name="ip_proxy_protocol_socks5">SOCKS5</string>
+    <string name="ip_proxy_protocol_mixed">SOCKS5 / HTTP</string>
+    <string name="ip_proxy_server">Server</string>
+    <string name="ip_proxy_port">Port</string>
+    <string name="ip_proxy_username">Username</string>
+    <string name="ip_proxy_password">Password</string>
+    <string name="copy_proxy_configuration">Copy tcptun-go JSON</string>
+    <string name="proxy_configuration_copied">tcptun-go proxy JSON copied</string>
+    <string name="proxy_configuration_copy_failed">Couldn’t copy tcptun-go proxy JSON</string>
     <string name="proxy_access_address">Proxy address</string>
     <string name="proxy_local_only_address">Local-only proxy</string>
     <string name="proxy_hotspot_address">Hotspot proxy address</string>

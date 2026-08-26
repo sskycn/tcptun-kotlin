@@ -259,14 +259,14 @@ internal class RuntimeSettingsRepositoryEngine(
     private val preferences: RuntimeSettingsPreferences,
     private val secretStore: SecretStorage,
     private val nextSecretId: () -> String = { "runtime.${UUID.randomUUID()}" },
-    private val logUnavailable: () -> Unit = {},
+    private val logUnavailable: (Throwable) -> Unit = {},
     private val credentialCodec: RuntimeSettingsCredentialCodec = JsonRuntimeSettingsCredentialCodec,
 ) {
     fun read(): RuntimeSettingsRead = try {
         readUnsafe()
     } catch (error: Throwable) {
         if (error.isFatalProcessError()) throw error
-        logUnavailable()
+        logUnavailable(error)
         RuntimeSettingsRead.Unavailable(error)
     }
 
@@ -324,12 +324,6 @@ internal class RuntimeSettingsRepositoryEngine(
             require(!preferences.contains(RuntimeSettingsStorageKeys.SecretsId)) {
                 "encrypted runtime settings reference exists without its storage version"
             }
-        } else {
-            val requiredEncryptedKeys = RuntimeSettingsStorageKeys.all -
-                RuntimeSettingsStorageKeys.SocksUsername - RuntimeSettingsStorageKeys.SocksPassword
-            require(requiredEncryptedKeys.all(preferences::contains)) {
-                "encrypted runtime settings public record is incomplete"
-            }
         }
         val secretsId = if (encrypted) {
             preferences.getString(RuntimeSettingsStorageKeys.SecretsId, null)
@@ -380,7 +374,8 @@ internal class RuntimeSettingsRepositoryEngine(
             ),
         )
         if (encrypted) {
-            requireSafeRuntimeSettings(stored)
+            val secured = secureRuntimeSettings(stored)
+            if (secured != stored) return write(secured)
             return RuntimeSettingsRead.Success(
                 stored,
                 RuntimeSettingsSource.Stored,
@@ -461,8 +456,12 @@ object RuntimeSettingsRepository {
         return RuntimeSettingsRepositoryEngine(
             SharedPreferencesRuntimeSettingsPreferences(preferences),
             EncryptedSecretStore(context),
-            logUnavailable = {
-                runRecoverableCatching { TcptunState.appendLog("runtime settings unavailable") }
+            logUnavailable = { error ->
+                runRecoverableCatching {
+                    TcptunState.appendLog(
+                        "runtime settings unavailable: ${failureDescription(error)}",
+                    )
+                }
             },
         )
     }
