@@ -58,6 +58,28 @@ class UnderlyingNetworkRuntimeTest {
     }
 
     @Test
+    fun networkLossSkipsMemberProbeUntilAnEligibleNetworkReturns() {
+        val harness = Harness()
+        harness.runtime.register()
+        harness.source.emit("wifi", initial = true)
+        harness.runQueued()
+        assertEquals(1, harness.probeRequests.size)
+
+        harness.source.emit(null, initial = false, previous = "wifi")
+        harness.runQueued()
+
+        assertEquals(listOf("wifi", null), harness.appliedNetworks)
+        assertEquals(1, harness.probeRequests.size)
+        assertTrue(harness.restartRequests.isEmpty())
+
+        harness.source.emit("cellular", initial = false, previous = null)
+        harness.runQueued()
+
+        assertEquals(listOf("wifi", null, "cellular"), harness.appliedNetworks)
+        assertEquals(2, harness.probeRequests.size)
+    }
+
+    @Test
     fun unregisterRejectsLateCallbackFromOldRegistration() {
         val harness = Harness()
         harness.runtime.register()
