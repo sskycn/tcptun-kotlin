@@ -188,10 +188,14 @@ object TcptunState {
 
     @Synchronized
     internal fun acquireUiVisibility(): UiVisibilityLease {
-        val lease = uiVisibility.acquire()
+        val trackerLease = uiVisibility.acquire()
+        PowerSavingBridgeObservationRuntime.reconcileNow()
         flushBackgroundLogs()
         publishFlowEventsNow()
-        return lease
+        return UiVisibilityLease {
+            trackerLease.close()
+            PowerSavingBridgeObservationRuntime.reconcileNow()
+        }
     }
 
     @Synchronized
