@@ -178,13 +178,21 @@ object TcptunState {
     private val flowPublishExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "tcptun-flow-publisher").apply { isDaemon = true }
     }
+    private val pendingBackgroundLogs = BoundedRingBuffer<String>(MAX_LOGS)
+    private var pendingBackgroundLogLast: String? = null
     private var tcpingRequestId = 0L
     private val uiVisibility = UiVisibilityTracker()
 
     val isUiVisible: Boolean
         get() = uiVisibility.isVisible
 
-    internal fun acquireUiVisibility(): UiVisibilityLease = uiVisibility.acquire()
+    @Synchronized
+    internal fun acquireUiVisibility(): UiVisibilityLease {
+        val lease = uiVisibility.acquire()
+        flushBackgroundLogs()
+        publishFlowEventsNow()
+        return lease
+    }
 
     @Synchronized
     fun beginBridgeSession(): Long {
@@ -256,7 +264,14 @@ object TcptunState {
         flowSequence = event.sequence
         flowEvents.append(event)
         bridgeDroppedFlowEvents = maxOf(bridgeDroppedFlowEvents, event.droppedEvents)
-        scheduleFlowSnapshot()
+        if (
+            PowerSavingObservationPolicy.shouldPublish(
+                powerSaving = current.diagnostics.powerSavingMode,
+                uiVisible = isUiVisible,
+            )
+        ) {
+            scheduleFlowSnapshot()
+        }
         return event
     }
 
@@ -507,18 +522,50 @@ object TcptunState {
     fun appendLog(line: String) {
         val clean = redactSensitiveText(line.take(MAX_LOG_LENGTH)).trim()
         if (clean.isEmpty()) return
-        // Keep in-app log history for later inspection; avoid logcat I/O while hanging
-        // in the background with the UI closed.
+        val current = _state.value
+        val publishNow = PowerSavingObservationPolicy.shouldPublish(
+            powerSaving = current.diagnostics.powerSavingMode,
+            uiVisible = isUiVisible,
+        )
+        if (!publishNow) {
+            if (
+                pendingBackgroundLogLast == clean ||
+                (pendingBackgroundLogLast == null && current.logs.lastOrNull() == clean)
+            ) {
+                return
+            }
+            pendingBackgroundLogs.append(clean)
+            pendingBackgroundLogLast = clean
+            return
+        }
+
+        flushBackgroundLogs()
+        // Logcat is still UI-only; disabling power saving only keeps the in-app observation
+        // stream live and does not introduce background logcat I/O.
         if (isUiVisible) {
             Log.i(LOG_TAG, clean)
         }
-        val current = _state.value
-        if (current.logs.lastOrNull() == clean) return
-        _state.value = current.copy(logs = (current.logs + clean).takeLast(MAX_LOGS))
+        val refreshed = _state.value
+        if (refreshed.logs.lastOrNull() == clean) return
+        _state.value = refreshed.copy(logs = (refreshed.logs + clean).takeLast(MAX_LOGS))
+    }
+
+    private fun flushBackgroundLogs() {
+        val pending = pendingBackgroundLogs.snapshot()
+        if (pending.isEmpty()) return
+        val merged = _state.value.logs.toMutableList()
+        pending.forEach { line ->
+            if (merged.lastOrNull() != line) merged += line
+        }
+        pendingBackgroundLogs.clear()
+        pendingBackgroundLogLast = null
+        _state.value = _state.value.copy(logs = merged.takeLast(MAX_LOGS))
     }
 
     @Synchronized
     fun clearLogs() {
+        pendingBackgroundLogs.clear()
+        pendingBackgroundLogLast = null
         _state.value = _state.value.copy(logs = emptyList())
     }
 
