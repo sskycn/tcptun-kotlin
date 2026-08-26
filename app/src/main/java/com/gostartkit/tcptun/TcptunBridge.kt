@@ -233,6 +233,7 @@ internal class BridgeReflectionApi(private val engineClass: Class<*>) {
 /** Owns exactly one gomobile Engine for the lifetime of one VpnService. */
 class ReflectionTcptunBridge : TcptunBridge {
     private val engineLock = ReentrantReadWriteLock()
+    private val flowObservationLock = Any()
     @Volatile private var closed = false
     private val bridgeClassDelegate = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         try {
@@ -269,7 +270,14 @@ class ReflectionTcptunBridge : TcptunBridge {
     private var statusCallback: Any? = null
     private var socketProtector: Any? = null
     private var appIdentityProvider: Any? = null
+    /** Desired Flow callback, retained even while the actual native callback is suspended. */
     private var flowCallback: Any? = null
+    /** Proxy currently installed in androidbridge.Engine, or null while observation is suspended. */
+    private var installedFlowCallback: Any? = null
+
+    init {
+        PowerSavingBridgeObservationRuntime.install(this, ::reconcileFlowObservation)
+    }
 
     private inline fun <T> withOpenEngine(action: (Any) -> T): T = engineLock.read {
         check(!closed) { "androidbridge Engine is already closed" }
@@ -378,26 +386,30 @@ class ReflectionTcptunBridge : TcptunBridge {
     }
 
     override fun close() {
-        engineLock.write {
-            if (closed) return
-            if (engineDelegate.isInitialized()) {
-                try {
-                    invokeMethod(engineDelegate.value, reflectionApi.value.method("close"))
-                } catch (error: Throwable) {
-                    // tcptun-go deliberately retains host callbacks when Close
-                    // cannot confirm that the runtime stopped. Keep both this
-                    // wrapper and its Java proxies alive so a later teardown
-                    // attempt remains safe and possible.
-                    throw error
+        synchronized(flowObservationLock) {
+            engineLock.write {
+                if (closed) return
+                if (engineDelegate.isInitialized()) {
+                    try {
+                        invokeMethod(engineDelegate.value, reflectionApi.value.method("close"))
+                    } catch (error: Throwable) {
+                        // tcptun-go deliberately retains host callbacks when Close
+                        // cannot confirm that the runtime stopped. Keep both this
+                        // wrapper and its Java proxies alive so a later teardown
+                        // attempt remains safe and possible.
+                        throw error
+                    }
                 }
+                closed = true
+                logCallback = null
+                statusCallback = null
+                socketProtector = null
+                appIdentityProvider = null
+                flowCallback = null
+                installedFlowCallback = null
             }
-            closed = true
-            logCallback = null
-            statusCallback = null
-            socketProtector = null
-            appIdentityProvider = null
-            flowCallback = null
         }
+        PowerSavingBridgeObservationRuntime.uninstall(this)
     }
 
     override fun status(): String = (invokeEngine("status") as? String).orEmpty()
@@ -474,6 +486,7 @@ class ReflectionTcptunBridge : TcptunBridge {
         val callbackClass = callbackClass("androidbridge.AppIdentityProvider")
         val callback = createSafeBridgeCallbackProxy(callbackClass, "app identity") { method, args ->
             if (method.name.equals("identifyApp", ignoreCase = true) && !args.isNullOrEmpty()) {
+                requestHiddenFlowObservationSuspendIfNeeded()
                 return@createSafeBridgeCallbackProxy onIdentify(args[0]?.toString().orEmpty()).orEmpty()
             }
             ""
@@ -495,18 +508,51 @@ class ReflectionTcptunBridge : TcptunBridge {
         val callbackClass = callbackClass("androidbridge.FlowCallback")
         val callback = createSafeBridgeCallbackProxy(callbackClass, "flow analysis") { method, args ->
             if (method.name.equals("onFlow", ignoreCase = true) && !args.isNullOrEmpty()) {
+                requestHiddenFlowObservationSuspendIfNeeded()
                 onFlow(args[0]?.toString().orEmpty())
             }
             null
         }
-        flowCallback = callback
-        invokeEngine("setFlowCallback", arrayOf(callbackClass), callback)
+        synchronized(flowObservationLock) {
+            flowCallback = callback
+            reconcileFlowObservationLocked(callbackClass)
+        }
     }
 
     override fun clearFlowCallback() {
-        clearCallback("androidbridge.FlowCallback", "setFlowCallback")
-        flowCallback = null
+        synchronized(flowObservationLock) {
+            flowCallback = null
+            reconcileFlowObservationLocked(callbackClass("androidbridge.FlowCallback"))
+        }
     }
+
+    private fun requestHiddenFlowObservationSuspendIfNeeded() {
+        val needsSuspend = synchronized(flowObservationLock) {
+            installedFlowCallback != null && !flowObservationAllowed()
+        }
+        if (needsSuspend) PowerSavingBridgeObservationRuntime.reconcileHiddenAsync()
+    }
+
+    private fun reconcileFlowObservation() {
+        synchronized(flowObservationLock) {
+            if (closed) return
+            if (flowCallback == null && installedFlowCallback == null) return
+            reconcileFlowObservationLocked(callbackClass("androidbridge.FlowCallback"))
+        }
+    }
+
+    private fun reconcileFlowObservationLocked(callbackClass: Class<*>) {
+        val target = flowCallback.takeIf { flowObservationAllowed() }
+        if (installedFlowCallback === target) return
+        invokeEngine("setFlowCallback", arrayOf(callbackClass), target)
+        installedFlowCallback = target
+    }
+
+    private fun flowObservationAllowed(): Boolean =
+        PowerSavingObservationPolicy.shouldPublish(
+            powerSaving = TcptunState.diagnostics.powerSavingMode,
+            uiVisible = TcptunState.isUiVisible,
+        )
 
     private fun callbackClass(name: String): Class<*> = reflectionApi.value.callbackClass(name)
 
