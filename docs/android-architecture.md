@@ -11,8 +11,10 @@ The Android project is a VPN client, not the protocol implementation. It owns:
 - Runtime state in `TcptunState` and diagnostics presentation.
 
 The Go core owns TUN forwarding, protocol handshakes, outbound selection, DNS/fake-IP
-processing, mux sessions, and native runtime cleanup. Android calls it through the existing
-`androidbridge.aar` reflection wrapper.
+processing, mux sessions, local SOCKS5 secure-auth negotiation, mixed HTTP Basic/407 handling,
+`Proxy-Authorization` stripping, and native runtime cleanup. Android passes the configured
+username/password fields through `androidbridge.aar`; it does not implement the private SOCKS5
+method `0x80`, Argon2id, HMAC proofs, or HTTP proxy authentication itself.
 
 ## Runtime data path
 

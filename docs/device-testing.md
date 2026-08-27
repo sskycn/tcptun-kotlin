@@ -140,7 +140,10 @@ scripts/run-lan-auth-validation.sh
 
 The host acts as the second LAN client. It verifies that loopback-only mode refuses the device's
 Wi-Fi address, then that listen-all refuses anonymous and wrong-password SOCKS requests while
-accepting the correct password. A stop/start persistence probe repeats the authenticated request.
+accepting standard RFC 1929 credentials. It switches the same listener to mixed mode and covers
+SOCKS5 compatibility, ordinary HTTP proxy authentication (`407` for missing/wrong Basic
+credentials), and HTTPS CONNECT authentication followed by an opaque TLS tunnel. Stop/start
+persistence probes cover authenticated SOCKS5, HTTP, and HTTPS CONNECT in mixed mode.
 The password is never echoed or written; the report contains only a 12-hex SHA-256 prefix.
 Host/instrumentation phase acknowledgements use short `debug.tcptun.lan.*` properties and are
 reset to `none` on every exit path. This avoids OEM SELinux differences around shell-created

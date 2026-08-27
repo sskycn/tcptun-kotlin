@@ -18,6 +18,7 @@ Local clients -> SOCKS5/mixed listener ------------------------> selected outbou
 - Native, VLESS, VMess, and Trojan URI import/export; compact `T2:`/`T3:` QR support.
 - Versioned HTTPS App Links at `https://x.tcptun.com/v1#p=...`.
 - Optional Android 10+ App routing and single-app traffic analysis.
+- Authenticated local SOCKS5 or mixed SOCKS5/HTTP/HTTPS CONNECT proxy access.
 - Material 3 UI, runtime diagnostics, redacted in-app logs, and TCPing tools.
 
 ## Build
