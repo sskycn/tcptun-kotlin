@@ -26,7 +26,7 @@ class VpnCommandStoreAndroidTest {
         val payload = StartVpnCommandPayload(
             configJson = "{\"token\":\"command-secret-config\"}",
             plan = ProfileRunPlan(listOf(profile), setOf(profile.id)),
-            runtimeSettings = RuntimeSettings(socksPassword = "command-secret-password"),
+            runtimeSettings = RuntimeSettings(localProxyUsers = listOf(LocalProxyUser("", "command-secret-password"))),
         )
 
         val commandId = store.publish(payload)

@@ -14,7 +14,7 @@ class RuntimeSettingsSecurityTest {
 
     @Test
     fun lanListenerWithConfiguredPasswordIsAllowed() {
-        val settings = RuntimeSettings(socksListenAll = true, socksPassword = "configured")
+        val settings = RuntimeSettings(socksListenAll = true, localProxyUsers = listOf(LocalProxyUser("", "configured")))
 
         assertEquals(settings, requireSafeRuntimeSettings(settings))
     }
@@ -24,12 +24,26 @@ class RuntimeSettingsSecurityTest {
         val unsafe = RuntimeSettings(socksListenAll = true)
         val repaired = secureRuntimeSettings(unsafe)
 
-        assertTrue(repaired.socksPassword.isNotEmpty())
+        assertTrue(repaired.localProxyUsers.single().password.isNotEmpty())
         assertEquals(repaired, requireSafeRuntimeSettings(repaired))
         assertThrows(IllegalArgumentException::class.java) { requireSafeRuntimeSettings(unsafe) }
         assertThrows(IllegalArgumentException::class.java) {
             requireSafeAppliedRuntimeSettings(AppliedRuntimeSettings.from(unsafe))
         }
+    }
+
+    @Test
+    fun listenAllRepairsEveryEmptyAccountPassword() {
+        val repaired = secureRuntimeSettings(
+            RuntimeSettings(
+                socksListenAll = true,
+                localProxyUsers = listOf(LocalProxyUser("alice", ""), LocalProxyUser("bob", "configured")),
+            ),
+            passwordGenerator = { "generated" },
+        )
+
+        assertEquals(listOf(LocalProxyUser("alice", "generated"), LocalProxyUser("bob", "configured")), repaired.localProxyUsers)
+        assertEquals(repaired, requireSafeRuntimeSettings(repaired))
     }
 
     @Test
@@ -47,14 +61,12 @@ class RuntimeSettingsSecurityTest {
         val persisted = RuntimeSettings(
             mtu = 1400,
             logLevel = "info",
-            socksUsername = "persisted-user",
-            socksPassword = "persisted-password",
+            localProxyUsers = listOf(LocalProxyUser("persisted-user", "persisted-password")),
         )
         val restoredDraft = persisted.copy(
             mtu = 1360,
             logLevel = "debug",
-            socksUsername = "",
-            socksPassword = "",
+            localProxyUsers = emptyList(),
         )
 
         val savedAfterRecreation = hydrateRuntimeSettingsCredentials(restoredDraft, persisted)
@@ -62,25 +74,22 @@ class RuntimeSettingsSecurityTest {
 
         assertEquals(1500, savedAfterRecreation.mtu)
         assertEquals("debug", savedAfterRecreation.logLevel)
-        assertEquals("persisted-user", savedAfterRecreation.socksUsername)
-        assertEquals("persisted-password", savedAfterRecreation.socksPassword)
+        assertEquals(persisted.localProxyUsers, savedAfterRecreation.localProxyUsers)
     }
 
     @Test
     fun lanCredentialHydrationDoesNotGenerateAReplacementPassword() {
         val persisted = RuntimeSettings(
             socksListenAll = true,
-            socksUsername = "lan-user",
-            socksPassword = "stable-lan-password",
+            localProxyUsers = listOf(LocalProxyUser("lan-user", "stable-lan-password")),
         )
         val restoredDraft = persisted.copy(
             mtu = 1360,
-            socksUsername = "",
-            socksPassword = "",
+            localProxyUsers = emptyList(),
         )
         val hydrated = hydrateRuntimeSettingsCredentials(restoredDraft, persisted)
 
-        assertEquals("stable-lan-password", hydrated.socksPassword)
+        assertEquals("stable-lan-password", hydrated.localProxyUsers.single().password)
         assertEquals(1360, hydrated.mtu)
     }
 }

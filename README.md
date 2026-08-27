@@ -18,7 +18,7 @@ Local clients -> SOCKS5/mixed listener ------------------------> selected outbou
 - Native, VLESS, VMess, and Trojan URI import/export; compact `T2:`/`T3:` QR support.
 - Versioned HTTPS App Links at `https://x.tcptun.com/v1#p=...`.
 - Optional Android 10+ App routing and single-app traffic analysis.
-- Authenticated local SOCKS5 or mixed SOCKS5/HTTP/HTTPS CONNECT proxy access.
+- Up to 256 accounts on one authenticated local SOCKS5 or mixed SOCKS5/HTTP/HTTPS CONNECT/UDP listener.
 - Latest tcptun-go SOCKS5 secure authentication v2, with HKDF-derived proofs and explicit
   `secure`, `standard`, or `auto` outbound authentication policies in full JSON profiles.
 - Material 3 UI, runtime diagnostics, redacted in-app logs, and TCPing tools.
@@ -68,7 +68,7 @@ See [docs/device-testing.md](docs/device-testing.md) for repeatable device valid
 ## tcptun-go authentication
 
 The Android bridge is generated from tcptun-go commit
-`2719ab3bcd3708cbcf763dc8283bcd62a12e4628` (Bridge API 2). Secure authentication uses the
+`bc935c132b8790751a3cd3d1f4e0b06ff07da63d` (Bridge API 2). Secure authentication uses the
 tcptun-go v2 protocol: HKDF-SHA256 derives the authentication key and the Go core performs all
 challenge/response processing. It is intended for high-entropy shared secrets and is not
 transport encryption.
@@ -78,3 +78,10 @@ private method `0x80` and prevents downgrade to RFC1929. `standard` explicitly s
 `auto` offers secure auth and RFC1929 for compatibility and is intentionally downgradeable.
 Android preserves these fields in full JSON profiles; it does not implement the authentication
 protocol itself.
+
+Android-created local proxy inbounds use `users[]`; all configured accounts protect the same
+listener and mixed-protocol surfaces. Existing encrypted single-account settings migrate
+automatically. Full JSON profiles preserve multi-user `mixed`, `socks5`, `native`, `vless`,
+`vmess`, and `trojan` inbounds, including per-user VLESS flow. Outbounds remain one client
+identity. Passwords remain in encrypted secret storage and listen-all cannot run without an
+account.

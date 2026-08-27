@@ -25,7 +25,7 @@ class VpnCommandIntentSecurityTest {
         try {
             RuntimeSettingsRepository.write(
                 context,
-                original.copy(socksListenAll = true, socksPassword = password),
+                original.copy(socksListenAll = true, localProxyUsers = listOf(LocalProxyUser("", password))),
             )
 
             val intent = VpnServiceIntents.start(context, profile)

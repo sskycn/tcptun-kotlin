@@ -53,8 +53,7 @@ class LiveConnectivityTest {
                 powerSavingMode = false,
                 socksPort = socksPort,
                 socksListenAll = false,
-                socksUsername = "",
-                socksPassword = "",
+                localProxyUsers = emptyList(),
             ),
         )
 

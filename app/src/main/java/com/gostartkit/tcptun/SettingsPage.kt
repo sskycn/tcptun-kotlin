@@ -191,7 +191,11 @@ internal fun SettingsPage(onBack: () -> Unit) {
     var socksPortText by rememberSaveable { mutableStateOf(settings.socksPort.toString()) }
     var settingsDirty by rememberSaveable { mutableStateOf(false) }
     var savingSettings by remember { mutableStateOf(false) }
-    var passwordVisible by rememberSaveable { mutableStateOf(false) }
+    var editingUserIndex by remember { mutableStateOf<Int?>(null) }
+    var editingUsername by remember { mutableStateOf("") }
+    var editingPassword by remember { mutableStateOf("") }
+    var editingPasswordVisible by remember { mutableStateOf(false) }
+    var deletingUserIndex by remember { mutableStateOf<Int?>(null) }
     var settingsLoaded by rememberSaveable { mutableStateOf(false) }
     var credentialsHydrated by remember { mutableStateOf(false) }
     var authoritativeSettings by remember { mutableStateOf<RuntimeSettingsRead.Success?>(null) }
@@ -297,7 +301,7 @@ internal fun SettingsPage(onBack: () -> Unit) {
     fun leaveSettings() {
         val socksPort = socksPortText.toIntOrNull()
         if (savingSettings || socksPort == null || socksPort !in 1..65535) return
-        if (settings.socksListenAll && settings.socksPassword.isEmpty()) {
+        if (settings.socksListenAll && (settings.localProxyUsers.isEmpty() || settings.localProxyUsers.any { it.password.isEmpty() })) {
             settingsScope.launch { settingsSnackbarHostState.showDismissibleSnackbar(lanPasswordRequiredMessage) }
             return
         }
@@ -422,14 +426,13 @@ internal fun SettingsPage(onBack: () -> Unit) {
                             settings.socksListenAll,
                             enabled = !savingSettings,
                         ) { checked ->
-                            val generated = checked && settings.socksPassword.isEmpty()
-                            updateSettingsDraft(
-                                if (generated) {
-                                    secureRuntimeSettings(settings.copy(socksListenAll = true))
-                                } else {
-                                    settings.copy(socksListenAll = checked)
-                                },
-                            )
+                            val next = if (checked) {
+                                secureRuntimeSettings(settings.copy(socksListenAll = true))
+                            } else {
+                                settings.copy(socksListenAll = false)
+                            }
+                            val generated = checked && next.localProxyUsers != settings.localProxyUsers
+                            updateSettingsDraft(next)
                             if (generated) {
                                 settingsScope.launch {
                                     settingsSnackbarHostState.showDismissibleSnackbar(
@@ -465,75 +468,59 @@ internal fun SettingsPage(onBack: () -> Unit) {
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        OutlinedTextField(
-                            value = settings.socksUsername,
-                            onValueChange = { value ->
-                                updateSettingsDraft(settings.copy(socksUsername = truncateSocksCredential(value)))
-                            },
-                            label = { FieldChromeText(stringResource(R.string.socks_username)) },
-                            singleLine = true,
-                            enabled = !savingSettings,
-                            modifier = Modifier.fillMaxWidth(),
+                        Text(
+                            stringResource(R.string.local_proxy_accounts),
+                            style = MaterialTheme.typography.titleMedium,
                         )
-                        OutlinedTextField(
-                            value = settings.socksPassword,
-                            onValueChange = { value ->
-                                updateSettingsDraft(settings.copy(socksPassword = truncateSocksCredential(value)))
-                            },
-                            label = { FieldChromeText(socksPasswordLabel) },
-                            singleLine = true,
-                            enabled = !savingSettings,
-                            isError = settings.socksListenAll && settings.socksPassword.isEmpty(),
-                            supportingText = {
-                                if (settings.socksListenAll && settings.socksPassword.isEmpty()) {
-                                    FieldChromeText(lanPasswordRequiredMessage)
-                                }
-                            },
-                            visualTransformation = if (passwordVisible) {
-                                VisualTransformation.None
-                            } else {
-                                PasswordVisualTransformation()
-                            },
-                            trailingIcon = {
-                                Row {
+                        settings.localProxyUsers.forEachIndexed { index, user ->
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(user.username.ifBlank { stringResource(R.string.empty_username) })
+                                        Text("••••••••", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
                                     IconButton(
                                         onClick = {
-                                            passwordVisible = !passwordVisible
+                                            editingUserIndex = index
+                                            editingUsername = user.username
+                                            editingPassword = user.password
+                                            editingPasswordVisible = false
                                         },
                                         enabled = !savingSettings,
-                                    ) {
-                                        Icon(
-                                            imageVector = if (passwordVisible) {
-                                                Icons.Rounded.VisibilityOff
-                                            } else {
-                                                Icons.Rounded.Visibility
-                                            },
-                                            contentDescription = stringResource(
-                                                if (passwordVisible) R.string.hide_password else R.string.show_password,
-                                            ),
-                                        )
-                                    }
+                                    ) { Icon(Icons.Rounded.Edit, contentDescription = stringResource(R.string.edit_account)) }
                                     IconButton(
-                                        onClick = {
-                                            val clipboard = context.getSystemService(ClipboardManager::class.java)
-                                            clipboard?.setPrimaryClip(
-                                                ClipData.newPlainText(
-                                                    socksPasswordLabel,
-                                                    settings.socksPassword,
-                                                ),
-                                            )
-                                        },
-                                        enabled = !savingSettings && settings.socksPassword.isNotEmpty(),
-                                    ) {
-                                        Icon(
-                                            Icons.Rounded.ContentCopy,
-                                            contentDescription = stringResource(R.string.copy_password),
-                                        )
-                                    }
+                                        onClick = { deletingUserIndex = index },
+                                        enabled = !savingSettings,
+                                    ) { Icon(Icons.Rounded.Delete, contentDescription = stringResource(R.string.delete_account)) }
                                 }
+                            }
+                        }
+                        FilledTonalButton(
+                            onClick = {
+                                editingUserIndex = -1
+                                editingUsername = ""
+                                editingPassword = generateLanProxyPassword()
+                                editingPasswordVisible = false
                             },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                            enabled = !savingSettings && settings.localProxyUsers.size < MaxLocalProxyUsers,
+                        ) {
+                            Icon(Icons.Rounded.Add, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(R.string.add_account))
+                        }
+                        if (settings.socksListenAll && (settings.localProxyUsers.isEmpty() || settings.localProxyUsers.any { it.password.isEmpty() })) {
+                            Text(
+                                lanPasswordRequiredMessage,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                         Text(
                             stringResource(R.string.native_tun_capabilities_note),
                             style = MaterialTheme.typography.bodyMedium,
@@ -595,7 +582,7 @@ internal fun SettingsPage(onBack: () -> Unit) {
                             stringResource(R.string.socks_listen),
                             RuntimeSettingsRepository.localSocksListenAddress(settings),
                         )
-                        DiagnosticsLine(stringResource(R.string.socks_auth), if (settings.socksUsername.isNotEmpty() || settings.socksPassword.isNotEmpty()) stringResource(R.string.enabled) else stringResource(R.string.disabled))
+                        DiagnosticsLine(stringResource(R.string.socks_auth), if (settings.localProxyUsers.isNotEmpty()) stringResource(R.string.enabled) else stringResource(R.string.disabled))
                         DiagnosticsLine(
                             stringResource(R.string.route_local_proxy_traffic),
                             if (settings.routeLocalProxyTraffic) stringResource(R.string.enabled) else stringResource(R.string.disabled),
@@ -610,6 +597,81 @@ internal fun SettingsPage(onBack: () -> Unit) {
             }
         }
         }
+    }
+
+    editingUserIndex?.let { index ->
+        val duplicate = settings.localProxyUsers.withIndex().any { (existingIndex, user) ->
+            existingIndex != index && user.username == editingUsername
+        }
+        AlertDialog(
+            onDismissRequest = { if (!savingSettings) editingUserIndex = null },
+            title = { Text(stringResource(if (index < 0) R.string.add_account else R.string.edit_account)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = editingUsername,
+                        onValueChange = { editingUsername = truncateSocksCredential(it) },
+                        label = { Text(stringResource(R.string.socks_username)) },
+                        singleLine = true,
+                        isError = duplicate,
+                        supportingText = { if (duplicate) Text(stringResource(R.string.duplicate_username)) },
+                    )
+                    OutlinedTextField(
+                        value = editingPassword,
+                        onValueChange = { editingPassword = truncateSocksCredential(it) },
+                        label = { Text(socksPasswordLabel) },
+                        singleLine = true,
+                        isError = settings.socksListenAll && editingPassword.isEmpty(),
+                        supportingText = {
+                            if (settings.socksListenAll && editingPassword.isEmpty()) Text(lanPasswordRequiredMessage)
+                        },
+                        visualTransformation = if (editingPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            Row {
+                                IconButton(onClick = { editingPasswordVisible = !editingPasswordVisible }) {
+                                    Icon(
+                                        if (editingPasswordVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                        contentDescription = stringResource(if (editingPasswordVisible) R.string.hide_password else R.string.show_password),
+                                    )
+                                }
+                                IconButton(onClick = { editingPassword = generateLanProxyPassword() }) {
+                                    Icon(Icons.Rounded.Tune, contentDescription = stringResource(R.string.generate_password))
+                                }
+                            }
+                        },
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val nextUser = LocalProxyUser(editingUsername, editingPassword)
+                        val nextUsers = settings.localProxyUsers.toMutableList().apply {
+                            if (index < 0) add(nextUser) else set(index, nextUser)
+                        }
+                        updateSettingsDraft(settings.copy(localProxyUsers = nextUsers))
+                        editingUserIndex = null
+                        editingPassword = ""
+                    },
+                    enabled = !duplicate && (!settings.socksListenAll || editingPassword.isNotEmpty()),
+                ) { Text(stringResource(R.string.save)) }
+            },
+            dismissButton = { TextButton(onClick = { editingUserIndex = null; editingPassword = "" }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+    deletingUserIndex?.let { index ->
+        AlertDialog(
+            onDismissRequest = { deletingUserIndex = null },
+            title = { Text(stringResource(R.string.delete_account)) },
+            text = { Text(stringResource(R.string.delete_account_confirmation)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    updateSettingsDraft(settings.copy(localProxyUsers = settings.localProxyUsers.filterIndexed { i, _ -> i != index }))
+                    deletingUserIndex = null
+                }) { Text(stringResource(R.string.delete)) }
+            },
+            dismissButton = { TextButton(onClick = { deletingUserIndex = null }) { Text(stringResource(R.string.cancel)) } },
+        )
     }
 }
 

@@ -210,6 +210,14 @@
     <string name="route_example_app">Android 10 or newer. Example: com.example.app</string>
     <string name="socks_username">Proxy username</string>
     <string name="socks_password">Proxy password</string>
+    <string name="local_proxy_accounts">Local proxy accounts</string>
+    <string name="add_account">Add account</string>
+    <string name="edit_account">Edit account</string>
+    <string name="delete_account">Delete account</string>
+    <string name="delete_account_confirmation">Delete this local proxy account?</string>
+    <string name="duplicate_username">Username must be unique.</string>
+    <string name="empty_username">Empty username</string>
+    <string name="generate_password">Generate secure password</string>
     <string name="show_password">Show password</string>
     <string name="hide_password">Hide password</string>
     <string name="copy_password">Copy password</string>

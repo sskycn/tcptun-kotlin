@@ -26,6 +26,22 @@ rule target and becomes usable again when that profile is started.
 - Credentials are not included in diagnostics or ordinary logs.
 - Existing migrations, raw JSON fields, and compatibility behavior remain unchanged.
 
+## Local proxy accounts
+
+Runtime settings keep one canonical list of local proxy accounts, limited to 256 entries. The
+encrypted schema stores the complete list; the previous encrypted `{username,password}` payload
+and older preference fields are read as zero or one account and upgraded only after a verified
+encrypted write. Passwords are excluded from ordinary preferences and saved UI state.
+
+Android-created `socks5` and `mixed` inbounds emit `users[]`, never legacy top-level credentials.
+An empty list omits `users` and preserves loopback no-auth behavior. Listen-all still requires an
+account and generates a 192-bit password when enabled from an empty list. Duplicate usernames and
+the Go 255-byte SOCKS credential limit are checked before save; tcptun-go remains authoritative.
+
+Full JSON preserves `users[]` for mixed, socks5, native, VLESS (including per-user `flow`), VMess,
+and Trojan inbounds unless the inbound is the reserved Android listener being replaced. Tunnel
+users are never imported into local settings, and outbounds remain a single client identity.
+
 ## Validation
 
 Use the existing validators before save:

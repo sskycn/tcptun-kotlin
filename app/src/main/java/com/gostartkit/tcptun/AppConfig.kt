@@ -23,6 +23,19 @@ internal fun managedRouteInboundTags(routeLocalProxyTraffic: Boolean): JSONArray
         if (routeLocalProxyTraffic) put(AndroidLocalProxyInboundTag)
     }
 
+private fun JSONObject.putLocalProxyUsers(users: List<LocalProxyUser>) {
+    remove("username")
+    remove("password")
+    remove("users")
+    if (users.isNotEmpty()) {
+        put("users", JSONArray().apply {
+            users.forEach { user ->
+                put(JSONObject().put("username", user.username).put("password", user.password))
+            }
+        })
+    }
+}
+
 internal fun normalizeStoredServerHost(value: String): String =
     value.trim().removeSurrounding("[", "]")
 
@@ -208,8 +221,7 @@ data class AppConfig(
         localProxyProtocol: String = upstreamProtocol,
         verbose: Boolean = false,
         logLevel: String? = null,
-        socks5Username: String = "",
-        socks5Password: String = "",
+        localProxyUsers: List<LocalProxyUser> = emptyList(),
         managedRouteRules: List<ManagedRouteRule> = emptyList(),
         routeLocalProxyTraffic: Boolean = false,
     ): String {
@@ -217,8 +229,7 @@ data class AppConfig(
             return prepareRawConfigForAndroid(
                 localListenAddr = localListenAddr,
                 localProxyProtocol = localProxyProtocol,
-                socks5Username = socks5Username,
-                socks5Password = socks5Password,
+                localProxyUsers = localProxyUsers,
                 verbose = verbose,
                 logLevel = logLevel,
                 managedRouteRules = managedRouteRules,
@@ -229,13 +240,13 @@ data class AppConfig(
         val normalizedListenAddr = joinHostPort(listenHost, listenPort)
         val normalizedLocalProxyProtocol = normalizeLocalProxyProtocol(localProxyProtocol)
         val networks = JSONArray().apply { AndroidTunNetworks.forEach(::put) }
+        validateLocalProxyUsers(localProxyUsers)
         val inbound = JSONObject()
             .put("tag", AndroidLocalProxyInboundTag)
             .put("type", normalizedLocalProxyProtocol)
             .put("address", JSONArray().put(normalizedListenAddr))
             .put("network", networks)
-            .put("username", socks5Username)
-            .put("password", socks5Password)
+            .apply { putLocalProxyUsers(localProxyUsers) }
 
         val proxy = JSONObject()
             .put("tag", "proxy")
@@ -384,8 +395,7 @@ data class AppConfig(
     private fun prepareRawConfigForAndroid(
         localListenAddr: String,
         localProxyProtocol: String,
-        socks5Username: String,
-        socks5Password: String,
+        localProxyUsers: List<LocalProxyUser>,
         verbose: Boolean,
         logLevel: String?,
         managedRouteRules: List<ManagedRouteRule>,
@@ -422,13 +432,13 @@ data class AppConfig(
         val (listenHost, listenPort) = splitHostPort(localListenAddr)
         val normalizedListenAddr = joinHostPort(listenHost, listenPort)
         val normalizedLocalProxyProtocol = normalizeLocalProxyProtocol(localProxyProtocol)
+        validateLocalProxyUsers(localProxyUsers)
         val androidInbound = JSONObject()
             .put("tag", AndroidVpnInboundTag)
             .put("type", normalizedLocalProxyProtocol)
             .put("address", JSONArray().put(normalizedListenAddr))
             .put("network", JSONArray().apply { AndroidTunNetworks.forEach(::put) })
-            .put("username", socks5Username)
-            .put("password", socks5Password)
+            .apply { putLocalProxyUsers(localProxyUsers) }
         val inbounds = JSONArray().put(androidInbound)
         val replacedInboundTags = mutableSetOf(AndroidVpnInboundTag, AndroidTunInboundTag)
         root.optJSONArray("inbounds")?.let { existing ->

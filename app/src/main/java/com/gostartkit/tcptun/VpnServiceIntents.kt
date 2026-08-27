@@ -134,15 +134,13 @@ internal object VpnServiceIntents {
             localListenAddr = RuntimeSettingsRepository.localSocksListenAddress(runtimeSettings),
             localProxyProtocol = runtimeSettings.localProxyProtocol,
             logLevel = runtimeSettings.logLevel,
-            socks5Username = runtimeSettings.socksUsername,
-            socks5Password = runtimeSettings.socksPassword,
+            localProxyUsers = runtimeSettings.localProxyUsers,
             managedRouteRules = managedRouteRules,
             routeLocalProxyTraffic = runtimeSettings.routeLocalProxyTraffic,
             defaultOutbound = runtimeSettings.defaultOutbound,
         )
         val planLength = plan.toJson().toString().length
-        val settingsPayloadLength = runtimeSettings.socksUsername.length +
-            runtimeSettings.socksPassword.length +
+        val settingsPayloadLength = runtimeSettings.localProxyUsers.sumOf { it.username.length + it.password.length } +
             runtimeSettings.localProxyProtocol.length +
             runtimeSettings.logLevel.length +
             runtimeSettings.defaultOutbound.length +

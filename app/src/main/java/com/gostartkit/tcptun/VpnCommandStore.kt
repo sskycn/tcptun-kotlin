@@ -1,6 +1,7 @@
 package com.tcptun.client
 
 import android.content.Context
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
@@ -137,8 +138,11 @@ internal class EncryptedVpnCommandStore(
         .put("socksPort", settings.socksPort)
         .put("localProxyProtocol", settings.localProxyProtocol)
         .put("socksListenAll", settings.socksListenAll)
-        .put("socksUsername", settings.socksUsername)
-        .put("socksPassword", settings.socksPassword)
+        .put("localProxyUsers", JSONArray().apply {
+            settings.localProxyUsers.forEach { user ->
+                put(JSONObject().put("username", user.username).put("password", user.password))
+            }
+        })
         .put("routeLocalProxyTraffic", settings.routeLocalProxyTraffic)
         .put("defaultOutbound", settings.defaultOutbound)
         .put("flowAnalysisApp", settings.flowAnalysisApp)
@@ -151,8 +155,15 @@ internal class EncryptedVpnCommandStore(
             socksPort = json.optInt("socksPort", RuntimeSettingsDefaults.SocksPort).coerceIn(1, 65535),
             localProxyProtocol = normalizeLocalProxyProtocol(json.optString("localProxyProtocol")),
             socksListenAll = json.optBoolean("socksListenAll", false),
-            socksUsername = json.optString("socksUsername"),
-            socksPassword = json.optString("socksPassword"),
+            localProxyUsers = json.optJSONArray("localProxyUsers")?.let { users ->
+                require(users.length() <= MaxLocalProxyUsers) { "too many local proxy accounts" }
+                buildList {
+                    for (index in 0 until users.length()) {
+                        val user = users.getJSONObject(index)
+                        add(LocalProxyUser(user.getString("username"), user.getString("password")))
+                    }
+                }
+            } ?: emptyList(),
             routeLocalProxyTraffic = json.optBoolean("routeLocalProxyTraffic", false),
             defaultOutbound = normalizeDefaultOutboundSelection(json.optString("defaultOutbound")),
             flowAnalysisApp = normalizeFlowAnalysisApp(json.optString("flowAnalysisApp")),

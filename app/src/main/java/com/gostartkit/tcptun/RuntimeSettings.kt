@@ -2,6 +2,7 @@ package com.tcptun.client
 
 import android.content.Context
 import android.content.SharedPreferences
+import org.json.JSONArray
 import org.json.JSONObject
 import java.security.SecureRandom
 import java.util.UUID
@@ -12,6 +13,13 @@ internal object RuntimeSettingsDefaults {
     const val VpnMtu = 1400
 }
 
+data class LocalProxyUser(
+    val username: String,
+    val password: String,
+)
+
+internal const val MaxLocalProxyUsers = 256
+
 data class RuntimeSettings(
     val mtu: Int = RuntimeSettingsDefaults.VpnMtu,
     val powerSavingMode: Boolean = true,
@@ -19,8 +27,7 @@ data class RuntimeSettings(
     val socksPort: Int = RuntimeSettingsDefaults.SocksPort,
     val localProxyProtocol: String = DefaultLocalProxyProtocol,
     val socksListenAll: Boolean = false,
-    val socksUsername: String = "",
-    val socksPassword: String = "",
+    val localProxyUsers: List<LocalProxyUser> = emptyList(),
     /** When true, managed route rules also match mixed/SOCKS local proxy traffic. Default off. */
     val routeLocalProxyTraffic: Boolean = false,
     /** Empty selects the dynamic pool; __direct__ selects direct; any other value is a profile ID. */
@@ -36,8 +43,7 @@ internal data class AppliedRuntimeSettings(
     val socksPort: Int = RuntimeSettingsDefaults.SocksPort,
     val localProxyProtocol: String = DefaultLocalProxyProtocol,
     val socksListenAll: Boolean = false,
-    val socksUsername: String = "",
-    val socksPassword: String = "",
+    val localProxyUsers: List<LocalProxyUser> = emptyList(),
     val routeLocalProxyTraffic: Boolean = false,
     val defaultOutbound: String = DefaultOutboundDynamicPool,
     val flowAnalysisApp: String = "",
@@ -49,8 +55,7 @@ internal data class AppliedRuntimeSettings(
         socksPort = socksPort,
         localProxyProtocol = localProxyProtocol,
         socksListenAll = socksListenAll,
-        socksUsername = socksUsername,
-        socksPassword = socksPassword,
+        localProxyUsers = localProxyUsers.toList(),
         routeLocalProxyTraffic = routeLocalProxyTraffic,
         defaultOutbound = defaultOutbound,
     )
@@ -63,8 +68,7 @@ internal data class AppliedRuntimeSettings(
             socksPort = settings.socksPort,
             localProxyProtocol = settings.localProxyProtocol,
             socksListenAll = settings.socksListenAll,
-            socksUsername = settings.socksUsername,
-            socksPassword = settings.socksPassword,
+            localProxyUsers = settings.localProxyUsers.toList(),
             routeLocalProxyTraffic = settings.routeLocalProxyTraffic,
             defaultOutbound = settings.defaultOutbound,
             flowAnalysisApp = settings.flowAnalysisApp,
@@ -98,22 +102,35 @@ internal fun secureRuntimeSettings(
     settings: RuntimeSettings,
     passwordGenerator: () -> String = ::generateLanProxyPassword,
 ): RuntimeSettings {
-    if (!settings.socksListenAll || settings.socksPassword.isNotEmpty()) return settings
-    return settings.copy(socksPassword = passwordGenerator().also { generated ->
+    if (!settings.socksListenAll || settings.localProxyUsers.all { it.password.isNotEmpty() } && settings.localProxyUsers.isNotEmpty()) {
+        return settings
+    }
+    fun generatedPassword() = passwordGenerator().also { generated ->
         check(generated.isNotEmpty()) { "LAN proxy password generator returned an empty password" }
-    })
+    }
+    return settings.copy(
+        localProxyUsers = if (settings.localProxyUsers.isEmpty()) {
+            listOf(LocalProxyUser(username = "", password = generatedPassword()))
+        } else {
+            settings.localProxyUsers.map { user ->
+                if (user.password.isEmpty()) user.copy(password = generatedPassword()) else user
+            }
+        },
+    )
 }
 
 internal fun requireSafeRuntimeSettings(settings: RuntimeSettings): RuntimeSettings = settings.also {
-    require(!it.socksListenAll || it.socksPassword.isNotEmpty()) {
-        "LAN proxy password is required when listening on all interfaces"
+    validateLocalProxyUsers(it.localProxyUsers)
+    require(!it.socksListenAll || it.localProxyUsers.isNotEmpty() && it.localProxyUsers.all { user -> user.password.isNotEmpty() }) {
+        "Every LAN proxy account requires a password when listening on all interfaces"
     }
 }
 
 internal fun requireSafeAppliedRuntimeSettings(settings: AppliedRuntimeSettings): AppliedRuntimeSettings =
     settings.also {
-        require(!it.socksListenAll || it.socksPassword.isNotEmpty()) {
-            "LAN proxy password is required when listening on all interfaces"
+        validateLocalProxyUsers(it.localProxyUsers)
+        require(!it.socksListenAll || it.localProxyUsers.isNotEmpty() && it.localProxyUsers.all { user -> user.password.isNotEmpty() }) {
+            "Every LAN proxy account requires a password when listening on all interfaces"
         }
     }
 
@@ -122,9 +139,22 @@ internal fun hydrateRuntimeSettingsCredentials(
     restoredDraft: RuntimeSettings,
     persisted: RuntimeSettings,
 ): RuntimeSettings = restoredDraft.copy(
-    socksUsername = persisted.socksUsername,
-    socksPassword = persisted.socksPassword,
+    localProxyUsers = persisted.localProxyUsers,
 )
+
+internal fun validateLocalProxyUsers(users: List<LocalProxyUser>) {
+    require(users.size <= MaxLocalProxyUsers) { "at most $MaxLocalProxyUsers local proxy accounts are allowed" }
+    val usernames = HashSet<String>(users.size)
+    users.forEachIndexed { index, user ->
+        require(hasValidSocksCredentialSize(user.username)) {
+            "local proxy account ${index + 1} username exceeds $MaxSocksCredentialUtf8Bytes UTF-8 bytes"
+        }
+        require(hasValidSocksCredentialSize(user.password)) {
+            "local proxy account ${index + 1} password exceeds $MaxSocksCredentialUtf8Bytes UTF-8 bytes"
+        }
+        require(usernames.add(user.username)) { "local proxy usernames must be unique" }
+    }
+}
 
 internal fun normalizeFlowAnalysisApp(value: String): String {
     if (value.length > MaxFlowAnalysisAppLength) return ""
@@ -178,7 +208,8 @@ internal object RuntimeSettingsStorageKeys {
     const val FlowAnalysisApp = "runtimeFlowAnalysisApp"
     const val StorageVersion = "runtimeStorageVersion"
     const val SecretsId = "runtimeSecretsId"
-    const val EncryptedSecretsVersion = 2
+    const val EncryptedSecretsVersion = 3
+    const val LegacyEncryptedSecretsVersion = 2
 
     val all = setOf(
         Mtu,
@@ -206,24 +237,44 @@ internal interface RuntimeSettingsPreferences {
 }
 
 internal interface RuntimeSettingsCredentialCodec {
-    fun encode(username: String, password: String): String
-    fun decode(raw: String): Pair<String, String>
+    fun encode(users: List<LocalProxyUser>): String
+    fun decode(raw: String): List<LocalProxyUser>
 }
 
 private object JsonRuntimeSettingsCredentialCodec : RuntimeSettingsCredentialCodec {
-    override fun encode(username: String, password: String): String = JSONObject()
-        .put("username", username)
-        .put("password", password)
+    override fun encode(users: List<LocalProxyUser>): String = JSONObject()
+        .put("users", JSONArray().apply {
+            users.forEach { user ->
+                put(JSONObject().put("username", user.username).put("password", user.password))
+            }
+        })
         .toString()
 
-    override fun decode(raw: String): Pair<String, String> {
+    override fun decode(raw: String): List<LocalProxyUser> {
         val json = JSONObject(raw)
+        json.optJSONArray("users")?.let { values ->
+            require(values.length() <= MaxLocalProxyUsers) { "too many encrypted local proxy accounts" }
+            return buildList(values.length()) {
+                for (index in 0 until values.length()) {
+                    val user = values.optJSONObject(index)
+                        ?: throw IllegalArgumentException("encrypted local proxy account is invalid")
+                    val username = user.opt("username")
+                    val password = user.opt("password")
+                    require(username is String && password is String) {
+                        "encrypted local proxy account is incomplete"
+                    }
+                    add(LocalProxyUser(username, password))
+                }
+            }
+        }
+        // Version 2 stored one encrypted {username,password} object.
         val username = json.opt("username")
         val password = json.opt("password")
         require(username is String && password is String) {
             "encrypted runtime settings credentials are incomplete"
         }
-        return username to password
+        return if (username.isEmpty() && password.isEmpty()) emptyList()
+        else listOf(LocalProxyUser(username, password))
     }
 }
 
@@ -286,10 +337,7 @@ internal class RuntimeSettingsRepositoryEngine(
         val previousSecretsId = preferences.getString(RuntimeSettingsStorageKeys.SecretsId, null).orEmpty()
         val secretsId = nextSecretId()
         require(secretsId.isNotBlank()) { "runtime settings secret reference must not be blank" }
-        val encodedSecrets = credentialCodec.encode(
-            normalized.socksUsername,
-            normalized.socksPassword,
-        )
+        val encodedSecrets = credentialCodec.encode(normalized.localProxyUsers)
         val saved = replaceWithVerifiedSecret(
             secretStore = secretStore,
             newSecretId = secretsId,
@@ -319,7 +367,8 @@ internal class RuntimeSettingsRepositoryEngine(
         require(version in 0..RuntimeSettingsStorageKeys.EncryptedSecretsVersion) {
             "unsupported runtime settings storage version"
         }
-        val encrypted = version == RuntimeSettingsStorageKeys.EncryptedSecretsVersion
+        val encrypted = version == RuntimeSettingsStorageKeys.LegacyEncryptedSecretsVersion ||
+            version == RuntimeSettingsStorageKeys.EncryptedSecretsVersion
         if (!encrypted) {
             require(!preferences.contains(RuntimeSettingsStorageKeys.SecretsId)) {
                 "encrypted runtime settings reference exists without its storage version"
@@ -338,8 +387,10 @@ internal class RuntimeSettingsRepositoryEngine(
                     ?: throw IllegalStateException("encrypted runtime settings are missing"),
             )
         } else {
-            preferences.getString(RuntimeSettingsStorageKeys.SocksUsername, "").orEmpty() to
-                preferences.getString(RuntimeSettingsStorageKeys.SocksPassword, "").orEmpty()
+            val username = preferences.getString(RuntimeSettingsStorageKeys.SocksUsername, "").orEmpty()
+            val password = preferences.getString(RuntimeSettingsStorageKeys.SocksPassword, "").orEmpty()
+            if (username.isEmpty() && password.isEmpty()) emptyList()
+            else listOf(LocalProxyUser(username, password))
         }
         val stored = RuntimeSettings(
             mtu = preferences.getInt(RuntimeSettingsStorageKeys.Mtu, RuntimeSettingsDefaults.VpnMtu)
@@ -357,8 +408,9 @@ internal class RuntimeSettingsRepositoryEngine(
                 ).orEmpty(),
             ),
             socksListenAll = preferences.getBoolean(RuntimeSettingsStorageKeys.SocksListenAll, false),
-            socksUsername = credentials.first.let(::validatedCredential),
-            socksPassword = credentials.second.let(::validatedCredential),
+            localProxyUsers = credentials.map { user ->
+                LocalProxyUser(validatedCredential(user.username), validatedCredential(user.password))
+            }.also(::validateLocalProxyUsers),
             routeLocalProxyTraffic = preferences.getBoolean(
                 RuntimeSettingsStorageKeys.RouteLocalProxyTraffic,
                 false,
@@ -386,8 +438,8 @@ internal class RuntimeSettingsRepositoryEngine(
         return write(secureRuntimeSettings(stored))
     }
 
-    private fun parseCredentials(raw: String): Pair<String, String> {
-        require(raw.length <= MaxRuntimeCredentialLength * 3) {
+    private fun parseCredentials(raw: String): List<LocalProxyUser> {
+        require(raw.length <= MaxEncryptedRuntimeCredentialsLength) {
             "encrypted runtime settings are too large"
         }
         return credentialCodec.decode(raw)
@@ -401,14 +453,7 @@ internal class RuntimeSettingsRepositoryEngine(
 
     private fun normalizeForStorage(settings: RuntimeSettings): RuntimeSettings {
         requireSafeRuntimeSettings(settings)
-        require(settings.socksUsername.length <= MaxRuntimeCredentialLength) { "SOCKS username is too long" }
-        require(settings.socksPassword.length <= MaxRuntimeCredentialLength) { "SOCKS password is too long" }
-        require(hasValidSocksCredentialSize(settings.socksUsername)) {
-            "SOCKS username exceeds $MaxSocksCredentialUtf8Bytes UTF-8 bytes"
-        }
-        require(hasValidSocksCredentialSize(settings.socksPassword)) {
-            "SOCKS password exceeds $MaxSocksCredentialUtf8Bytes UTF-8 bytes"
-        }
+        validateLocalProxyUsers(settings.localProxyUsers)
         return settings.copy(
             mtu = settings.mtu.coerceIn(1280, 1500),
             logLevel = normalizeLogLevel(settings.logLevel),
@@ -416,11 +461,13 @@ internal class RuntimeSettingsRepositoryEngine(
             localProxyProtocol = normalizeLocalProxyProtocol(settings.localProxyProtocol),
             defaultOutbound = normalizeDefaultOutboundSelection(settings.defaultOutbound),
             flowAnalysisApp = normalizeFlowAnalysisApp(settings.flowAnalysisApp),
+            localProxyUsers = settings.localProxyUsers.toList(),
         )
     }
 
     private companion object {
         const val MaxRuntimeCredentialLength = 4_096
+        const val MaxEncryptedRuntimeCredentialsLength = MaxLocalProxyUsers * (MaxRuntimeCredentialLength * 2 + 64)
     }
 }
 

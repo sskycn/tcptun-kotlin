@@ -546,11 +546,12 @@ internal class BridgeHealthRuntime(
 
     private fun upstreamProbeFailure(targets: List<UpstreamProbeTarget>): String? {
         val settings = currentSettings()
+        val probeUser = settings.localProxyUsers.firstOrNull()
         return localProxyHealthProbe.upstreamFailure(
             orderedTargets = targets,
             localPort = settings.socksPort,
-            username = settings.socksUsername,
-            password = settings.socksPassword,
+            username = probeUser?.username.orEmpty(),
+            password = probeUser?.password.orEmpty(),
             onSuccess = { target -> log("upstream probe ${target.label} succeeded") },
         )
     }

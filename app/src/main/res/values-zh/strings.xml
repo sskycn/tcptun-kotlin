@@ -208,6 +208,14 @@
     <string name="route_example_app">需要 Android 10 或更高版本。示例：com.example.app</string>
     <string name="socks_username">代理用户名</string>
     <string name="socks_password">代理密码</string>
+    <string name="local_proxy_accounts">本地代理账号</string>
+    <string name="add_account">添加账号</string>
+    <string name="edit_account">编辑账号</string>
+    <string name="delete_account">删除账号</string>
+    <string name="delete_account_confirmation">确定删除这个本地代理账号吗？</string>
+    <string name="duplicate_username">用户名不能重复。</string>
+    <string name="empty_username">空用户名</string>
+    <string name="generate_password">生成安全密码</string>
     <string name="show_password">显示密码</string>
     <string name="hide_password">隐藏密码</string>
     <string name="copy_password">复制密码</string>

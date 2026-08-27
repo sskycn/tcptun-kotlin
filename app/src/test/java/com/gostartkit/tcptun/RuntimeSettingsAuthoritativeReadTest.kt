@@ -7,6 +7,49 @@ import org.junit.Test
 
 class RuntimeSettingsAuthoritativeReadTest {
     @Test
+    fun twoAccountsRoundTripThroughEncryptedStorage() {
+        val preferences = FakeRuntimeSettingsPreferences()
+        val secrets = FakeSecretStorage()
+        val repository = engine(preferences, secrets)
+        val users = listOf(LocalProxyUser("alice", "secret-a"), LocalProxyUser("bob", "secret-b"))
+
+        repository.write(RuntimeSettings(localProxyUsers = users))
+
+        assertEquals(users, (repository.read() as RuntimeSettingsRead.Success).settings.localProxyUsers)
+        assertFalse(preferences.values.values.any { value -> users.any { value.toString().contains(it.password) } })
+    }
+
+    @Test
+    fun accountCountAndDuplicateUsernameMatchGoBoundary() {
+        val users = List(MaxLocalProxyUsers) { LocalProxyUser("user-$it", "secret") }
+        assertEquals(users, requireSafeRuntimeSettings(RuntimeSettings(localProxyUsers = users)).localProxyUsers)
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            requireSafeRuntimeSettings(RuntimeSettings(localProxyUsers = users + LocalProxyUser("overflow", "secret")))
+        }
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            requireSafeRuntimeSettings(
+                RuntimeSettings(localProxyUsers = listOf(LocalProxyUser("same", "a"), LocalProxyUser("same", "b"))),
+            )
+        }
+    }
+
+    @Test
+    fun versionTwoSingleAccountPayloadMigratesOnNextSuccessfulWrite() {
+        val preferences = encryptedPreferences().apply {
+            values[RuntimeSettingsStorageKeys.StorageVersion] = RuntimeSettingsStorageKeys.LegacyEncryptedSecretsVersion
+        }
+        val secrets = FakeSecretStorage().apply { values[SecretId] = "legacy-user\u0000legacy-secret" }
+        val repository = engine(preferences, secrets)
+
+        val loaded = repository.read() as RuntimeSettingsRead.Success
+        assertEquals(listOf(LocalProxyUser("legacy-user", "legacy-secret")), loaded.settings.localProxyUsers)
+        repository.writeIfCurrent(loaded, loaded.settings.copy(mtu = 1360))
+
+        assertEquals(RuntimeSettingsStorageKeys.EncryptedSecretsVersion, preferences.values[RuntimeSettingsStorageKeys.StorageVersion])
+        assertFalse(secrets.values.containsKey(SecretId))
+    }
+
+    @Test
     fun cleanInstallReturnsAuthoritativeDefaultsWithoutWritingStorage() {
         val preferences = FakeRuntimeSettingsPreferences()
         val result = engine(preferences).read()
@@ -27,8 +70,7 @@ class RuntimeSettingsAuthoritativeReadTest {
 
         val result = engine(preferences, secrets).read() as RuntimeSettingsRead.Success
 
-        assertEquals("real-user", result.settings.socksUsername)
-        assertEquals("real-secret", result.settings.socksPassword)
+        assertEquals(listOf(LocalProxyUser("real-user", "real-secret")), result.settings.localProxyUsers)
     }
 
     @Test
@@ -47,8 +89,7 @@ class RuntimeSettingsAuthoritativeReadTest {
         assertEquals(true, result.settings.powerSavingMode)
         assertEquals(DefaultLocalProxyProtocol, result.settings.localProxyProtocol)
         assertEquals("", result.settings.flowAnalysisApp)
-        assertEquals("real-user", result.settings.socksUsername)
-        assertEquals("real-secret", result.settings.socksPassword)
+        assertEquals(listOf(LocalProxyUser("real-user", "real-secret")), result.settings.localProxyUsers)
     }
 
     @Test
@@ -63,7 +104,7 @@ class RuntimeSettingsAuthoritativeReadTest {
         val result = engine(preferences, secrets).read() as RuntimeSettingsRead.Success
 
         assertTrue(result.settings.socksListenAll)
-        assertTrue(result.settings.socksPassword.isNotEmpty())
+        assertTrue(result.settings.localProxyUsers.single().password.isNotEmpty())
         assertEquals("runtime.next", preferences.values[RuntimeSettingsStorageKeys.SecretsId])
         assertFalse(secrets.values.containsKey(SecretId))
         assertTrue(secrets.values.getValue("runtime.next").substringAfter('\u0000').isNotEmpty())
@@ -134,7 +175,7 @@ class RuntimeSettingsAuthoritativeReadTest {
         val retried = repository.read()
 
         assertTrue(retried is RuntimeSettingsRead.Success)
-        assertEquals("secret", (retried as RuntimeSettingsRead.Success).settings.socksPassword)
+        assertEquals("secret", (retried as RuntimeSettingsRead.Success).settings.localProxyUsers.single().password)
     }
 
     private fun encryptedPreferences() = FakeRuntimeSettingsPreferences().apply {
@@ -167,12 +208,18 @@ class RuntimeSettingsAuthoritativeReadTest {
 }
 
 internal object FakeRuntimeSettingsCredentialCodec : RuntimeSettingsCredentialCodec {
-    override fun encode(username: String, password: String): String = "$username\u0000$password"
+    override fun encode(users: List<LocalProxyUser>): String = users.joinToString("\u0001") {
+        "${it.username}\u0000${it.password}"
+    }
 
-    override fun decode(raw: String): Pair<String, String> {
-        val parts = raw.split('\u0000', limit = 2)
-        require(parts.size == 2) { "malformed credential payload" }
-        return parts[0] to parts[1]
+    override fun decode(raw: String): List<LocalProxyUser> {
+        if (raw.isEmpty()) return emptyList()
+        return raw.split('\u0001').map { encoded ->
+            val parts = encoded.split('\u0000', limit = 2)
+            require(parts.size == 2) { "malformed credential payload" }
+            if (parts[0].isEmpty() && parts[1].isEmpty()) return emptyList()
+            LocalProxyUser(parts[0], parts[1])
+        }
     }
 }
 

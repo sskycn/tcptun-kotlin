@@ -12,6 +12,43 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ProfileSecretSerializationAndroidTest {
     @Test
+    fun runtimeAccountListRoundTripsAndVersionTwoSecretMigratesOnWrite() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val preferences = context.getSharedPreferences(RuntimeSettingsStorageKeys.Prefs, 0)
+        val secretStore = EncryptedSecretStore(context)
+        val legacySecretId = "runtime.android-test-v2"
+        val original = RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()
+        try {
+            preferences.edit().clear()
+                .putInt(RuntimeSettingsStorageKeys.StorageVersion, RuntimeSettingsStorageKeys.LegacyEncryptedSecretsVersion)
+                .putString(RuntimeSettingsStorageKeys.SecretsId, legacySecretId)
+                .commit()
+            secretStore.writeVerified(
+                legacySecretId,
+                "{\"username\":\"legacy-user\",\"password\":\"legacy-secret\"}",
+            )
+            val migrated = RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()
+            assertEquals(listOf(LocalProxyUser("legacy-user", "legacy-secret")), migrated.localProxyUsers)
+
+            val users = listOf(LocalProxyUser("alice", "secret-a"), LocalProxyUser("bob", "secret-b"))
+            RuntimeSettingsRepository.write(context, migrated.copy(localProxyUsers = users))
+            val roundTripped = RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()
+
+            assertEquals(users, roundTripped.localProxyUsers)
+            assertEquals(
+                RuntimeSettingsStorageKeys.EncryptedSecretsVersion,
+                preferences.getInt(RuntimeSettingsStorageKeys.StorageVersion, 0),
+            )
+            assertFalse(preferences.all.values.any { value -> users.any { value.toString().contains(it.password) } })
+            assertFalse(secretStore.read(legacySecretId)?.contains("legacy-secret") == true)
+        } finally {
+            runRecoverableCatching { secretStore.remove(legacySecretId) }
+            preferences.edit().clear().commit()
+            RuntimeSettingsRepository.write(context, original)
+        }
+    }
+
+    @Test
     fun credentialsNeverAppearInPublicProfileSettings() {
         val profile = AppConfig(
             id = "profile-id",
@@ -89,14 +126,14 @@ class ProfileSecretSerializationAndroidTest {
             val encryptedValues = context.getSharedPreferences("tcptun_encrypted_secrets", 0)
                 .all.values.filterIsInstance<String>()
 
-            assertEquals("legacy-user", migrated.socksUsername)
-            assertTrue(migrated.socksPassword.isNotEmpty())
-            assertEquals(32, migrated.socksPassword.length)
+            assertEquals("legacy-user", migrated.localProxyUsers.single().username)
+            assertTrue(migrated.localProxyUsers.single().password.isNotEmpty())
+            assertEquals(32, migrated.localProxyUsers.single().password.length)
             assertFalse(preferences.contains("runtimeSocksUsername"))
             assertFalse(preferences.contains("runtimeSocksPassword"))
             assertFalse(encryptedValues.any { it.contains("legacy-user") })
-            assertFalse(encryptedValues.any { it.contains(migrated.socksPassword) })
-            assertEquals(2, preferences.getInt("runtimeStorageVersion", 0))
+            assertFalse(encryptedValues.any { it.contains(migrated.localProxyUsers.single().password) })
+            assertEquals(RuntimeSettingsStorageKeys.EncryptedSecretsVersion, preferences.getInt("runtimeStorageVersion", 0))
         } finally {
             preferences.edit().clear().commit()
             RuntimeSettingsRepository.write(context, original)

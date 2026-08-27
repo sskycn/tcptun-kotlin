@@ -690,12 +690,23 @@ class AndroidBridgeContractTest {
 
         listOf(structured, raw).forEach { profile ->
             LocalProxyProtocols.forEach { protocol ->
+                val noAuthInbound = JSONObject(
+                    profile.toBridgeJson(
+                        localListenAddr = "127.0.0.1:1080",
+                        localProxyProtocol = protocol,
+                    ),
+                ).getJSONArray("inbounds").getJSONObject(0)
+                assertFalse(noAuthInbound.has("users"))
+                assertFalse(noAuthInbound.has("username"))
+                assertFalse(noAuthInbound.has("password"))
                 val config = JSONObject(
                     profile.toBridgeJson(
                         localListenAddr = "127.0.0.1:1080",
                         localProxyProtocol = protocol,
-                        socks5Username = "android-user",
-                        socks5Password = "android-password",
+                        localProxyUsers = listOf(
+                            LocalProxyUser("android-user", "android-password"),
+                            LocalProxyUser("second-user", "second-password"),
+                        ),
                     ),
                 )
                 val inbound = config.getJSONArray("inbounds").getJSONObject(0)
@@ -703,8 +714,13 @@ class AndroidBridgeContractTest {
                     protocol,
                     inbound.getString("type"),
                 )
-                assertEquals("android-user", inbound.getString("username"))
-                assertEquals("android-password", inbound.getString("password"))
+                assertFalse(inbound.has("username"))
+                assertFalse(inbound.has("password"))
+                val users = inbound.getJSONArray("users")
+                assertEquals("android-user", users.getJSONObject(0).getString("username"))
+                assertEquals("android-password", users.getJSONObject(0).getString("password"))
+                assertEquals("second-user", users.getJSONObject(1).getString("username"))
+                assertEquals("second-password", users.getJSONObject(1).getString("password"))
                 assertEngineStarts(config.toString())
             }
         }
@@ -738,8 +754,7 @@ class AndroidBridgeContractTest {
             AppConfig(name = "raw-proxy-auth", rawConfigJson = raw).toBridgeJson(
                 localListenAddr = "127.0.0.1:19125",
                 localProxyProtocol = "mixed",
-                socks5Username = "android-user",
-                socks5Password = "android-password",
+                localProxyUsers = listOf(LocalProxyUser("android-user", "android-password")),
             ),
         )
         val androidInbound = prepared.getJSONArray("inbounds").getJSONObject(0)
@@ -747,13 +762,61 @@ class AndroidBridgeContractTest {
         val outbound = prepared.getJSONArray("outbounds").getJSONObject(0)
 
         assertEquals("mixed", androidInbound.getString("type"))
-        assertEquals("android-user", androidInbound.getString("username"))
-        assertEquals("android-password", androidInbound.getString("password"))
+        assertFalse(androidInbound.has("username"))
+        assertFalse(androidInbound.has("password"))
+        assertEquals("android-user", androidInbound.getJSONArray("users").getJSONObject(0).getString("username"))
+        assertEquals("android-password", androidInbound.getJSONArray("users").getJSONObject(0).getString("password"))
         assertEquals("raw-inbound-user", preservedInbound.getString("username"))
         assertEquals("raw-inbound-password", preservedInbound.getString("password"))
         assertEquals("raw-outbound-user", outbound.getString("username"))
         assertEquals("raw-outbound-password", outbound.getString("password"))
         assertEquals("secure", outbound.getString("auth_mode"))
+        Androidbridge.validateConfig(prepared.toString())
+    }
+
+    @Test
+    fun localProxyUsersGenerateNewSchemaAndRawAuthenticatedUsersRemainUntouched() {
+        val uuidA = "11111111-1111-4111-8111-111111111111"
+        val uuidB = "22222222-2222-4222-8222-222222222222"
+        val raw = """{
+            "inbounds":[
+                {"tag":"native-users","type":"native","address":["127.0.0.1:19201"],"network":["tcp"],"users":[{"id":"native-a"},{"id":"native-b"}],"transport":{"type":"raw"}},
+                {"tag":"vless-users","type":"vless","address":["127.0.0.1:19202"],"network":["tcp"],"users":[{"id":"$uuidA","flow":"xtls-rprx-vision"},{"id":"$uuidB"}],"transport":{"type":"raw"}},
+                {"tag":"vmess-users","type":"vmess","address":["127.0.0.1:19203"],"network":["tcp"],"users":[{"id":"$uuidA"},{"id":"$uuidB"}],"transport":{"type":"raw"}},
+                {"tag":"trojan-users","type":"trojan","address":["127.0.0.1:19204"],"network":["tcp"],"users":[{"password":"trojan-a"},{"password":"trojan-b"}],"transport":{"type":"raw"}},
+                {"tag":"mixed-users","type":"mixed","address":["127.0.0.1:19205"],"network":["tcp","udp"],"users":[{"username":"raw-a","password":"a"},{"username":"raw-b","password":"b"}]},
+                {"tag":"socks-users","type":"socks5","address":["127.0.0.1:19206"],"network":["tcp","udp"],"users":[{"username":"raw-c","password":"c"},{"username":"raw-d","password":"d"}]}
+            ],
+            "outbounds":[{"tag":"direct","type":"direct"}],
+            "route":{"default_outbound":"direct","rules":[]}
+        }""".trimIndent()
+        val expectedUsers = JSONObject(raw).getJSONArray("inbounds").let { inbounds ->
+            (0 until inbounds.length()).associate { index ->
+                val inbound = inbounds.getJSONObject(index)
+                inbound.getString("tag") to inbound.getJSONArray("users").toString()
+            }
+        }
+        val prepared = JSONObject(
+            AppConfig(name = "raw-multi-user", rawConfigJson = raw).toBridgeJson(
+                localListenAddr = "127.0.0.1:19200",
+                localProxyProtocol = "mixed",
+                localProxyUsers = listOf(
+                    LocalProxyUser("alice", "secret-a"),
+                    LocalProxyUser("bob", "secret-b"),
+                ),
+            ),
+        )
+
+        val androidInbound = prepared.getJSONArray("inbounds").getJSONObject(0)
+        assertFalse(androidInbound.has("username"))
+        assertFalse(androidInbound.has("password"))
+        assertEquals(2, androidInbound.getJSONArray("users").length())
+        assertEquals("bob", androidInbound.getJSONArray("users").getJSONObject(1).getString("username"))
+        for (index in 1 until prepared.getJSONArray("inbounds").length()) {
+            val inbound = prepared.getJSONArray("inbounds").getJSONObject(index)
+            assertEquals(expectedUsers.getValue(inbound.getString("tag")), inbound.getJSONArray("users").toString())
+        }
+        assertFalse(prepared.getJSONArray("outbounds").getJSONObject(0).has("users"))
         Androidbridge.validateConfig(prepared.toString())
     }
 
@@ -1389,8 +1452,7 @@ class AndroidBridgeContractTest {
         val config = AppConfig(name = "full", rawConfigJson = raw)
             .toBridgeJson(
                 localListenAddr = "127.0.0.1:18090",
-                socks5Username = "android",
-                socks5Password = "secret",
+                localProxyUsers = listOf(LocalProxyUser("android", "secret")),
             )
 
         val root = JSONObject(config)

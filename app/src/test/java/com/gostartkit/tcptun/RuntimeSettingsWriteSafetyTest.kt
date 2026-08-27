@@ -32,7 +32,7 @@ class RuntimeSettingsWriteSafetyTest {
             credentialCodec = FakeRuntimeSettingsCredentialCodec,
         )
         val authoritative = repository.read() as RuntimeSettingsRead.Success
-        assertEquals("real-secret", authoritative.settings.socksPassword)
+        assertEquals("real-secret", authoritative.settings.localProxyUsers.single().password)
         secrets.readFailure = SecurityException("keystore unavailable")
         val unavailable = repository.read()
 
@@ -42,7 +42,7 @@ class RuntimeSettingsWriteSafetyTest {
         secrets.readFailure = null
         assertEquals(
             "real-secret",
-            (repository.read() as RuntimeSettingsRead.Success).settings.socksPassword,
+            (repository.read() as RuntimeSettingsRead.Success).settings.localProxyUsers.single().password,
         )
         assertTrue(secrets.values.containsKey(CurrentSecretId))
     }
@@ -61,16 +61,16 @@ class RuntimeSettingsWriteSafetyTest {
         val clean = repository.read()
         val first = repository.writeIfCurrent(
             clean,
-            RuntimeSettings(socksUsername = "user", socksPassword = "first-secret"),
+            RuntimeSettings(localProxyUsers = listOf(LocalProxyUser("user", "first-secret"))),
         )
-        repository.writeIfCurrent(first, first.settings.copy(socksPassword = "newer-secret"))
+        repository.writeIfCurrent(first, first.settings.copy(localProxyUsers = listOf(LocalProxyUser("user", "newer-secret"))))
 
         assertThrows(IllegalStateException::class.java) {
             repository.writeIfCurrent(first, first.settings.copy(mtu = 1360))
         }
         assertEquals(
             "newer-secret",
-            (repository.read() as RuntimeSettingsRead.Success).settings.socksPassword,
+            (repository.read() as RuntimeSettingsRead.Success).settings.localProxyUsers.single().password,
         )
     }
 

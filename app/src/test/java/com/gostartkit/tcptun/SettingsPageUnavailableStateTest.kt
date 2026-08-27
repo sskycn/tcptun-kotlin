@@ -19,7 +19,7 @@ class SettingsPageUnavailableStateTest {
     @Test
     fun authoritativeReadEnablesMutation() {
         val success = RuntimeSettingsRead.Success(
-            RuntimeSettings(socksPassword = "secret"),
+            RuntimeSettings(localProxyUsers = listOf(LocalProxyUser("", "secret"))),
             RuntimeSettingsSource.Stored,
             RuntimeSettingsRevision.Stored("opaque"),
         )

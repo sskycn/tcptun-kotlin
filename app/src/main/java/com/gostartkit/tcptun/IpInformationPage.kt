@@ -88,8 +88,8 @@ internal fun IpInformationPage(onBack: () -> Unit) {
             hostFromListenAddress(proxyAccess.address).ifBlank { noneLabel },
         stringResource(R.string.ip_proxy_port) to
             portFromListenAddress(proxyAccess.address).ifBlank { settings.socksPort.toString() },
-        stringResource(R.string.ip_proxy_username) to settings.socksUsername.ifBlank { noneLabel },
-        stringResource(R.string.ip_proxy_password) to settings.socksPassword.ifBlank { noneLabel },
+        stringResource(R.string.ip_proxy_username) to settings.localProxyUsers.firstOrNull()?.username.orEmpty().ifBlank { noneLabel },
+        stringResource(R.string.ip_proxy_password) to if (settings.localProxyUsers.isEmpty()) noneLabel else "••••••••",
     )
 
     BackHandler(onBack = onBack)
@@ -137,15 +137,16 @@ internal fun IpInformationPage(onBack: () -> Unit) {
                         lines = proxyConfigurationLines,
                         copyEnabled = proxyAccess.address.isNotBlank(),
                         onCopy = {
+                            val proxyUser = settings.localProxyUsers.firstOrNull()
                             val copied = copyProxyConfiguration(
                                 context = context,
                                 label = proxyConfigurationLabel,
                                 text = tcptunGoProxyConfigurationJson(
                                     proxyAddress = proxyAccess.address,
-                                    username = settings.socksUsername,
-                                    password = settings.socksPassword,
+                                    username = proxyUser?.username.orEmpty(),
+                                    password = proxyUser?.password.orEmpty(),
                                 ),
-                                sensitive = settings.socksPassword.isNotEmpty(),
+                                sensitive = proxyUser != null,
                             )
                             scope.launch {
                                 snackbarHostState.showDismissibleSnackbar(

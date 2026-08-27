@@ -115,8 +115,7 @@ internal object BridgeHealthPolicy {
             previous.socksPort != next.socksPort ||
             previous.localProxyProtocol != next.localProxyProtocol ||
             previous.socksListenAll != next.socksListenAll ||
-            previous.socksUsername != next.socksUsername ||
-            previous.socksPassword != next.socksPassword ||
+            previous.localProxyUsers != next.localProxyUsers ||
             previous.routeLocalProxyTraffic != next.routeLocalProxyTraffic ||
             previous.defaultOutbound != next.defaultOutbound
     }

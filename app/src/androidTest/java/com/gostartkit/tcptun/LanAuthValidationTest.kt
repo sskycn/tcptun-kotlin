@@ -14,10 +14,15 @@ class LanAuthValidationTest {
     fun nonLoopbackListenerRequiresConfiguredAuthentication() {
         val arguments = InstrumentationRegistry.getArguments()
         assumeTrue("LAN auth validation is opt-in", arguments.getString(EnabledArgument).toBoolean())
-        val password = requireNotNull(arguments.getString(PasswordArgument)).also {
+        val alicePassword = requireNotNull(arguments.getString(AlicePasswordArgument)).also {
             require(it.isNotEmpty()) { "LAN validation password must not be empty" }
             require(hasValidSocksCredentialSize(it)) { "LAN validation password is too long" }
         }
+        val bobPassword = requireNotNull(arguments.getString(BobPasswordArgument)).also {
+            require(it.isNotEmpty()) { "LAN validation password must not be empty" }
+            require(hasValidSocksCredentialSize(it)) { "LAN validation password is too long" }
+        }
+        val users = listOf(LocalProxyUser("alice", alicePassword), LocalProxyUser("bob", bobPassword))
         val port = arguments.getString(PortArgument)?.toIntOrNull()?.takeIf { it in 1024..65535 }
             ?: error("LAN validation port is invalid")
 
@@ -31,8 +36,7 @@ class LanAuthValidationTest {
                     socksPort = port,
                     localProxyProtocol = "socks5",
                     socksListenAll = false,
-                    socksUsername = "",
-                    socksPassword = password,
+                    localProxyUsers = users,
                 ),
             )
             harness.start()
@@ -55,8 +59,8 @@ class LanAuthValidationTest {
             harness.waitForStopped(timeoutMillis = 30_000)
             val persisted = TcptunVpnService.readRuntimeSettings(harness.context)
             assertTrue(persisted.socksListenAll)
-            assertTrue("persisted LAN password changed", persisted.socksPassword == password)
-            assertFalse(persisted.socksPassword.isEmpty())
+            assertTrue("persisted LAN accounts changed", persisted.localProxyUsers == users)
+            assertFalse(persisted.localProxyUsers.isEmpty())
             harness.start()
             harness.waitForRunning(timeoutMillis = 30_000)
             println("LAN_PHASE=PERSISTED_RESTART_READY")
@@ -78,7 +82,7 @@ class LanAuthValidationTest {
             val mixedPersisted = TcptunVpnService.readRuntimeSettings(harness.context)
             assertTrue(mixedPersisted.localProxyProtocol == "mixed")
             assertTrue(mixedPersisted.socksListenAll)
-            assertTrue("persisted mixed password changed", mixedPersisted.socksPassword == password)
+            assertTrue("persisted mixed accounts changed", mixedPersisted.localProxyUsers == users)
             harness.start()
             harness.waitForRunning(timeoutMillis = 30_000)
             println("LAN_PHASE=MIXED_PERSISTED_RESTART_READY")
@@ -108,7 +112,8 @@ class LanAuthValidationTest {
 
     private companion object {
         const val EnabledArgument = "lanAuthValidationEnabled"
-        const val PasswordArgument = "lanAuthValidationPassword"
+        const val AlicePasswordArgument = "lanAuthValidationAlicePassword"
+        const val BobPasswordArgument = "lanAuthValidationBobPassword"
         const val PortArgument = "lanAuthValidationPort"
         const val LoopbackAckProperty = "debug.tcptun.lan.lb"
         const val AuthAckProperty = "debug.tcptun.lan.auth"

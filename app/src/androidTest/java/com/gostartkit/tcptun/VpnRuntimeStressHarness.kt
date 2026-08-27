@@ -48,8 +48,7 @@ internal class VpnRuntimeStressHarness : AutoCloseable {
                     powerSavingMode = false,
                     socksPort = availablePort(),
                     socksListenAll = false,
-                    socksUsername = "",
-                    socksPassword = "",
+                    localProxyUsers = emptyList(),
                     flowAnalysisApp = "",
                 ),
             )

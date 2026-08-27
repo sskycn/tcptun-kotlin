@@ -43,8 +43,7 @@ class SecretAtRestAndroidTest {
                 context,
                 originalRuntime.copy(
                     socksListenAll = false,
-                    socksUsername = markers[4],
-                    socksPassword = markers[5],
+                    localProxyUsers = listOf(LocalProxyUser(markers[4], markers[5])),
                 ),
             )
             DesiredRunningPlanStore.publish(context, DesiredRunningPlanStore.encode(plan))

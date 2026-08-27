@@ -17,17 +17,15 @@ class RuntimeSettingsRecreationAndroidTest {
             mtu = 1400,
             logLevel = "info",
             socksListenAll = false,
-            socksUsername = "recreation-user-marker",
-            socksPassword = "recreation-password-marker",
+            localProxyUsers = listOf(LocalProxyUser("recreation-user-marker", "recreation-password-marker")),
         )
         try {
             RuntimeSettingsRepository.write(context, persisted)
             val savedState = encodeRuntimeSettingsSavedState(persisted.copy(mtu = 1360, logLevel = "debug"))
-            assertFalse(savedState.contains(persisted.socksUsername))
-            assertFalse(savedState.contains(persisted.socksPassword))
+            assertFalse(savedState.contains(persisted.localProxyUsers.single().username))
+            assertFalse(savedState.contains(persisted.localProxyUsers.single().password))
             val restoredDraft = requireNotNull(decodeRuntimeSettingsSavedState(savedState))
-            assertEquals("", restoredDraft.socksUsername)
-            assertEquals("", restoredDraft.socksPassword)
+            assertEquals(emptyList<LocalProxyUser>(), restoredDraft.localProxyUsers)
 
             val hydrated = hydrateRuntimeSettingsCredentials(
                 restoredDraft,
@@ -38,8 +36,7 @@ class RuntimeSettingsRecreationAndroidTest {
 
             assertEquals(1500, reloaded.mtu)
             assertEquals("debug", reloaded.logLevel)
-            assertEquals(persisted.socksUsername, reloaded.socksUsername)
-            assertEquals(persisted.socksPassword, reloaded.socksPassword)
+            assertEquals(persisted.localProxyUsers, reloaded.localProxyUsers)
         } finally {
             RuntimeSettingsRepository.write(context, original)
         }
@@ -53,8 +50,7 @@ class RuntimeSettingsRecreationAndroidTest {
             mtu = 1400,
             localProxyProtocol = "mixed",
             socksListenAll = true,
-            socksUsername = "lan-recreation-user",
-            socksPassword = "stable-lan-recreation-password",
+            localProxyUsers = listOf(LocalProxyUser("lan-recreation-user", "stable-lan-recreation-password")),
         )
         try {
             RuntimeSettingsRepository.write(context, persisted)
@@ -70,8 +66,7 @@ class RuntimeSettingsRecreationAndroidTest {
 
             assertEquals(1500, reloaded.mtu)
             assertEquals("mixed", reloaded.localProxyProtocol)
-            assertEquals(persisted.socksUsername, reloaded.socksUsername)
-            assertEquals(persisted.socksPassword, reloaded.socksPassword)
+            assertEquals(persisted.localProxyUsers, reloaded.localProxyUsers)
         } finally {
             RuntimeSettingsRepository.write(context, original)
         }

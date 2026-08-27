@@ -134,17 +134,21 @@ For a real non-loopback LAN authentication check, set the secret only in the env
 
 ```bash
 RUNTIME_STRESS_DISPOSABLE_DEBUG_DATA=true \
-TCPTUN_TEST_PROXY_PASSWORD='use-a-protected-random-value' \
+TCPTUN_TEST_PROXY_ALICE_PASSWORD='use-a-protected-random-value-a' \
+TCPTUN_TEST_PROXY_BOB_PASSWORD='use-a-protected-random-value-b' \
+TCPTUN_GO_DIR=/path/to/clean-locked-tcptun-go \
 scripts/run-lan-auth-validation.sh
 ```
 
 The host acts as the second LAN client. It verifies that loopback-only mode refuses the device's
-Wi-Fi address, then that listen-all refuses anonymous and wrong-password SOCKS requests while
-accepting standard RFC 1929 credentials. It switches the same listener to mixed mode and covers
+Wi-Fi address, then that listen-all refuses anonymous, wrong-password, and unknown-user SOCKS
+requests while accepting both `alice` and `bob`. It exercises TCP and UDP through RFC 1929 and
+uses the clean locked tcptun-go client against the Android Bridge to verify Secure Auth V2 for
+both identities. It switches the same listener to mixed mode and covers
 SOCKS5 compatibility, ordinary HTTP proxy authentication (`407` for missing/wrong Basic
 credentials), and HTTPS CONNECT authentication followed by an opaque TLS tunnel. Stop/start
 persistence probes cover authenticated SOCKS5, HTTP, and HTTPS CONNECT in mixed mode.
-The password is never echoed or written; the report contains only a 12-hex SHA-256 prefix.
+Passwords are never echoed or retained; the report contains only 12-hex SHA-256 prefixes.
 Host/instrumentation phase acknowledgements use short `debug.tcptun.lan.*` properties and are
 reset to `none` on every exit path. This avoids OEM SELinux differences around shell-created
 files in `/data/local/tmp`; the properties never contain credentials or endpoint data.
