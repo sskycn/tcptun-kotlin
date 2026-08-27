@@ -51,10 +51,12 @@ fake native artifact. Bridge and managed-device CI build the real AAR in a separ
 - Do not modify the tcptun-go ABI from this Android project.
 - Keep `bridge.lock` pinned to the exact tcptun-go source used to generate the AAR. Proxy-auth
   core upgrades that do not change `mobile/androidbridge` keep the existing Bridge API version.
-- Pass local `socks5`/`mixed` `username` and `password` through the current Go JSON schema. Do not
-  add unsupported fields such as `auth_mode`.
+- Pass local `socks5`/`mixed` `username` and `password` through the current Go JSON schema.
+- Preserve `auth_mode` on raw JSON `socks5`/`mixed` outbounds. Go defaults credentialed outbounds
+  to `secure`; explicit `standard` and `auto` policies remain Go-owned and are not reimplemented
+  in Kotlin.
 - Keep Android's health-probe `Socks5Client` as an RFC 1928/1929 client. Private method `0x80`,
-  Argon2id/HMAC negotiation, HTTP 407/Basic handling, and header stripping remain Go-owned.
+  HKDF/HMAC negotiation, HTTP 407/Basic handling, and header stripping remain Go-owned.
 - Do not change profile JSON fields or URI/QR formats here.
 - Keep callback proxies strongly reachable until native cleanup completes.
 - Keep reflection error messages actionable: missing AAR, missing Engine method, and

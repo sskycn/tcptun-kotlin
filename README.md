@@ -19,6 +19,8 @@ Local clients -> SOCKS5/mixed listener ------------------------> selected outbou
 - Versioned HTTPS App Links at `https://x.tcptun.com/v1#p=...`.
 - Optional Android 10+ App routing and single-app traffic analysis.
 - Authenticated local SOCKS5 or mixed SOCKS5/HTTP/HTTPS CONNECT proxy access.
+- Latest tcptun-go SOCKS5 secure authentication v2, with HKDF-derived proofs and explicit
+  `secure`, `standard`, or `auto` outbound authentication policies in full JSON profiles.
 - Material 3 UI, runtime diagnostics, redacted in-app logs, and TCPing tools.
 
 ## Build
@@ -62,3 +64,17 @@ See [docs/device-testing.md](docs/device-testing.md) for repeatable device valid
 - Go core: `../tcptun-go` locally, or the project repository configured by the release build.
 - Bridge wrapper: `scripts/build-androidbridge.sh`.
 - Release entry point: `make publish VERSION=vX.Y.Z`.
+
+## tcptun-go authentication
+
+The Android bridge is generated from tcptun-go commit
+`2719ab3bcd3708cbcf763dc8283bcd62a12e4628` (Bridge API 2). Secure authentication uses the
+tcptun-go v2 protocol: HKDF-SHA256 derives the authentication key and the Go core performs all
+challenge/response processing. It is intended for high-entropy shared secrets and is not
+transport encryption.
+
+Credentialed `socks5` and `mixed` outbounds default to `auth_mode: "secure"`, which offers only
+private method `0x80` and prevents downgrade to RFC1929. `standard` explicitly selects RFC1929;
+`auto` offers secure auth and RFC1929 for compatibility and is intentionally downgradeable.
+Android preserves these fields in full JSON profiles; it does not implement the authentication
+protocol itself.

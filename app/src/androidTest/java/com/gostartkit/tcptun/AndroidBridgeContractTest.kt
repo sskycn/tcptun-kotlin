@@ -727,7 +727,8 @@ class AndroidBridgeContractTest {
                 "address":["127.0.0.1:19124"],
                 "network":["tcp","udp"],
                 "username":"raw-outbound-user",
-                "password":"raw-outbound-password"
+                "password":"raw-outbound-password",
+                "auth_mode":"secure"
             }],
             "route":{"default_outbound":"proxy","rules":[]},
             "dns":{}
@@ -752,7 +753,7 @@ class AndroidBridgeContractTest {
         assertEquals("raw-inbound-password", preservedInbound.getString("password"))
         assertEquals("raw-outbound-user", outbound.getString("username"))
         assertEquals("raw-outbound-password", outbound.getString("password"))
-        assertFalse(prepared.toString().contains("auth_mode"))
+        assertEquals("secure", outbound.getString("auth_mode"))
         Androidbridge.validateConfig(prepared.toString())
     }
 
