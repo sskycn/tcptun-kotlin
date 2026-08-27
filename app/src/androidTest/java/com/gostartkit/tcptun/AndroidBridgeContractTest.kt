@@ -694,15 +694,66 @@ class AndroidBridgeContractTest {
                     profile.toBridgeJson(
                         localListenAddr = "127.0.0.1:1080",
                         localProxyProtocol = protocol,
+                        socks5Username = "android-user",
+                        socks5Password = "android-password",
                     ),
                 )
+                val inbound = config.getJSONArray("inbounds").getJSONObject(0)
                 assertEquals(
                     protocol,
-                    config.getJSONArray("inbounds").getJSONObject(0).getString("type"),
+                    inbound.getString("type"),
                 )
+                assertEquals("android-user", inbound.getString("username"))
+                assertEquals("android-password", inbound.getString("password"))
                 assertEngineStarts(config.toString())
             }
         }
+    }
+
+    @Test
+    fun rawAndroidRewritePreservesMixedAndSocksProxyCredentials() {
+        val raw = """{
+            "inbounds":[{
+                "tag":"preserved-mixed",
+                "type":"mixed",
+                "address":["127.0.0.1:19123"],
+                "network":["tcp"],
+                "username":"raw-inbound-user",
+                "password":"raw-inbound-password"
+            }],
+            "outbounds":[{
+                "tag":"proxy",
+                "type":"socks5",
+                "address":["127.0.0.1:19124"],
+                "network":["tcp","udp"],
+                "username":"raw-outbound-user",
+                "password":"raw-outbound-password"
+            }],
+            "route":{"default_outbound":"proxy","rules":[]},
+            "dns":{}
+        }""".trimIndent()
+
+        val prepared = JSONObject(
+            AppConfig(name = "raw-proxy-auth", rawConfigJson = raw).toBridgeJson(
+                localListenAddr = "127.0.0.1:19125",
+                localProxyProtocol = "mixed",
+                socks5Username = "android-user",
+                socks5Password = "android-password",
+            ),
+        )
+        val androidInbound = prepared.getJSONArray("inbounds").getJSONObject(0)
+        val preservedInbound = prepared.getJSONArray("inbounds").getJSONObject(1)
+        val outbound = prepared.getJSONArray("outbounds").getJSONObject(0)
+
+        assertEquals("mixed", androidInbound.getString("type"))
+        assertEquals("android-user", androidInbound.getString("username"))
+        assertEquals("android-password", androidInbound.getString("password"))
+        assertEquals("raw-inbound-user", preservedInbound.getString("username"))
+        assertEquals("raw-inbound-password", preservedInbound.getString("password"))
+        assertEquals("raw-outbound-user", outbound.getString("username"))
+        assertEquals("raw-outbound-password", outbound.getString("password"))
+        assertFalse(prepared.toString().contains("auth_mode"))
+        Androidbridge.validateConfig(prepared.toString())
     }
 
     @Test

@@ -56,6 +56,8 @@ cleanup() {
     adb -s "$serial" shell setprop debug.tcptun.lan.lb none
     adb -s "$serial" shell setprop debug.tcptun.lan.auth none
     adb -s "$serial" shell setprop debug.tcptun.lan.persist none
+    adb -s "$serial" shell setprop debug.tcptun.lan.mixed none
+    adb -s "$serial" shell setprop debug.tcptun.lan.mixpersist none
     adb -s "$serial" shell am force-stop "$debug_package" >/dev/null 2>&1
     validation_restore_appop_mode "$serial" "$debug_package" ACTIVATE_VPN "$activate_vpn_was" >/dev/null 2>&1
     exit "$status"
@@ -76,16 +78,50 @@ wait_for_phase() {
     return 1
 }
 
-probe_url="${TCPTUN_TEST_PROBE_URL:-https://www.gstatic.com/generate_204}"
-probe_proxy() {
+https_probe_url="${TCPTUN_TEST_HTTPS_PROBE_URL:-${TCPTUN_TEST_PROBE_URL:-https://www.gstatic.com/generate_204}}"
+http_probe_url="${TCPTUN_TEST_HTTP_PROBE_URL:-http://connectivitycheck.gstatic.com/generate_204}"
+proxy_url="http://$device_ip:$port"
+probe_socks() {
     local credential="$1"
     if [[ -n "$credential" ]]; then
-        curl --silent --show-error --max-time 15 --socks5-hostname "$device_ip:$port" \
-            --proxy-user "$credential" --output /dev/null "$probe_url"
+        curl --silent --show-error --noproxy "" --max-time 15 --socks5-hostname "$device_ip:$port" \
+            --proxy-user "$credential" --output /dev/null "$https_probe_url"
     else
-        curl --silent --show-error --max-time 8 --socks5-hostname "$device_ip:$port" \
-            --output /dev/null "$probe_url"
+        curl --silent --show-error --noproxy "" --max-time 8 --socks5-hostname "$device_ip:$port" \
+            --output /dev/null "$https_probe_url"
     fi
+}
+
+proxy_http_code() {
+    local credential="$1"
+    if [[ -n "$credential" ]]; then
+        curl --silent --show-error --noproxy "" --max-time 15 --proxy "$proxy_url" \
+            --proxy-user "$credential" --output /dev/null --write-out '%{http_code}' "$http_probe_url" || true
+    else
+        curl --silent --show-error --noproxy "" --max-time 8 --proxy "$proxy_url" \
+            --output /dev/null --write-out '%{http_code}' "$http_probe_url" || true
+    fi
+}
+
+probe_http() {
+    curl --silent --show-error --fail --noproxy "" --max-time 15 --proxy "$proxy_url" \
+        --proxy-user "$1" --output /dev/null "$http_probe_url"
+}
+
+proxy_connect_code() {
+    local credential="$1"
+    if [[ -n "$credential" ]]; then
+        curl --silent --show-error --noproxy "" --max-time 20 --proxy "$proxy_url" \
+            --proxy-user "$credential" --output /dev/null --write-out '%{http_connect}' "$https_probe_url" || true
+    else
+        curl --silent --show-error --noproxy "" --max-time 10 --proxy "$proxy_url" \
+            --output /dev/null --write-out '%{http_connect}' "$https_probe_url" || true
+    fi
+}
+
+probe_https_connect() {
+    curl --silent --show-error --fail --noproxy "" --max-time 20 --proxy "$proxy_url" \
+        --proxy-user "$1" --output /dev/null "$https_probe_url"
 }
 
 adb -s "$serial" logcat -c
@@ -99,7 +135,7 @@ adb -s "$serial" shell am instrument -w -r \
 instrumentation_pid=$!
 
 wait_for_phase LOOPBACK_ONLY_READY
-if probe_proxy "" >/dev/null 2>&1; then
+if probe_socks "" >/dev/null 2>&1; then
     echo "listenAll=false unexpectedly accepted non-loopback access" >&2
     exit 1
 fi
@@ -107,24 +143,74 @@ loopback_result="PASS (LAN access refused)"
 adb -s "$serial" shell setprop debug.tcptun.lan.lb ready
 
 wait_for_phase AUTH_REQUIRED_READY
-if probe_proxy "" >/dev/null 2>&1; then
+if probe_socks "" >/dev/null 2>&1; then
     echo "listenAll=true unexpectedly accepted anonymous access" >&2
     exit 1
 fi
 anonymous_result="PASS (authentication refused)"
-if probe_proxy "tcptun-validation-wrong:wrong" >/dev/null 2>&1; then
+if probe_socks "tcptun-validation-wrong:wrong" >/dev/null 2>&1; then
     echo "listenAll=true unexpectedly accepted a wrong password" >&2
     exit 1
 fi
 wrong_result="PASS (authentication refused)"
-probe_proxy ":$password" >/dev/null
+probe_socks ":$password" >/dev/null
 correct_result="PASS"
 adb -s "$serial" shell setprop debug.tcptun.lan.auth ready
 
 wait_for_phase PERSISTED_RESTART_READY
-probe_proxy ":$password" >/dev/null
+probe_socks ":$password" >/dev/null
 persistence_result="PASS"
 adb -s "$serial" shell setprop debug.tcptun.lan.persist ready
+
+wait_for_phase MIXED_AUTH_REQUIRED_READY
+if probe_socks "" >/dev/null 2>&1; then
+    echo "mixed SOCKS unexpectedly accepted anonymous access" >&2
+    exit 1
+fi
+mixed_socks_anonymous_result="PASS (authentication refused)"
+if probe_socks "tcptun-validation-wrong:wrong" >/dev/null 2>&1; then
+    echo "mixed SOCKS unexpectedly accepted wrong credentials" >&2
+    exit 1
+fi
+mixed_socks_wrong_result="PASS (authentication refused)"
+probe_socks ":$password" >/dev/null
+mixed_socks_correct_result="PASS"
+
+[[ "$(proxy_http_code "")" == "407" ]] || {
+    echo "mixed HTTP proxy did not return 407 for anonymous access" >&2
+    exit 1
+}
+mixed_http_anonymous_result="PASS (HTTP 407)"
+[[ "$(proxy_http_code "tcptun-validation-wrong:wrong")" == "407" ]] || {
+    echo "mixed HTTP proxy did not return 407 for wrong credentials" >&2
+    exit 1
+}
+mixed_http_wrong_result="PASS (HTTP 407)"
+probe_http ":$password"
+mixed_http_correct_result="PASS"
+
+[[ "$(proxy_connect_code "")" == "407" ]] || {
+    echo "mixed HTTPS CONNECT did not return 407 for anonymous access" >&2
+    exit 1
+}
+mixed_connect_anonymous_result="PASS (HTTP 407)"
+[[ "$(proxy_connect_code "tcptun-validation-wrong:wrong")" == "407" ]] || {
+    echo "mixed HTTPS CONNECT did not return 407 for wrong credentials" >&2
+    exit 1
+}
+mixed_connect_wrong_result="PASS (HTTP 407)"
+probe_https_connect ":$password"
+mixed_connect_correct_result="PASS"
+adb -s "$serial" shell setprop debug.tcptun.lan.mixed ready
+
+wait_for_phase MIXED_PERSISTED_RESTART_READY
+probe_socks ":$password" >/dev/null
+mixed_persistence_socks_result="PASS"
+probe_http ":$password"
+mixed_persistence_http_result="PASS"
+probe_https_connect ":$password"
+mixed_persistence_connect_result="PASS"
+adb -s "$serial" shell setprop debug.tcptun.lan.mixpersist ready
 
 wait "$instrumentation_pid"
 instrumentation_pid=""
@@ -143,6 +229,18 @@ report="$output_dir/lan-auth.txt"
     printf 'listenAll=true wrong_password=%s\n' "$wrong_result"
     printf 'listenAll=true correct_password=%s\n' "$correct_result"
     printf 'password_persistence_stop_start=%s\n' "$persistence_result"
+    printf 'mixed_socks_anonymous=%s\n' "$mixed_socks_anonymous_result"
+    printf 'mixed_socks_wrong_password=%s\n' "$mixed_socks_wrong_result"
+    printf 'mixed_socks_correct_password=%s\n' "$mixed_socks_correct_result"
+    printf 'mixed_http_anonymous=%s\n' "$mixed_http_anonymous_result"
+    printf 'mixed_http_wrong_password=%s\n' "$mixed_http_wrong_result"
+    printf 'mixed_http_correct_password=%s\n' "$mixed_http_correct_result"
+    printf 'mixed_https_connect_anonymous=%s\n' "$mixed_connect_anonymous_result"
+    printf 'mixed_https_connect_wrong_password=%s\n' "$mixed_connect_wrong_result"
+    printf 'mixed_https_connect_correct_password=%s\n' "$mixed_connect_correct_result"
+    printf 'mixed_persistence_socks=%s\n' "$mixed_persistence_socks_result"
+    printf 'mixed_persistence_http=%s\n' "$mixed_persistence_http_result"
+    printf 'mixed_persistence_https_connect=%s\n' "$mixed_persistence_connect_result"
     printf 'password_fingerprint_sha256_prefix=%s\n' "$fingerprint"
     printf 'legacy_migration=NOT_RUN\n'
 } > "$report"

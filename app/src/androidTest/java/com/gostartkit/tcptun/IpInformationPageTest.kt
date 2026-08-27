@@ -1,5 +1,6 @@
 package com.tcptun.client
 
+import androidbridge.Androidbridge
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Test
@@ -34,6 +35,8 @@ class IpInformationPageTest {
         assertEquals(0, root.getJSONObject("route").getJSONArray("rules").length())
         assertEquals(0, root.getJSONObject("dns").length())
         assertFalse(root.toString().contains("Protocol:"))
+        assertFalse(root.toString().contains("auth_mode"))
+        Androidbridge.validateConfig(root.toString())
     }
 
     private fun org.json.JSONArray.stringValues(): List<String> =

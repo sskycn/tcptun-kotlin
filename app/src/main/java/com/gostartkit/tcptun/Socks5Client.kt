@@ -35,7 +35,7 @@ internal object Socks5Client {
     ) {
         require(port in 1..65535) { "invalid SOCKS5 destination port" }
         val authEnabled = username.isNotEmpty() || password.isNotEmpty()
-        output.write(if (authEnabled) byteArrayOf(0x05, 0x02, 0x00, 0x02) else byteArrayOf(0x05, 0x01, 0x00))
+        output.write(if (authEnabled) byteArrayOf(0x05, 0x01, 0x02) else byteArrayOf(0x05, 0x01, 0x00))
         output.flush()
 
         val methodReply = input.readExact(2)

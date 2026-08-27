@@ -51,6 +51,7 @@ class RuntimeSettingsRecreationAndroidTest {
         val original = RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()
         val persisted = original.copy(
             mtu = 1400,
+            localProxyProtocol = "mixed",
             socksListenAll = true,
             socksUsername = "lan-recreation-user",
             socksPassword = "stable-lan-recreation-password",
@@ -68,6 +69,7 @@ class RuntimeSettingsRecreationAndroidTest {
             val reloaded = RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()
 
             assertEquals(1500, reloaded.mtu)
+            assertEquals("mixed", reloaded.localProxyProtocol)
             assertEquals(persisted.socksUsername, reloaded.socksUsername)
             assertEquals(persisted.socksPassword, reloaded.socksPassword)
         } finally {

@@ -61,6 +61,28 @@ class LanAuthValidationTest {
             harness.waitForRunning(timeoutMillis = 30_000)
             println("LAN_PHASE=PERSISTED_RESTART_READY")
             waitForAck(harness, PersistenceAckProperty)
+
+            harness.stop()
+            harness.waitForStopped(timeoutMillis = 30_000)
+            TcptunVpnService.writeRuntimeSettings(
+                harness.context,
+                TcptunVpnService.readRuntimeSettings(harness.context).copy(localProxyProtocol = "mixed"),
+            )
+            harness.start()
+            harness.waitForRunning(timeoutMillis = 30_000)
+            println("LAN_PHASE=MIXED_AUTH_REQUIRED_READY")
+            waitForAck(harness, MixedAuthAckProperty)
+
+            harness.stop()
+            harness.waitForStopped(timeoutMillis = 30_000)
+            val mixedPersisted = TcptunVpnService.readRuntimeSettings(harness.context)
+            assertTrue(mixedPersisted.localProxyProtocol == "mixed")
+            assertTrue(mixedPersisted.socksListenAll)
+            assertTrue("persisted mixed password changed", mixedPersisted.socksPassword == password)
+            harness.start()
+            harness.waitForRunning(timeoutMillis = 30_000)
+            println("LAN_PHASE=MIXED_PERSISTED_RESTART_READY")
+            waitForAck(harness, MixedPersistenceAckProperty)
             harness.assertNoProcessFailureEvidence()
             clearAckProperties(harness)
         }
@@ -73,7 +95,13 @@ class LanAuthValidationTest {
     }
 
     private fun clearAckProperties(harness: VpnRuntimeStressHarness) {
-        listOf(LoopbackAckProperty, AuthAckProperty, PersistenceAckProperty).forEach {
+        listOf(
+            LoopbackAckProperty,
+            AuthAckProperty,
+            PersistenceAckProperty,
+            MixedAuthAckProperty,
+            MixedPersistenceAckProperty,
+        ).forEach {
             harness.runShell("setprop $it $AckCleared")
         }
     }
@@ -85,6 +113,8 @@ class LanAuthValidationTest {
         const val LoopbackAckProperty = "debug.tcptun.lan.lb"
         const val AuthAckProperty = "debug.tcptun.lan.auth"
         const val PersistenceAckProperty = "debug.tcptun.lan.persist"
+        const val MixedAuthAckProperty = "debug.tcptun.lan.mixed"
+        const val MixedPersistenceAckProperty = "debug.tcptun.lan.mixpersist"
         const val AckReady = "ready"
         const val AckCleared = "none"
     }
