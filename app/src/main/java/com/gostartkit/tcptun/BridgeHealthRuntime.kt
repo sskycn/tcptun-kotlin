@@ -550,8 +550,7 @@ internal class BridgeHealthRuntime(
         return localProxyHealthProbe.upstreamFailure(
             orderedTargets = targets,
             localPort = settings.socksPort,
-            username = probeUser?.username.orEmpty(),
-            password = probeUser?.password.orEmpty(),
+            proxyUser = probeUser,
             onSuccess = { target -> log("upstream probe ${target.label} succeeded") },
         )
     }

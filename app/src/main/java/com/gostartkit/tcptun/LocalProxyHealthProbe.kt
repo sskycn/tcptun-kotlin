@@ -34,13 +34,12 @@ internal class LocalProxyHealthProbe(
     fun upstreamFailure(
         orderedTargets: List<UpstreamProbeTarget>,
         localPort: Int,
-        username: String,
-        password: String,
+        proxyUser: LocalProxyUser?,
         onSuccess: (UpstreamProbeTarget) -> Unit,
     ): String? {
         val failures = mutableListOf<String>()
         for (target in orderedTargets) {
-            val failure = probeUpstream(target, localPort, username, password)
+            val failure = probeUpstream(target, localPort, proxyUser)
             if (failure == null) {
                 onSuccess(target)
                 return null
@@ -53,13 +52,19 @@ internal class LocalProxyHealthProbe(
     private fun probeUpstream(
         target: UpstreamProbeTarget,
         localPort: Int,
-        username: String,
-        password: String,
+        proxyUser: LocalProxyUser?,
     ): String? = runRecoverableCatching {
         Socket().use { socket ->
             socket.connect(InetSocketAddress(localHost, localPort), upstreamTimeoutMs)
             socket.soTimeout = upstreamTimeoutMs
-            Socks5Client.connect(socket, target.host, target.port, username, password)
+            Socks5Client.connect(
+                socket = socket,
+                host = target.host,
+                port = target.port,
+                username = proxyUser?.username.orEmpty(),
+                password = proxyUser?.password.orEmpty(),
+                authenticationRequired = proxyUser != null,
+            )
             val expectedStatus = target.expectedStatus
             if (expectedStatus == null) {
                 completeTlsHandshake(socket, target.host, target.port, upstreamTimeoutMs)

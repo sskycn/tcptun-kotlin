@@ -14,6 +14,7 @@ internal object Socks5Client {
         port: Int,
         username: String,
         password: String,
+        authenticationRequired: Boolean = username.isNotEmpty() || password.isNotEmpty(),
     ) {
         connect(
             input = socket.getInputStream(),
@@ -22,6 +23,7 @@ internal object Socks5Client {
             port = port,
             username = username,
             password = password,
+            authenticationRequired = authenticationRequired,
         )
     }
 
@@ -32,16 +34,16 @@ internal object Socks5Client {
         port: Int,
         username: String,
         password: String,
+        authenticationRequired: Boolean = username.isNotEmpty() || password.isNotEmpty(),
     ) {
         require(port in 1..65535) { "invalid SOCKS5 destination port" }
-        val authEnabled = username.isNotEmpty() || password.isNotEmpty()
-        output.write(if (authEnabled) byteArrayOf(0x05, 0x01, 0x02) else byteArrayOf(0x05, 0x01, 0x00))
+        output.write(if (authenticationRequired) byteArrayOf(0x05, 0x01, 0x02) else byteArrayOf(0x05, 0x01, 0x00))
         output.flush()
 
         val methodReply = input.readExact(2)
         require(methodReply[0] == 0x05.toByte()) { "invalid SOCKS5 method reply" }
         when (methodReply[1].toInt() and 0xff) {
-            0x00 -> Unit
+            0x00 -> require(!authenticationRequired) { "SOCKS5 server bypassed required authentication" }
             0x02 -> authenticate(input, output, username, password)
             else -> error("SOCKS5 method rejected")
         }

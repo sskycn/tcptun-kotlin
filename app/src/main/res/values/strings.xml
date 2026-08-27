@@ -123,6 +123,8 @@
     <string name="ip_proxy_port">Port</string>
     <string name="ip_proxy_username">Username</string>
     <string name="ip_proxy_password">Password</string>
+    <string name="ip_proxy_account">Account</string>
+    <string name="ip_proxy_account_option">Account %1$d · %2$s</string>
     <string name="copy_proxy_configuration">Copy tcptun-go JSON</string>
     <string name="proxy_configuration_copied">tcptun-go proxy JSON copied</string>
     <string name="proxy_configuration_copy_failed">Couldn’t copy tcptun-go proxy JSON</string>

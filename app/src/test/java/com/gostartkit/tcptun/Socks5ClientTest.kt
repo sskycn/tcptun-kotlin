@@ -61,6 +61,55 @@ class Socks5ClientTest {
     }
 
     @Test
+    fun configuredEmptyCredentialStillNegotiatesUsernamePasswordAuthentication() {
+        val input = ByteArrayInputStream(
+            byteArrayOf(
+                0x05, 0x02,
+                0x01, 0x00,
+                0x05, 0x00, 0x00, 0x01,
+                127, 0, 0, 1, 0x04, 0x38,
+            ),
+        )
+        val output = ByteArrayOutputStream()
+
+        Socks5Client.connect(
+            input = input,
+            output = output,
+            host = "example.com",
+            port = 443,
+            username = "",
+            password = "",
+            authenticationRequired = true,
+        )
+
+        assertArrayEquals(
+            byteArrayOf(
+                0x05, 0x01, 0x02,
+                0x01, 0x00, 0x00,
+                0x05, 0x01, 0x00, 0x03, 11,
+                *"example.com".encodeToByteArray(),
+                0x01, 0xbb.toByte(),
+            ),
+            output.toByteArray(),
+        )
+    }
+
+    @Test
+    fun requiredAuthenticationRejectsNoAuthSelection() {
+        assertThrows(IllegalArgumentException::class.java) {
+            Socks5Client.connect(
+                input = ByteArrayInputStream(byteArrayOf(0x05, 0x00)),
+                output = ByteArrayOutputStream(),
+                host = "example.com",
+                port = 443,
+                username = "",
+                password = "",
+                authenticationRequired = true,
+            )
+        }
+    }
+
+    @Test
     fun connectRejectsTruncatedServerReply() {
         assertThrows(IllegalStateException::class.java) {
             Socks5Client.connect(

@@ -31,8 +31,10 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -58,6 +60,13 @@ internal fun IpInformationPage(onBack: () -> Unit) {
         initialValue = TcptunState.ipInformationRuntimeUi,
     )
     val settings = rememberUiRuntimeSettings(context) ?: RuntimeSettings()
+    var requestedProxyUserIndex by remember { mutableIntStateOf(0) }
+    val selectedProxyUserIndex = if (settings.localProxyUsers.isEmpty()) {
+        -1
+    } else {
+        requestedProxyUserIndex.coerceIn(settings.localProxyUsers.indices)
+    }
+    val selectedProxyUser = settings.localProxyUsers.getOrNull(selectedProxyUserIndex)
     val configuredListenAddress = RuntimeSettingsRepository.localSocksListenAddress(settings)
     val actualListenAddress = runtimeUi.bridgeListen
         .takeIf { runtimeUi.status == VpnStatus.Running }
@@ -79,6 +88,15 @@ internal fun IpInformationPage(onBack: () -> Unit) {
     val proxyConfigurationLabel = stringResource(R.string.full_config_json)
     val proxyConfigurationCopiedMessage = stringResource(R.string.proxy_configuration_copied)
     val proxyConfigurationCopyFailedMessage = stringResource(R.string.proxy_configuration_copy_failed)
+    val emptyUsernameLabel = stringResource(R.string.empty_username)
+    val proxyAccountOptions = settings.localProxyUsers.mapIndexed { index, user ->
+        stringResource(
+            R.string.ip_proxy_account_option,
+            index + 1,
+            user.username.ifBlank { emptyUsernameLabel },
+        )
+    }
+    val selectedProxyAccount = proxyAccountOptions.getOrNull(selectedProxyUserIndex)
     val proxyConfigurationLines = listOf(
         stringResource(R.string.ip_proxy_protocol) to when (settings.localProxyProtocol) {
             "mixed" -> stringResource(R.string.ip_proxy_protocol_mixed)
@@ -88,7 +106,7 @@ internal fun IpInformationPage(onBack: () -> Unit) {
             hostFromListenAddress(proxyAccess.address).ifBlank { noneLabel },
         stringResource(R.string.ip_proxy_port) to
             portFromListenAddress(proxyAccess.address).ifBlank { settings.socksPort.toString() },
-        stringResource(R.string.ip_proxy_username) to settings.localProxyUsers.firstOrNull()?.username.orEmpty().ifBlank { noneLabel },
+        stringResource(R.string.ip_proxy_username) to selectedProxyUser?.username.orEmpty().ifBlank { noneLabel },
         stringResource(R.string.ip_proxy_password) to if (settings.localProxyUsers.isEmpty()) noneLabel else "••••••••",
     )
 
@@ -135,18 +153,24 @@ internal fun IpInformationPage(onBack: () -> Unit) {
                 item {
                     ProxyConfigurationCard(
                         lines = proxyConfigurationLines,
+                        accountOptions = proxyAccountOptions,
+                        selectedAccount = selectedProxyAccount,
+                        onAccountSelected = { selected ->
+                            proxyAccountOptions.indexOf(selected)
+                                .takeIf { it >= 0 }
+                                ?.let { requestedProxyUserIndex = it }
+                        },
                         copyEnabled = proxyAccess.address.isNotBlank(),
                         onCopy = {
-                            val proxyUser = settings.localProxyUsers.firstOrNull()
                             val copied = copyProxyConfiguration(
                                 context = context,
                                 label = proxyConfigurationLabel,
                                 text = tcptunGoProxyConfigurationJson(
                                     proxyAddress = proxyAccess.address,
-                                    username = proxyUser?.username.orEmpty(),
-                                    password = proxyUser?.password.orEmpty(),
+                                    username = selectedProxyUser?.username.orEmpty(),
+                                    password = selectedProxyUser?.password.orEmpty(),
                                 ),
-                                sensitive = proxyUser != null,
+                                sensitive = selectedProxyUser != null,
                             )
                             scope.launch {
                                 snackbarHostState.showDismissibleSnackbar(
@@ -212,6 +236,9 @@ internal fun IpInformationPage(onBack: () -> Unit) {
 @Composable
 private fun ProxyConfigurationCard(
     lines: List<Pair<String, String>>,
+    accountOptions: List<String>,
+    selectedAccount: String?,
+    onAccountSelected: (String) -> Unit,
     copyEnabled: Boolean,
     onCopy: () -> Unit,
 ) {
@@ -224,6 +251,14 @@ private fun ProxyConfigurationCard(
                 icon = Icons.Rounded.SettingsEthernet,
                 title = stringResource(R.string.ip_proxy_configuration),
             )
+            if (selectedAccount != null) {
+                ChoiceRow(
+                    title = stringResource(R.string.ip_proxy_account),
+                    value = selectedAccount,
+                    options = accountOptions,
+                    onChange = onAccountSelected,
+                )
+            }
             SelectionContainer {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     lines.forEach { (label, value) -> DiagnosticsLine(label, value) }

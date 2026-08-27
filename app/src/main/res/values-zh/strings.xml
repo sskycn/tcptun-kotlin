@@ -121,6 +121,8 @@
     <string name="ip_proxy_port">端口</string>
     <string name="ip_proxy_username">用户名</string>
     <string name="ip_proxy_password">密码</string>
+    <string name="ip_proxy_account">账号</string>
+    <string name="ip_proxy_account_option">账号 %1$d · %2$s</string>
     <string name="copy_proxy_configuration">复制 tcptun-go JSON</string>
     <string name="proxy_configuration_copied">tcptun-go 代理 JSON 已复制</string>
     <string name="proxy_configuration_copy_failed">无法复制 tcptun-go 代理 JSON</string>

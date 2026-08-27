@@ -152,6 +152,24 @@ probe_udp() {
     python3 "$script_dir/probe-socks5-udp.py" "$device_ip" "$port" "$1" "$2"
 }
 
+wait_for_secure_client_listener() {
+    local client_pid="$1" local_port="$2" client_log="$3" deadline=$((SECONDS + 15))
+    until python3 -c 'import socket, sys; connection = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=1); connection.close()' \
+        "$local_port" >/dev/null 2>&1; do
+        if ! kill -0 "$client_pid" >/dev/null 2>&1; then
+            cat "$client_log" >&2
+            echo "Secure Auth V2 client exited before its local listener became ready" >&2
+            return 1
+        fi
+        (( SECONDS < deadline )) || {
+            cat "$client_log" >&2
+            echo "timed out waiting for Secure Auth V2 local listener on port $local_port" >&2
+            return 1
+        }
+        sleep 1
+    done
+}
+
 probe_secure_v2() {
     local username="$1" password_value="$2" local_port="$3"
     secure_config_dir=$(mktemp -d "${TMPDIR:-/tmp}/tcptun-secure-v2.XXXXXX")
@@ -164,6 +182,7 @@ probe_secure_v2() {
         > "$secure_config_dir/client.json"
     "$tcptun_go_bin" -c "$secure_config_dir/client.json" > "$secure_config_dir/client.log" 2>&1 &
     secure_client_pid=$!
+    wait_for_secure_client_listener "$secure_client_pid" "$local_port" "$secure_config_dir/client.log"
     local deadline=$((SECONDS + 15))
     until curl --silent --show-error --noproxy "" --max-time 2 --socks5-hostname "127.0.0.1:$local_port" --output /dev/null "$https_probe_url"; do
         (( SECONDS < deadline )) || { cat "$secure_config_dir/client.log" >&2; return 1; }
@@ -189,11 +208,16 @@ reject_secure_v2() {
         > "$secure_config_dir/client.json"
     "$tcptun_go_bin" -c "$secure_config_dir/client.json" > "$secure_config_dir/client.log" 2>&1 &
     secure_client_pid=$!
-    sleep 1
+    wait_for_secure_client_listener "$secure_client_pid" "$local_port" "$secure_config_dir/client.log"
     local accepted=false
     if curl --silent --show-error --noproxy "" --max-time 5 --socks5-hostname "127.0.0.1:$local_port" \
         --output /dev/null "$https_probe_url"; then
         accepted=true
+    fi
+    if ! kill -0 "$secure_client_pid" >/dev/null 2>&1; then
+        cat "$secure_config_dir/client.log" >&2
+        echo "Secure Auth V2 client exited during rejection validation" >&2
+        return 1
     fi
     kill "$secure_client_pid" >/dev/null 2>&1 || true
     wait "$secure_client_pid" >/dev/null 2>&1 || true
