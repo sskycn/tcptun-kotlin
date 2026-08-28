@@ -1,11 +1,6 @@
 package com.tcptun.client
 
-import android.content.ClipData
-import android.content.ClipDescription
 import android.content.Context
-import android.content.ClipboardManager
-import android.os.Build
-import android.os.PersistableBundle
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -162,7 +157,7 @@ internal fun IpInformationPage(onBack: () -> Unit) {
                         },
                         copyEnabled = proxyAccess.address.isNotBlank(),
                         onCopy = {
-                            val copied = copyProxyConfiguration(
+                            val copied = copyTextToClipboard(
                                 context = context,
                                 label = proxyConfigurationLabel,
                                 text = tcptunGoProxyConfigurationJson(
@@ -314,24 +309,6 @@ internal fun tcptunGoProxyConfigurationJson(
         .put("dns", JSONObject())
         .toString(2)
 }
-
-private fun copyProxyConfiguration(
-    context: Context,
-    label: String,
-    text: String,
-    sensitive: Boolean,
-): Boolean = runRecoverableCatching {
-    val clipboard = context.getSystemService(ClipboardManager::class.java)
-        ?: return@runRecoverableCatching false
-    val clip = ClipData.newPlainText(label, text)
-    if (sensitive && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        clip.description.extras = PersistableBundle().apply {
-            putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
-        }
-    }
-    clipboard.setPrimaryClip(clip)
-    true
-}.getOrDefault(false)
 
 @Composable
 private fun IpInformationCard(

@@ -16,15 +16,21 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.QrCode2
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -46,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -66,6 +73,10 @@ internal fun LocalProxyAccountsPage(onBack: () -> Unit) {
     val snackbarHostState = remember { SnackbarHostState() }
     val saveFailedMessage = stringResource(R.string.proxy_accounts_save_failed)
     val accountRequiredMessage = stringResource(R.string.proxy_account_required_for_lan)
+    val shareCodeCopiedMessage = stringResource(R.string.proxy_account_share_code_copied)
+    val shareCodeCopyFailedMessage = stringResource(R.string.proxy_account_share_code_copy_failed)
+    val shareCodeClipboardLabel = stringResource(R.string.proxy_account_share_code)
+    val shareFailedMessage = stringResource(R.string.share_proxy_account_failed)
     var authoritativeSettings by remember { mutableStateOf<RuntimeSettingsRead.Success?>(null) }
     var settingsUnavailable by remember { mutableStateOf<RuntimeSettingsRead.Unavailable?>(null) }
     var pageLoaded by remember { mutableStateOf(false) }
@@ -76,6 +87,8 @@ internal fun LocalProxyAccountsPage(onBack: () -> Unit) {
     var editingPassword by remember { mutableStateOf("") }
     var editingPasswordVisible by remember { mutableStateOf(false) }
     var deletingUserIndex by remember { mutableStateOf<Int?>(null) }
+    var qrUser by remember { mutableStateOf<LocalProxyUser?>(null) }
+    var sharingUser by remember { mutableStateOf<LocalProxyUser?>(null) }
 
     fun clearEditor() {
         editingUserIndex = null
@@ -88,7 +101,37 @@ internal fun LocalProxyAccountsPage(onBack: () -> Unit) {
         if (saving) return
         clearEditor()
         deletingUserIndex = null
+        qrUser = null
+        sharingUser = null
         onBack()
+    }
+
+    fun copyShareCode(user: LocalProxyUser) {
+        scope.launch {
+            val copied = runRecoverableCatching {
+                val payload = withContext(Dispatchers.Default) { LocalProxyAccountCodec.encode(user) }
+                copyTextToClipboard(
+                    context = context,
+                    label = shareCodeClipboardLabel,
+                    text = payload,
+                    sensitive = true,
+                )
+            }.getOrDefault(false)
+            snackbarHostState.showDismissibleSnackbar(
+                if (copied) shareCodeCopiedMessage else shareCodeCopyFailedMessage,
+            )
+        }
+    }
+
+    fun shareConfirmed(user: LocalProxyUser) {
+        sharingUser = null
+        scope.launch {
+            val shared = runRecoverableCatching {
+                val payload = withContext(Dispatchers.Default) { LocalProxyAccountCodec.encode(user) }
+                shareProxyAccountPayload(context, payload)
+            }.isSuccess
+            if (!shared) snackbarHostState.showDismissibleSnackbar(shareFailedMessage)
+        }
     }
 
     fun persistSettings(next: RuntimeSettings, onSuccess: () -> Unit) {
@@ -226,6 +269,7 @@ internal fun LocalProxyAccountsPage(onBack: () -> Unit) {
                 }
                 itemsIndexed(settings.localProxyUsers) { index, user ->
                     LocalProxyAccountRow(
+                        index = index,
                         user = user,
                         enabled = !saving,
                         onEdit = {
@@ -234,6 +278,9 @@ internal fun LocalProxyAccountsPage(onBack: () -> Unit) {
                             editingPassword = user.password
                             editingPasswordVisible = false
                         },
+                        onShowQrCode = { qrUser = user },
+                        onShare = { sharingUser = user },
+                        onCopyShareCode = { copyShareCode(user) },
                         onDelete = {
                             if (settings.socksListenAll && settings.localProxyUsers.size == 1) {
                                 scope.launch {
@@ -335,6 +382,29 @@ internal fun LocalProxyAccountsPage(onBack: () -> Unit) {
             )
         }
     }
+
+    qrUser?.let { user ->
+        ProxyAccountQrCodeDialog(
+            account = user,
+            onDismiss = { qrUser = null },
+            onCopy = {
+                qrUser = null
+                copyShareCode(user)
+            },
+            onShare = {
+                qrUser = null
+                sharingUser = user
+            },
+        )
+    }
+
+    sharingUser?.let { user ->
+        ProxyAccountShareConfirmationDialog(
+            account = user,
+            onDismiss = { sharingUser = null },
+            onConfirm = { shareConfirmed(user) },
+        )
+    }
 }
 
 @Composable
@@ -347,11 +417,16 @@ private fun LocalProxyAccountsTopBar(onBack: () -> Unit) {
 
 @Composable
 private fun LocalProxyAccountRow(
+    index: Int,
     user: LocalProxyUser,
     enabled: Boolean,
     onEdit: () -> Unit,
+    onShowQrCode: () -> Unit,
+    onShare: () -> Unit,
+    onCopyShareCode: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    var menuExpanded by remember(user) { mutableStateOf(false) }
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = RoundedCornerShape(16.dp),
@@ -374,17 +449,65 @@ private fun LocalProxyAccountRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            IconButton(onClick = onDelete, enabled = enabled) {
-                Icon(Icons.Rounded.Delete, contentDescription = stringResource(R.string.delete_account))
+            Box {
+                IconButton(
+                    onClick = { menuExpanded = true },
+                    enabled = enabled,
+                    modifier = Modifier.testTag(localProxyAccountActionsTestTag(index)),
+                ) {
+                    Icon(Icons.Rounded.MoreVert, contentDescription = stringResource(R.string.more_options))
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.edit_account)) },
+                        leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                        onClick = {
+                            menuExpanded = false
+                            onEdit()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.show_qr_code)) },
+                        leadingIcon = { Icon(Icons.Rounded.QrCode2, contentDescription = null) },
+                        onClick = {
+                            menuExpanded = false
+                            onShowQrCode()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.share)) },
+                        leadingIcon = { Icon(Icons.Rounded.Share, contentDescription = null) },
+                        onClick = {
+                            menuExpanded = false
+                            onShare()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.copy_share_code)) },
+                        leadingIcon = { Icon(Icons.Rounded.ContentCopy, contentDescription = null) },
+                        onClick = {
+                            menuExpanded = false
+                            onCopyShareCode()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.delete_account)) },
+                        leadingIcon = { Icon(Icons.Rounded.Delete, contentDescription = null) },
+                        onClick = {
+                            menuExpanded = false
+                            onDelete()
+                        },
+                    )
+                }
             }
-            Icon(
-                Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }
+
+internal fun localProxyAccountActionsTestTag(index: Int): String = "proxy-account-actions-$index"
 
 @Composable
 private fun LocalProxyAccountEditorDialog(

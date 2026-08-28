@@ -4,6 +4,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
@@ -65,6 +66,35 @@ class LocalProxyAccountsUiTest {
                 activity.resources.getQuantityString(R.plurals.proxy_accounts_count, 2, 2),
             ).fetchSemanticsNodes().isNotEmpty()
         }
+    }
+
+    @Test
+    fun eachAccountRowOpensItsOwnQrCode() {
+        val activity = composeRule.activity
+        RuntimeSettingsRepository.write(
+            activity,
+            originalSettings.copy(
+                localProxyUsers = listOf(
+                    LocalProxyUser("alice", "ui-test-secret-a"),
+                    LocalProxyUser("bob", "ui-test-secret-b"),
+                ),
+            ),
+        )
+        openSettings()
+        composeRule.onNodeWithText(activity.getString(R.string.proxy_accounts)).performClick()
+
+        composeRule.onNodeWithTag(localProxyAccountActionsTestTag(0)).performClick()
+        composeRule.onNodeWithText(activity.getString(R.string.show_qr_code)).performClick()
+        composeRule.onNodeWithContentDescription(
+            activity.getString(R.string.proxy_account_qr_code_description, "alice"),
+        ).assertIsDisplayed()
+        composeRule.onNodeWithText(activity.getString(R.string.close)).performClick()
+
+        composeRule.onNodeWithTag(localProxyAccountActionsTestTag(1)).performClick()
+        composeRule.onNodeWithText(activity.getString(R.string.show_qr_code)).performClick()
+        composeRule.onNodeWithContentDescription(
+            activity.getString(R.string.proxy_account_qr_code_description, "bob"),
+        ).assertIsDisplayed()
     }
 
     private fun openSettings() {

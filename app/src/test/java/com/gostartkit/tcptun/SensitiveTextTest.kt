@@ -35,6 +35,17 @@ class SensitiveTextTest {
     }
 
     @Test
+    fun redactsA1ProxyAccountBearerSecret() {
+        val payload = "A1:RU0XVDKPC331Z CZKE-UE72"
+
+        val redacted = redactSensitiveText("scanned $payload")
+
+        assertFalse(redacted.contains(payload))
+        assertTrue(redacted.contains("A1:<redacted>"))
+        assertFalse(redacted.contains("CZKE-UE72"))
+    }
+
+    @Test
     fun tcptunStateAppliesRedactionAtLogAndErrorBoundaries() {
         try {
             TcptunState.clearLogs()

@@ -100,7 +100,7 @@ private const val QR_SCANNER_LOG_TAG = "QrScanner"
 @Composable
 internal fun QrScannerPage(
     onBack: () -> Unit,
-    onProfileScanned: (String, onComplete: (Boolean) -> Unit) -> Unit,
+    onCodeScanned: (String, onComplete: (Boolean) -> Unit) -> Unit,
 ) {
     val context = LocalContext.current
     var permissionState by remember {
@@ -120,7 +120,7 @@ internal fun QrScannerPage(
     var scannerRuntimeError by remember { mutableStateOf(false) }
     var camera by remember { mutableStateOf<Camera?>(null) }
     var torchEnabled by remember { mutableStateOf(false) }
-    var invalidProfileCode by remember { mutableStateOf(false) }
+    var invalidCode by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         permissionState = if (granted) CameraPermissionState.Granted else CameraPermissionState.Denied
@@ -220,8 +220,8 @@ internal fun QrScannerPage(
                             scannerRuntimeError = true
                         },
                         onCodeDetected = { code, onComplete ->
-                            onProfileScanned(code) { accepted ->
-                                invalidProfileCode = !accepted
+                            onCodeScanned(code) { accepted ->
+                                invalidCode = !accepted
                                 onComplete(accepted)
                             }
                         },
@@ -253,7 +253,7 @@ internal fun QrScannerPage(
                                     text = stringResource(R.string.scan_qr_instruction),
                                     style = MaterialTheme.typography.bodyLarge,
                                 )
-                                if (invalidProfileCode) {
+                                if (invalidCode) {
                                     Text(
                                         text = stringResource(R.string.invalid_scanned_profile),
                                         style = MaterialTheme.typography.bodyMedium,

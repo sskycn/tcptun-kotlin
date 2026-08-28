@@ -205,6 +205,7 @@ internal fun TcptunScreen(
     var destination by rememberSaveable { mutableStateOf(initialDestination) }
     var scannerSessionGeneration by rememberSaveable { mutableIntStateOf(0) }
     var scannerImportJob by remember { mutableStateOf<Job?>(null) }
+    var pendingProxyAccountImport by remember { mutableStateOf<LocalProxyUser?>(null) }
     var showLogs by rememberSaveable { mutableStateOf(false) }
     var profileQrCode by rememberSaveable(stateSaver = PendingProfileSaver) {
         mutableStateOf<AppConfig?>(null)
@@ -400,6 +401,14 @@ internal fun TcptunScreen(
         ProfileUriCodec.decode(raw).getOrThrow().also(::validateImportedProfile)
     }
 
+    suspend fun decodeValidatedScannedPayload(raw: String): ScannedPayload =
+        withContext(Dispatchers.Default) {
+            when (val payload = decodeScannedPayload(raw)) {
+                is ScannedPayload.Profile -> payload.also { validateImportedProfile(it.config) }
+                is ScannedPayload.ProxyAccount -> payload
+            }
+        }
+
     suspend fun storeValidatedProfile(profile: AppConfig): Pair<AppConfig, Boolean> =
         durableMutation(appContext, "scanned profile save") {
             profileMutationMutex.withLock {
@@ -429,6 +438,7 @@ internal fun TcptunScreen(
         if (isVpnTransitionStatus(vpnStatus)) return
         scannerImportJob?.cancel()
         scannerImportJob = null
+        pendingProxyAccountImport = null
         scannerSessionGeneration += 1
         destination = MainDestination.QrScanner
     }
@@ -437,6 +447,7 @@ internal fun TcptunScreen(
         scannerSessionGeneration += 1
         scannerImportJob?.cancel()
         scannerImportJob = null
+        pendingProxyAccountImport = null
         destination = MainDestination.Profiles
     }
 
@@ -490,25 +501,40 @@ internal fun TcptunScreen(
         }
     }
 
-    fun importScannedProfile(link: String, onComplete: (Boolean) -> Unit) {
+    fun importScannedPayload(raw: String, onComplete: (Boolean) -> Unit) {
         val generation = scannerSessionGeneration
         scannerImportJob?.cancel()
         scannerImportJob = screenScope.launch {
             try {
-                val profile = decodeValidatedProfile(link.trim())
+                val payload = decodeValidatedScannedPayload(raw.trim())
                 if (generation != scannerSessionGeneration || destination != MainDestination.QrScanner) return@launch
-                val (storedProfile, added) = storeValidatedProfile(profile)
-                if (generation != scannerSessionGeneration || destination != MainDestination.QrScanner) return@launch
-                onComplete(true)
-                destination = MainDestination.Profiles
-                scannerSessionGeneration += 1
-                scannerImportJob = null
-                val message = if (added) {
-                    resources.getString(R.string.profile_imported, storedProfile.name)
-                } else {
-                    resources.getString(R.string.profile_already_exists, storedProfile.name)
+                when (payload) {
+                    is ScannedPayload.Profile -> {
+                        val (storedProfile, added) = storeValidatedProfile(payload.config)
+                        if (
+                            generation != scannerSessionGeneration ||
+                            destination != MainDestination.QrScanner
+                        ) return@launch
+                        onComplete(true)
+                        destination = MainDestination.Profiles
+                        scannerSessionGeneration += 1
+                        scannerImportJob = null
+                        val message = if (added) {
+                            resources.getString(R.string.profile_imported, storedProfile.name)
+                        } else {
+                            resources.getString(R.string.profile_already_exists, storedProfile.name)
+                        }
+                        snackbarHostState.showDismissibleSnackbar(message)
+                    }
+
+                    is ScannedPayload.ProxyAccount -> {
+                        onComplete(true)
+                        pendingProxyAccountImport = payload.account
+                        destination = MainDestination.ProxyAccountImport
+                        scannerSessionGeneration += 1
+                        scannerImportJob = null
+                    }
                 }
-                snackbarHostState.showDismissibleSnackbar(message)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -795,8 +821,28 @@ internal fun TcptunScreen(
     if (destination == MainDestination.QrScanner) {
         QrScannerPage(
             onBack = ::closeQrScanner,
-            onProfileScanned = ::importScannedProfile,
+            onCodeScanned = ::importScannedPayload,
         )
+    } else if (destination == MainDestination.ProxyAccountImport) {
+        val account = pendingProxyAccountImport
+        if (account == null) {
+            LaunchedEffect(Unit) { destination = MainDestination.Profiles }
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        } else {
+            ProxyAccountImportPage(
+                account = account,
+                onCancel = {
+                    pendingProxyAccountImport = null
+                    destination = MainDestination.Profiles
+                },
+                onFinished = {
+                    pendingProxyAccountImport = null
+                    destination = MainDestination.LocalProxyAccounts
+                },
+            )
+        }
     } else if (destination == MainDestination.IpInformation) {
         IpInformationPage(onBack = { destination = MainDestination.Profiles })
     } else if (destination == MainDestination.Diagnostics) {

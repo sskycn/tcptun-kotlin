@@ -15,6 +15,27 @@ class BridgeAbiContractTest {
         assertMethod(bridge, "validateConfig", Void.TYPE, String::class.java)
         assertMethod(bridge, "coreVersion", String::class.java)
         assertMethod(bridge, "coreBuildID", String::class.java)
+        assertMethod(bridge, "encodeProfile", String::class.java, String::class.java)
+        assertMethod(
+            bridge,
+            "encodeProfileQRCode",
+            ByteArray::class.java,
+            String::class.java,
+            String::class.java,
+            java.lang.Long.TYPE,
+            java.lang.Boolean.TYPE,
+        )
+        assertMethod(bridge, "decodeProfile", String::class.java, String::class.java)
+        assertMethod(bridge, "encodeProxyAccount", String::class.java, String::class.java)
+        assertMethod(bridge, "decodeProxyAccount", String::class.java, String::class.java)
+        assertMethod(
+            bridge,
+            "encodeProxyAccountQRCode",
+            ByteArray::class.java,
+            String::class.java,
+            String::class.java,
+            java.lang.Long.TYPE,
+        )
     }
 
     @Test

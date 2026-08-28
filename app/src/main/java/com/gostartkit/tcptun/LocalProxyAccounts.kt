@@ -9,6 +9,49 @@ internal fun localProxyAccountsSummary(users: List<LocalProxyUser>): LocalProxyA
     if (users.isEmpty()) LocalProxyAccountsSummary.NotConfigured
     else LocalProxyAccountsSummary.Configured(users.size)
 
+internal sealed interface LocalProxyAccountImportPlan {
+    data object Add : LocalProxyAccountImportPlan
+    data object AlreadyPresent : LocalProxyAccountImportPlan
+    data class Conflict(val existingIndex: Int) : LocalProxyAccountImportPlan
+    data object LimitReached : LocalProxyAccountImportPlan
+}
+
+internal fun planLocalProxyAccountImport(
+    settings: RuntimeSettings,
+    account: LocalProxyUser,
+): LocalProxyAccountImportPlan {
+    validateLocalProxyUsers(listOf(account))
+    val existingIndex = settings.localProxyUsers.indexOfFirst { it.username == account.username }
+    if (existingIndex >= 0) {
+        return if (settings.localProxyUsers[existingIndex] == account) {
+            LocalProxyAccountImportPlan.AlreadyPresent
+        } else {
+            LocalProxyAccountImportPlan.Conflict(existingIndex)
+        }
+    }
+    return if (settings.localProxyUsers.size >= MaxLocalProxyUsers) {
+        LocalProxyAccountImportPlan.LimitReached
+    } else {
+        LocalProxyAccountImportPlan.Add
+    }
+}
+
+internal fun applyLocalProxyAccountImport(
+    settings: RuntimeSettings,
+    account: LocalProxyUser,
+    updateExisting: Boolean,
+): RuntimeSettings = when (val plan = planLocalProxyAccountImport(settings, account)) {
+    LocalProxyAccountImportPlan.Add -> addLocalProxyAccount(settings, account)
+    LocalProxyAccountImportPlan.AlreadyPresent -> settings
+    is LocalProxyAccountImportPlan.Conflict -> {
+        require(updateExisting) { "an existing proxy account requires explicit update confirmation" }
+        editLocalProxyAccount(settings, plan.existingIndex, account)
+    }
+    LocalProxyAccountImportPlan.LimitReached -> {
+        throw IllegalArgumentException("the local proxy account limit has been reached")
+    }
+}
+
 internal fun addLocalProxyAccount(
     settings: RuntimeSettings,
     user: LocalProxyUser,

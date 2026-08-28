@@ -70,4 +70,77 @@ class LocalProxyAccountsTest {
             deleteLocalProxyAccount(settings, 0)
         }
     }
+
+    @Test
+    fun scannedNewAccountIsAddedAfterPreviewConfirmation() {
+        val alice = LocalProxyUser("alice", "secret-a")
+        assertEquals(LocalProxyAccountImportPlan.Add, planLocalProxyAccountImport(baseSettings, alice))
+
+        val imported = applyLocalProxyAccountImport(baseSettings, alice, updateExisting = false)
+
+        assertEquals(listOf(alice), imported.localProxyUsers)
+    }
+
+    @Test
+    fun scannedIdenticalAccountDoesNotCreateDuplicate() {
+        val alice = LocalProxyUser("alice", "secret-a")
+        val settings = baseSettings.copy(localProxyUsers = listOf(alice))
+
+        assertEquals(
+            LocalProxyAccountImportPlan.AlreadyPresent,
+            planLocalProxyAccountImport(settings, alice),
+        )
+        assertEquals(settings, applyLocalProxyAccountImport(settings, alice, updateExisting = false))
+    }
+
+    @Test
+    fun scannedPasswordConflictRequiresExplicitUpdate() {
+        val settings = baseSettings.copy(
+            localProxyUsers = listOf(LocalProxyUser("alice", "old-secret")),
+        )
+        val scanned = LocalProxyUser("alice", "new-secret")
+
+        assertEquals(
+            LocalProxyAccountImportPlan.Conflict(existingIndex = 0),
+            planLocalProxyAccountImport(settings, scanned),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            applyLocalProxyAccountImport(settings, scanned, updateExisting = false)
+        }
+        assertEquals(
+            listOf(scanned),
+            applyLocalProxyAccountImport(settings, scanned, updateExisting = true).localProxyUsers,
+        )
+    }
+
+    @Test
+    fun fullAccountListRejectsNewUsernameButAllowsExistingUpdate() {
+        val full = baseSettings.copy(
+            localProxyUsers = List(MaxLocalProxyUsers) { index ->
+                LocalProxyUser("user-$index", "old-$index")
+            },
+        )
+
+        assertEquals(
+            LocalProxyAccountImportPlan.LimitReached,
+            planLocalProxyAccountImport(full, LocalProxyUser("overflow", "secret")),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            applyLocalProxyAccountImport(
+                full,
+                LocalProxyUser("overflow", "secret"),
+                updateExisting = false,
+            )
+        }
+
+        val updated = LocalProxyUser("user-0", "new-secret")
+        assertEquals(
+            LocalProxyAccountImportPlan.Conflict(existingIndex = 0),
+            planLocalProxyAccountImport(full, updated),
+        )
+        assertEquals(
+            updated,
+            applyLocalProxyAccountImport(full, updated, updateExisting = true).localProxyUsers.first(),
+        )
+    }
 }

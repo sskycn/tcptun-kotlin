@@ -15,7 +15,8 @@ Local clients -> SOCKS5/mixed listener ------------------------> selected outbou
 - Foreground `VpnService` with IPv4/IPv6 routes and event-driven recovery.
 - Multiple structured profiles in one dynamic, session-affine outbound pool.
 - Complete strict tcptun-go JSON profiles without changing their schema.
-- Native, VLESS, VMess, and Trojan URI import/export; compact `T2:`/`T3:` QR support.
+- Native, VLESS, VMess, and Trojan URI import/export; compact `T2:`/`T3:` profile QR support.
+- Per-account `A1:` QR, copy, share, preview, and conflict-safe import for local proxy credentials.
 - Versioned HTTPS App Links at `https://x.tcptun.com/v1#p=...`.
 - Optional Android 10+ App routing and single-app traffic analysis.
 - Up to 256 accounts on one authenticated local SOCKS5 or mixed SOCKS5/HTTP/HTTPS CONNECT/UDP listener.
@@ -68,7 +69,7 @@ See [docs/device-testing.md](docs/device-testing.md) for repeatable device valid
 ## tcptun-go authentication
 
 The Android bridge is generated from tcptun-go commit
-`bc935c132b8790751a3cd3d1f4e0b06ff07da63d` (Bridge API 2). Secure authentication uses the
+`159053ff8853d278130da25e887c9360b83a2454` (Bridge API 3). Secure authentication uses the
 tcptun-go v2 protocol: HKDF-SHA256 derives the authentication key and the Go core performs all
 challenge/response processing. It is intended for high-entropy shared secrets and is not
 transport encryption.
@@ -85,3 +86,10 @@ automatically. Full JSON profiles preserve multi-user `mixed`, `socks5`, `native
 `vmess`, and `trojan` inbounds, including per-user VLESS flow. Outbounds remain one client
 identity. Passwords remain in encrypted secret storage and listen-all cannot run without an
 account.
+
+Each local proxy account can be shared independently as `A1:<Base45>`. One A1 payload always
+contains exactly one username/password pair; it never contains listener settings or a tunnel
+profile. A1 uses the same binary-to-Base45 QR-alphanumeric outer strategy as T3, but its wire
+schema and scanner/import path are separate. A1 is not encrypted and is handled as a bearer
+secret: the app marks clipboard content sensitive, shows a trust warning, and does not persist
+the payload, QR image, or password in SavedState or navigation arguments.

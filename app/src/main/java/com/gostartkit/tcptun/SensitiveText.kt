@@ -22,8 +22,8 @@ private val OpaqueProfileUri = Regex(
     RegexOption.IGNORE_CASE,
 )
 
-private val CompactProfilePayload = Regex(
-    """\b(T[23]:)[a-z0-9_-]{8,}""",
+private val CompactSharePayload = Regex(
+    """\b((?:T[23]|A1):)[0-9A-Z \x24%*+\-./:]{8,}""",
     RegexOption.IGNORE_CASE,
 )
 
@@ -46,7 +46,7 @@ internal fun redactSensitiveText(value: String): String {
     redacted = OpaqueProfileUri.replace(redacted) { match ->
         match.groupValues[1] + RedactedValue
     }
-    redacted = CompactProfilePayload.replace(redacted) { match ->
+    redacted = CompactSharePayload.replace(redacted) { match ->
         match.groupValues[1] + RedactedValue
     }
     return SecretKeyValue.replace(redacted) { match ->

@@ -42,6 +42,13 @@ Full JSON preserves `users[]` for mixed, socks5, native, VLESS (including per-us
 and Trojan inbounds unless the inbound is the reserved Android listener being replaced. Tunnel
 users are never imported into local settings, and outbounds remain a single client identity.
 
+Each local proxy account has independent A1 QR/copy/share actions. One `A1:` payload contains one
+username/password pair only; there is no multi-account bundle. Scanning A1 opens a password-masked
+preview. A new username is appended, an identical account is reused, and a conflicting username
+requires explicit confirmation before its password is updated. Import reuses the same encrypted
+runtime-settings CAS write and apply path; A1 text, QR bytes, and credentials are not placed in
+SavedState, navigation arguments, logs, or diagnostics. A1 is Base45-encoded, not encrypted.
+
 ## Validation
 
 Use the existing validators before save:

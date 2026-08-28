@@ -22,6 +22,11 @@ integration option: Kotlin calls it before every Start, and settings changes rep
 Android `ParcelFileDescriptor`; Android closes that descriptor only after the stop controller
 confirms native release.
 
+The stateless Bridge API also owns `EncodeProfile`, `DecodeProfile`, and profile QR rendering,
+plus `EncodeProxyAccount`, `DecodeProxyAccount`, and `EncodeProxyAccountQRCode` for one A1 local
+proxy account. The A1 methods use the strict `{username,password}` DTO only at the Bridge boundary;
+JSON is not the share wire.
+
 ## Building the AAR
 
 ```bash
@@ -53,14 +58,15 @@ fake native artifact. Bridge and managed-device CI build the real AAR in a separ
   core upgrades that do not change `mobile/androidbridge` keep the existing Bridge API version.
 - Pass local `socks5`/`mixed` accounts as `users[]` (maximum 256); omit the field for no-auth.
   Preserve legacy top-level credentials only when they already belong to a non-reserved raw
-  inbound. The core commit is `bc935c132b8790751a3cd3d1f4e0b06ff07da63d`; its public mobile
-  Bridge ABI is unchanged, so Bridge API remains 2.
+  inbound. The core commit is `159053ff8853d278130da25e887c9360b83a2454`; its public mobile
+  Bridge API includes the A1 account codec and is version 3.
 - Preserve `auth_mode` on raw JSON `socks5`/`mixed` outbounds. Go defaults credentialed outbounds
   to `secure`; explicit `standard` and `auto` policies remain Go-owned and are not reimplemented
   in Kotlin.
 - Keep Android's health-probe `Socks5Client` as an RFC 1928/1929 client. Private method `0x80`,
   HKDF/HMAC negotiation, HTTP 407/Basic handling, and header stripping remain Go-owned.
-- Do not change profile JSON fields or URI/QR formats here.
+- Do not change profile JSON fields or T2/T3/A1 URI/QR formats here. Kotlin must not implement
+  A1 binary or Base45 encoding.
 - Keep callback proxies strongly reachable until native cleanup completes.
 - Keep reflection error messages actionable: missing AAR, missing Engine method, and
   validation failure are distinct user-visible failure classes.
