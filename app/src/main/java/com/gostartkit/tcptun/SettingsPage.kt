@@ -181,7 +181,10 @@ import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 @Composable
-internal fun SettingsPage(onBack: () -> Unit) {
+internal fun SettingsPage(
+    onBack: () -> Unit,
+    onProxyAccounts: () -> Unit,
+) {
     val context = LocalContext.current
     val appContext = context.applicationContext
     val startFailedMessage = stringResource(R.string.start_failed)
@@ -191,11 +194,6 @@ internal fun SettingsPage(onBack: () -> Unit) {
     var socksPortText by rememberSaveable { mutableStateOf(settings.socksPort.toString()) }
     var settingsDirty by rememberSaveable { mutableStateOf(false) }
     var savingSettings by remember { mutableStateOf(false) }
-    var editingUserIndex by remember { mutableStateOf<Int?>(null) }
-    var editingUsername by remember { mutableStateOf("") }
-    var editingPassword by remember { mutableStateOf("") }
-    var editingPasswordVisible by remember { mutableStateOf(false) }
-    var deletingUserIndex by remember { mutableStateOf<Int?>(null) }
     var settingsLoaded by rememberSaveable { mutableStateOf(false) }
     var credentialsHydrated by remember { mutableStateOf(false) }
     var authoritativeSettings by remember { mutableStateOf<RuntimeSettingsRead.Success?>(null) }
@@ -205,7 +203,6 @@ internal fun SettingsPage(onBack: () -> Unit) {
     val settingsSnackbarHostState = remember { SnackbarHostState() }
     val lanPasswordRequiredMessage = stringResource(R.string.lan_proxy_password_required)
     val lanAuthenticationGeneratedMessage = stringResource(R.string.lan_proxy_auth_generated)
-    val socksPasswordLabel = stringResource(R.string.socks_password)
     val runtimeUi by TcptunState.settingsRuntimeUiFlow.collectAsStateWithLifecycle(
         initialValue = TcptunState.settingsRuntimeUi,
     )
@@ -220,6 +217,14 @@ internal fun SettingsPage(onBack: () -> Unit) {
         .firstOrNull { it.first == settings.defaultOutbound }
         ?.second
         ?: defaultPoolLabel
+    val proxyAccountsSummary = when (val summary = localProxyAccountsSummary(settings.localProxyUsers)) {
+        LocalProxyAccountsSummary.NotConfigured -> stringResource(R.string.proxy_accounts_not_configured)
+        is LocalProxyAccountsSummary.Configured -> pluralStringResource(
+            R.plurals.proxy_accounts_count,
+            summary.count,
+            summary.count,
+        )
+    }
 
     LaunchedEffect(appContext, settingsReadAttempt) {
         when (val loaded = withContext(Dispatchers.IO) { readUiRuntimeSettings(appContext) }) {
@@ -298,7 +303,7 @@ internal fun SettingsPage(onBack: () -> Unit) {
         settings = next
     }
 
-    fun leaveSettings() {
+    fun leaveSettings(destination: () -> Unit) {
         val socksPort = socksPortText.toIntOrNull()
         if (savingSettings || socksPort == null || socksPort !in 1..65535) return
         if (settings.socksListenAll && (settings.localProxyUsers.isEmpty() || settings.localProxyUsers.any { it.password.isEmpty() })) {
@@ -306,7 +311,7 @@ internal fun SettingsPage(onBack: () -> Unit) {
             return
         }
         if (!settingsDirty) {
-            onBack()
+            destination()
             return
         }
         val next = settings.copy(socksPort = socksPort)
@@ -328,7 +333,7 @@ internal fun SettingsPage(onBack: () -> Unit) {
                 settings = persisted.settings
                 socksPortText = persisted.settings.socksPort.toString()
                 settingsDirty = false
-                onBack()
+                destination()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -339,13 +344,13 @@ internal fun SettingsPage(onBack: () -> Unit) {
         }
     }
 
-    BackHandler(onBack = ::leaveSettings)
+    BackHandler { leaveSettings(onBack) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(settingsSnackbarHostState) },
         topBar = {
-            SettingsTopBar(onBack = ::leaveSettings)
+            SettingsTopBar(onBack = { leaveSettings(onBack) })
         },
     ) { padding ->
         PullRefreshContainer(
@@ -441,6 +446,11 @@ internal fun SettingsPage(onBack: () -> Unit) {
                                 }
                             }
                         }
+                        LocalProxyAccountsNavigationRow(
+                            summary = proxyAccountsSummary,
+                            enabled = !savingSettings,
+                            onClick = { leaveSettings(onProxyAccounts) },
+                        )
                         ToggleRow(
                             stringResource(R.string.route_local_proxy_traffic),
                             settings.routeLocalProxyTraffic,
@@ -468,59 +478,6 @@ internal fun SettingsPage(onBack: () -> Unit) {
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Text(
-                            stringResource(R.string.local_proxy_accounts),
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        settings.localProxyUsers.forEachIndexed { index, user ->
-                            Surface(
-                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                shape = RoundedCornerShape(12.dp),
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(user.username.ifBlank { stringResource(R.string.empty_username) })
-                                        Text("••••••••", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                    IconButton(
-                                        onClick = {
-                                            editingUserIndex = index
-                                            editingUsername = user.username
-                                            editingPassword = user.password
-                                            editingPasswordVisible = false
-                                        },
-                                        enabled = !savingSettings,
-                                    ) { Icon(Icons.Rounded.Edit, contentDescription = stringResource(R.string.edit_account)) }
-                                    IconButton(
-                                        onClick = { deletingUserIndex = index },
-                                        enabled = !savingSettings,
-                                    ) { Icon(Icons.Rounded.Delete, contentDescription = stringResource(R.string.delete_account)) }
-                                }
-                            }
-                        }
-                        FilledTonalButton(
-                            onClick = {
-                                editingUserIndex = -1
-                                editingUsername = ""
-                                editingPassword = generateLanProxyPassword()
-                                editingPasswordVisible = false
-                            },
-                            enabled = !savingSettings && settings.localProxyUsers.size < MaxLocalProxyUsers,
-                        ) {
-                            Icon(Icons.Rounded.Add, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text(stringResource(R.string.add_account))
-                        }
-                        if (settings.socksListenAll && (settings.localProxyUsers.isEmpty() || settings.localProxyUsers.any { it.password.isEmpty() })) {
-                            Text(
-                                lanPasswordRequiredMessage,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
                         Text(
                             stringResource(R.string.native_tun_capabilities_note),
                             style = MaterialTheme.typography.bodyMedium,
@@ -599,79 +556,42 @@ internal fun SettingsPage(onBack: () -> Unit) {
         }
     }
 
-    editingUserIndex?.let { index ->
-        val duplicate = settings.localProxyUsers.withIndex().any { (existingIndex, user) ->
-            existingIndex != index && user.username == editingUsername
+}
+
+@Composable
+private fun LocalProxyAccountsNavigationRow(
+    summary: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.proxy_accounts),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    text = summary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
-        AlertDialog(
-            onDismissRequest = { if (!savingSettings) editingUserIndex = null },
-            title = { Text(stringResource(if (index < 0) R.string.add_account else R.string.edit_account)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedTextField(
-                        value = editingUsername,
-                        onValueChange = { editingUsername = truncateSocksCredential(it) },
-                        label = { Text(stringResource(R.string.socks_username)) },
-                        singleLine = true,
-                        isError = duplicate,
-                        supportingText = { if (duplicate) Text(stringResource(R.string.duplicate_username)) },
-                    )
-                    OutlinedTextField(
-                        value = editingPassword,
-                        onValueChange = { editingPassword = truncateSocksCredential(it) },
-                        label = { Text(socksPasswordLabel) },
-                        singleLine = true,
-                        isError = settings.socksListenAll && editingPassword.isEmpty(),
-                        supportingText = {
-                            if (settings.socksListenAll && editingPassword.isEmpty()) Text(lanPasswordRequiredMessage)
-                        },
-                        visualTransformation = if (editingPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            Row {
-                                IconButton(onClick = { editingPasswordVisible = !editingPasswordVisible }) {
-                                    Icon(
-                                        if (editingPasswordVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
-                                        contentDescription = stringResource(if (editingPasswordVisible) R.string.hide_password else R.string.show_password),
-                                    )
-                                }
-                                IconButton(onClick = { editingPassword = generateLanProxyPassword() }) {
-                                    Icon(Icons.Rounded.Tune, contentDescription = stringResource(R.string.generate_password))
-                                }
-                            }
-                        },
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val nextUser = LocalProxyUser(editingUsername, editingPassword)
-                        val nextUsers = settings.localProxyUsers.toMutableList().apply {
-                            if (index < 0) add(nextUser) else set(index, nextUser)
-                        }
-                        updateSettingsDraft(settings.copy(localProxyUsers = nextUsers))
-                        editingUserIndex = null
-                        editingPassword = ""
-                    },
-                    enabled = !duplicate && (!settings.socksListenAll || editingPassword.isNotEmpty()),
-                ) { Text(stringResource(R.string.save)) }
-            },
-            dismissButton = { TextButton(onClick = { editingUserIndex = null; editingPassword = "" }) { Text(stringResource(R.string.cancel)) } },
-        )
-    }
-    deletingUserIndex?.let { index ->
-        AlertDialog(
-            onDismissRequest = { deletingUserIndex = null },
-            title = { Text(stringResource(R.string.delete_account)) },
-            text = { Text(stringResource(R.string.delete_account_confirmation)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    updateSettingsDraft(settings.copy(localProxyUsers = settings.localProxyUsers.filterIndexed { i, _ -> i != index }))
-                    deletingUserIndex = null
-                }) { Text(stringResource(R.string.delete)) }
-            },
-            dismissButton = { TextButton(onClick = { deletingUserIndex = null }) { Text(stringResource(R.string.cancel)) } },
-        )
     }
 }
 

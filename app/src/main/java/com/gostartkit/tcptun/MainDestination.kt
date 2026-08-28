@@ -6,6 +6,7 @@ internal enum class MainDestination {
     IpInformation,
     Diagnostics,
     Settings,
+    LocalProxyAccounts,
     FlowAnalysis,
     RouteManagement,
 }

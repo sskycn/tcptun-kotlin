@@ -807,7 +807,10 @@ internal fun TcptunScreen(
     } else if (destination == MainDestination.Settings) {
         SettingsPage(
             onBack = { destination = MainDestination.Profiles },
+            onProxyAccounts = { destination = MainDestination.LocalProxyAccounts },
         )
+    } else if (destination == MainDestination.LocalProxyAccounts) {
+        LocalProxyAccountsPage(onBack = { destination = MainDestination.Settings })
     } else if (destination == MainDestination.FlowAnalysis) {
         FlowAnalysisPage(onBack = { destination = MainDestination.Profiles })
     } else if (destination == MainDestination.RouteManagement) {
