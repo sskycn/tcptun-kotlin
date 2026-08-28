@@ -25,7 +25,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.AnchoredDraggableState
 import androidx.compose.foundation.gestures.DraggableAnchors
@@ -56,13 +55,11 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.AltRoute
-import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
@@ -137,7 +134,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -183,7 +179,6 @@ import kotlin.math.roundToInt
 @Composable
 internal fun SettingsPage(
     onBack: () -> Unit,
-    onProxyAccounts: () -> Unit,
 ) {
     val context = LocalContext.current
     val appContext = context.applicationContext
@@ -217,15 +212,6 @@ internal fun SettingsPage(
         .firstOrNull { it.first == settings.defaultOutbound }
         ?.second
         ?: defaultPoolLabel
-    val proxyAccountsSummary = when (val summary = localProxyAccountsSummary(settings.localProxyUsers)) {
-        LocalProxyAccountsSummary.NotConfigured -> stringResource(R.string.proxy_accounts_not_configured)
-        is LocalProxyAccountsSummary.Configured -> pluralStringResource(
-            R.plurals.proxy_accounts_count,
-            summary.count,
-            summary.count,
-        )
-    }
-
     LaunchedEffect(appContext, settingsReadAttempt) {
         when (val loaded = withContext(Dispatchers.IO) { readUiRuntimeSettings(appContext) }) {
             is RuntimeSettingsRead.Success -> {
@@ -446,11 +432,6 @@ internal fun SettingsPage(
                                 }
                             }
                         }
-                        LocalProxyAccountsNavigationRow(
-                            summary = proxyAccountsSummary,
-                            enabled = !savingSettings,
-                            onClick = { leaveSettings(onProxyAccounts) },
-                        )
                         ToggleRow(
                             stringResource(R.string.route_local_proxy_traffic),
                             settings.routeLocalProxyTraffic,
@@ -556,43 +537,6 @@ internal fun SettingsPage(
         }
     }
 
-}
-
-@Composable
-private fun LocalProxyAccountsNavigationRow(
-    summary: String,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(enabled = enabled, onClick = onClick),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.proxy_accounts),
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                Text(
-                    text = summary,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Icon(
-                Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
 }
 
 internal suspend fun mutateManagedRouteRules(

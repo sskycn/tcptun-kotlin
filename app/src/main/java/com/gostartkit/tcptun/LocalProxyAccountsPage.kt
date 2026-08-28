@@ -9,28 +9,24 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.ContentCopy
-import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.VpnKey
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -58,6 +54,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -258,12 +255,14 @@ internal fun LocalProxyAccountsPage(onBack: () -> Unit) {
             ) {
                 if (settings.localProxyUsers.isEmpty()) {
                     item {
-                        Text(
-                            text = stringResource(R.string.proxy_accounts_empty),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
-                            textAlign = TextAlign.Center,
+                        LocalProxyAccountsEmptyState(
+                            enabled = !saving,
+                            onAdd = {
+                                editingUserIndex = -1
+                                editingUsername = ""
+                                editingPassword = generateLanProxyPassword()
+                                editingPasswordVisible = false
+                            },
                         )
                     }
                 }
@@ -280,7 +279,6 @@ internal fun LocalProxyAccountsPage(onBack: () -> Unit) {
                         },
                         onShowQrCode = { qrUser = user },
                         onShare = { sharingUser = user },
-                        onCopyShareCode = { copyShareCode(user) },
                         onDelete = {
                             if (settings.socksListenAll && settings.localProxyUsers.size == 1) {
                                 scope.launch {
@@ -292,27 +290,32 @@ internal fun LocalProxyAccountsPage(onBack: () -> Unit) {
                         },
                     )
                 }
-                item {
-                    FilledTonalButton(
-                        onClick = {
-                            editingUserIndex = -1
-                            editingUsername = ""
-                            editingPassword = generateLanProxyPassword()
-                            editingPasswordVisible = false
-                        },
-                        enabled = !saving && settings.localProxyUsers.size < MaxLocalProxyUsers,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Icon(Icons.Rounded.Add, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(stringResource(R.string.add_account))
+                if (settings.localProxyUsers.isNotEmpty()) {
+                    item {
+                        FilledTonalButton(
+                            onClick = {
+                                editingUserIndex = -1
+                                editingUsername = ""
+                                editingPassword = generateLanProxyPassword()
+                                editingPasswordVisible = false
+                            },
+                            enabled = !saving && settings.localProxyUsers.size < MaxLocalProxyUsers,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(Icons.Rounded.Add, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(R.string.add_account))
+                        }
                     }
-                    if (settings.localProxyUsers.size >= MaxLocalProxyUsers) {
+                }
+                if (settings.localProxyUsers.size >= MaxLocalProxyUsers) {
+                    item {
                         Text(
                             text = stringResource(R.string.proxy_account_limit_reached, MaxLocalProxyUsers),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 8.dp),
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                            textAlign = TextAlign.Center,
                         )
                     }
                 }
@@ -416,6 +419,43 @@ private fun LocalProxyAccountsTopBar(onBack: () -> Unit) {
 }
 
 @Composable
+private fun LocalProxyAccountsEmptyState(
+    enabled: Boolean,
+    onAdd: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(
+            Icons.Rounded.VpnKey,
+            contentDescription = null,
+            tint = colors.onSurfaceVariant,
+            modifier = Modifier.size(40.dp),
+        )
+        Text(
+            text = stringResource(R.string.proxy_accounts_empty),
+            style = MaterialTheme.typography.titleMedium,
+            color = colors.onSurface,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = stringResource(R.string.proxy_accounts_empty_hint),
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        FilledTonalButton(onClick = onAdd, enabled = enabled) {
+            Text(stringResource(R.string.add_account))
+        }
+    }
+}
+
+@Composable
 private fun LocalProxyAccountRow(
     index: Int,
     user: LocalProxyUser,
@@ -423,91 +463,79 @@ private fun LocalProxyAccountRow(
     onEdit: () -> Unit,
     onShowQrCode: () -> Unit,
     onShare: () -> Unit,
-    onCopyShareCode: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    var menuExpanded by remember(user) { mutableStateOf(false) }
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(16.dp),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(enabled = enabled, onClick = onEdit)
-                .padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = user.username.ifBlank { stringResource(R.string.empty_username) },
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                Text(
-                    text = "••••••••",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Box {
-                IconButton(
-                    onClick = { menuExpanded = true },
-                    enabled = enabled,
-                    modifier = Modifier.testTag(localProxyAccountActionsTestTag(index)),
+    val colors = MaterialTheme.colorScheme
+    SwipeActionsRow(
+        stateKey = user,
+        enabled = enabled,
+        onEdit = onEdit,
+        onDelete = onDelete,
+        foreground = { offsetModifier, actionsRevealed, closeActions ->
+            Surface(
+                modifier = offsetModifier.fillMaxWidth(),
+                color = colors.surfaceContainerLow,
+                shape = CardShape,
+                tonalElevation = 0.dp,
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 88.dp)
+                        .clickable(enabled = enabled) {
+                            if (actionsRevealed) closeActions() else onEdit()
+                        }
+                        .testTag(localProxyAccountRowTestTag(index))
+                        .padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.Rounded.MoreVert, contentDescription = stringResource(R.string.more_options))
-                }
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                ) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.edit_account)) },
-                        leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
-                        onClick = {
-                            menuExpanded = false
-                            onEdit()
-                        },
+                    ConnectionStatusMark(
+                        color = colors.onSurfaceVariant,
+                        containerColor = colors.surfaceContainerHighest,
+                        icon = Icons.Rounded.VpnKey,
                     )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.show_qr_code)) },
-                        leadingIcon = { Icon(Icons.Rounded.QrCode2, contentDescription = null) },
-                        onClick = {
-                            menuExpanded = false
-                            onShowQrCode()
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.share)) },
-                        leadingIcon = { Icon(Icons.Rounded.Share, contentDescription = null) },
-                        onClick = {
-                            menuExpanded = false
-                            onShare()
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.copy_share_code)) },
-                        leadingIcon = { Icon(Icons.Rounded.ContentCopy, contentDescription = null) },
-                        onClick = {
-                            menuExpanded = false
-                            onCopyShareCode()
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.delete_account)) },
-                        leadingIcon = { Icon(Icons.Rounded.Delete, contentDescription = null) },
-                        onClick = {
-                            menuExpanded = false
-                            onDelete()
-                        },
-                    )
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(
+                            text = user.username.ifBlank { stringResource(R.string.empty_username) },
+                            style = MaterialTheme.typography.titleMedium,
+                            color = colors.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = stringResource(R.string.proxy_account_description),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    IconButton(onClick = onShare, enabled = enabled) {
+                        Icon(
+                            Icons.Rounded.Share,
+                            contentDescription = stringResource(R.string.share),
+                            tint = colors.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(onClick = onShowQrCode, enabled = enabled) {
+                        Icon(
+                            Icons.Rounded.QrCode2,
+                            contentDescription = stringResource(R.string.show_qr_code),
+                            tint = colors.onSurfaceVariant,
+                        )
+                    }
                 }
             }
-        }
-    }
+        },
+    )
 }
 
-internal fun localProxyAccountActionsTestTag(index: Int): String = "proxy-account-actions-$index"
+internal fun localProxyAccountRowTestTag(index: Int): String = "proxy-account-row-$index"
 
 @Composable
 private fun LocalProxyAccountEditorDialog(

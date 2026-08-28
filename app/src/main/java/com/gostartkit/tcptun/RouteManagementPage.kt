@@ -711,15 +711,15 @@ private fun ManagedRouteRuleRow(
     val actionWidth = 80.dp
     val anchors = remember(density, layoutDirection) {
         DraggableAnchors {
-            ProfileSwipeValue.Closed at 0f
-            ProfileSwipeValue.Actions at swipeActionsOffset(
+            SwipeActionValue.Closed at 0f
+            SwipeActionValue.Actions at swipeActionsOffset(
                 widthPx = with(density) { (actionWidth * 2).toPx() },
                 layoutDirection = layoutDirection,
             )
         }
     }
     val swipeState = remember(rule.id, anchors) {
-        AnchoredDraggableState(ProfileSwipeValue.Closed, anchors)
+        AnchoredDraggableState(SwipeActionValue.Closed, anchors)
     }
     val scope = rememberCoroutineScope()
 
@@ -740,7 +740,7 @@ private fun ManagedRouteRuleRow(
                     .background(colors.surfaceContainerHighest),
                 horizontalArrangement = Arrangement.End,
             ) {
-                ProfileSwipeAction(
+                SwipeAction(
                     modifier = Modifier.width(actionWidth),
                     icon = Icons.Rounded.Edit,
                     label = stringResource(R.string.edit),
@@ -749,7 +749,7 @@ private fun ManagedRouteRuleRow(
                     enabled = enabled,
                     onClick = onEdit,
                 )
-                ProfileSwipeAction(
+                SwipeAction(
                     modifier = Modifier.width(actionWidth),
                     icon = Icons.Rounded.Delete,
                     label = stringResource(R.string.delete),
@@ -777,10 +777,10 @@ private fun ManagedRouteRuleRow(
                         .fillMaxWidth()
                         .heightIn(min = 88.dp)
                         .clickable(
-                            enabled = enabled && swipeState.settledValue == ProfileSwipeValue.Actions,
+                            enabled = enabled && swipeState.settledValue == SwipeActionValue.Actions,
                         ) {
                             // Tap only closes an open swipe; edit is via the swipe action.
-                            scope.launch { swipeState.animateTo(ProfileSwipeValue.Closed) }
+                            scope.launch { swipeState.animateTo(SwipeActionValue.Closed) }
                         }
                         .padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1026,5 +1026,4 @@ private fun routeRuleExample(type: ManagedRouteRuleType): String = stringResourc
         ManagedRouteRuleType.App -> R.string.route_example_app
     },
 )
-
 

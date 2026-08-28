@@ -217,6 +217,8 @@
         <item quantity="other">%1$d 个账号</item>
     </plurals>
     <string name="proxy_accounts_empty">尚未配置代理账号。</string>
+    <string name="proxy_accounts_empty_hint">添加账号后可用于本地 SOCKS5 或 mixed 代理认证。</string>
+    <string name="proxy_account_description">本地代理账号</string>
     <string name="proxy_accounts_save_failed">代理账号已被其他页面修改或无法保存。已重新加载安全设置，请重试。</string>
     <string name="proxy_account_required_for_lan">监听所有接口时至少需要一个设置了密码的代理账号。</string>
     <string name="proxy_account_limit_reached">代理账号数量已达到上限 %1$d。</string>

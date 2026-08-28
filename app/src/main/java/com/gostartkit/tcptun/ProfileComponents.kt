@@ -79,6 +79,7 @@ import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.VpnKey
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Button
@@ -339,6 +340,7 @@ internal fun TopBar(
     title: String,
     actionsEnabled: Boolean,
     onDiagnostics: () -> Unit,
+    onProxyAccounts: () -> Unit,
     onRouteManagement: () -> Unit,
     onFlowAnalysis: () -> Unit,
     onSettings: () -> Unit,
@@ -448,6 +450,20 @@ internal fun TopBar(
                     )
                     DropdownMenuItem(
                         leadingIcon = {
+                            Icon(Icons.Rounded.VpnKey, contentDescription = null)
+                        },
+                        text = { Text(stringResource(R.string.proxy_accounts)) },
+                        onClick = {
+                            menuExpanded = false
+                            onProxyAccounts()
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = colors.onSurface,
+                            leadingIconColor = colors.onSurfaceVariant,
+                        ),
+                    )
+                    DropdownMenuItem(
+                        leadingIcon = {
                             Icon(Icons.Rounded.Tune, contentDescription = null)
                         },
                         text = { Text(stringResource(R.string.settings)) },
@@ -524,68 +540,16 @@ internal fun ProfileRow(
         },
         label = "profileRowColor",
     )
-    val density = LocalDensity.current
-    val layoutDirection = LocalLayoutDirection.current
-    val actionWidth = 80.dp
-    val anchors = remember(density, layoutDirection) {
-        DraggableAnchors {
-            ProfileSwipeValue.Closed at 0f
-            ProfileSwipeValue.Actions at swipeActionsOffset(
-                widthPx = with(density) { (actionWidth * 2).toPx() },
-                layoutDirection = layoutDirection,
-            )
-        }
-    }
-    val swipeState = remember(profile.id, anchors) {
-        AnchoredDraggableState(ProfileSwipeValue.Closed, anchors)
-    }
-    val scope = rememberCoroutineScope()
-
-    Box(modifier = modifier.fillMaxWidth()) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(CardShape)
-                .anchoredDraggable(
-                    state = swipeState,
-                    orientation = Orientation.Horizontal,
-                    enabled = enabled && !dragging,
-                ),
-        ) {
-            Row(
-                modifier = Modifier
-                    .matchParentSize()
-                    .background(colors.surfaceContainerHighest),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                ProfileSwipeAction(
-                    modifier = Modifier.width(actionWidth),
-                    icon = Icons.Rounded.Edit,
-                    label = stringResource(R.string.edit),
-                    containerColor = colors.secondaryContainer,
-                    contentColor = colors.onSecondaryContainer,
-                    enabled = enabled,
-                    onClick = onEdit,
-                )
-                ProfileSwipeAction(
-                    modifier = Modifier.width(actionWidth),
-                    icon = Icons.Rounded.Delete,
-                    label = stringResource(R.string.delete),
-                    containerColor = colors.errorContainer,
-                    contentColor = colors.onErrorContainer,
-                    enabled = enabled,
-                    onClick = onDeleteRequest,
-                )
-            }
+    SwipeActionsRow(
+        stateKey = profile.id,
+        modifier = modifier,
+        enabled = enabled && !dragging,
+        actionsEnabled = enabled,
+        onEdit = onEdit,
+        onDelete = onDeleteRequest,
+        foreground = { offsetModifier, actionsRevealed, closeActions ->
             Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .offset {
-                        IntOffset(
-                            x = swipeState.safeOffset().roundToInt(),
-                            y = 0,
-                        )
-                    },
+                modifier = offsetModifier.fillMaxWidth(),
                 shape = CardShape,
                 color = rowColor,
                 tonalElevation = 0.dp,
@@ -595,8 +559,8 @@ internal fun ProfileRow(
                         .fillMaxWidth()
                         .heightIn(min = 88.dp)
                         .clickable(enabled = enabled) {
-                            if (swipeState.settledValue == ProfileSwipeValue.Actions) {
-                                scope.launch { swipeState.animateTo(ProfileSwipeValue.Closed) }
+                            if (actionsRevealed) {
+                                closeActions()
                             } else {
                                 onClick()
                             }
@@ -677,37 +641,120 @@ internal fun ProfileRow(
                     }
                 }
             }
-        }
-        Row(
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .offset { IntOffset(swipeState.safeOffset().roundToInt(), 0) },
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .draggable(
-                        state = rememberDraggableState(onDelta = onDrag),
-                        orientation = Orientation.Vertical,
-                        enabled = enabled,
-                        onDragStarted = { onDragStart() },
-                        onDragStopped = { onDragEnd() },
-                    ),
-                contentAlignment = Alignment.Center,
+        },
+        trailingOverlay = { offsetModifier ->
+            Row(
+                modifier = offsetModifier,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    Icons.Rounded.DragHandle,
-                    contentDescription = stringResource(R.string.reorder_profile),
-                    tint = secondaryContentColor,
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .draggable(
+                            state = rememberDraggableState(onDelta = onDrag),
+                            orientation = Orientation.Vertical,
+                            enabled = enabled,
+                            onDragStarted = { onDragStart() },
+                            onDragStopped = { onDragEnd() },
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Rounded.DragHandle,
+                        contentDescription = stringResource(R.string.reorder_profile),
+                        tint = secondaryContentColor,
+                    )
+                }
+                Spacer(Modifier.width(96.dp))
+            }
+        },
+    )
+}
+
+@Composable
+internal fun SwipeActionsRow(
+    stateKey: Any?,
+    modifier: Modifier = Modifier,
+    enabled: Boolean,
+    actionsEnabled: Boolean = enabled,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    foreground: @Composable (Modifier, Boolean, () -> Unit) -> Unit,
+    trailingOverlay: @Composable (Modifier) -> Unit = {},
+) {
+    val colors = MaterialTheme.colorScheme
+    val density = LocalDensity.current
+    val layoutDirection = LocalLayoutDirection.current
+    val actionWidth = 80.dp
+    val anchors = remember(density, layoutDirection) {
+        DraggableAnchors {
+            SwipeActionValue.Closed at 0f
+            SwipeActionValue.Actions at swipeActionsOffset(
+                widthPx = with(density) { (actionWidth * 2).toPx() },
+                layoutDirection = layoutDirection,
+            )
+        }
+    }
+    val swipeState = remember(stateKey, anchors) {
+        AnchoredDraggableState(SwipeActionValue.Closed, anchors)
+    }
+    val scope = rememberCoroutineScope()
+    val closeActions = {
+        scope.launch { swipeState.animateTo(SwipeActionValue.Closed) }
+        Unit
+    }
+
+    Box(modifier = modifier.fillMaxWidth()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(CardShape)
+                .anchoredDraggable(
+                    state = swipeState,
+                    orientation = Orientation.Horizontal,
+                    enabled = enabled,
+                ),
+        ) {
+            Row(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(colors.surfaceContainerHighest),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                SwipeAction(
+                    modifier = Modifier.width(actionWidth),
+                    icon = Icons.Rounded.Edit,
+                    label = stringResource(R.string.edit),
+                    containerColor = colors.secondaryContainer,
+                    contentColor = colors.onSecondaryContainer,
+                    enabled = actionsEnabled,
+                    onClick = onEdit,
+                )
+                SwipeAction(
+                    modifier = Modifier.width(actionWidth),
+                    icon = Icons.Rounded.Delete,
+                    label = stringResource(R.string.delete),
+                    containerColor = colors.errorContainer,
+                    contentColor = colors.onErrorContainer,
+                    enabled = actionsEnabled,
+                    onClick = onDelete,
                 )
             }
-            Spacer(Modifier.width(96.dp))
+            foreground(
+                Modifier.offset { IntOffset(swipeState.safeOffset().roundToInt(), 0) },
+                swipeState.settledValue == SwipeActionValue.Actions,
+                closeActions,
+            )
         }
+        trailingOverlay(
+            Modifier
+                .align(Alignment.CenterEnd)
+                .offset { IntOffset(swipeState.safeOffset().roundToInt(), 0) },
+        )
     }
 }
 
-internal enum class ProfileSwipeValue {
+internal enum class SwipeActionValue {
     Closed,
     Actions,
 }
@@ -719,7 +766,7 @@ internal fun swipeActionsOffset(widthPx: Float, layoutDirection: LayoutDirection
 }
 
 @Composable
-internal fun ProfileSwipeAction(
+internal fun SwipeAction(
     modifier: Modifier,
     icon: ImageVector,
     label: String,
@@ -1104,5 +1151,3 @@ internal fun tcpingStatusText(progress: TcpingProgress): String {
     }
     return parts.joinToString(" · ")
 }
-
-

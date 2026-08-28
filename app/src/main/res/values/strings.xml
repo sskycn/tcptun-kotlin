@@ -220,6 +220,8 @@
         <item quantity="other">%1$d accounts</item>
     </plurals>
     <string name="proxy_accounts_empty">No proxy accounts configured.</string>
+    <string name="proxy_accounts_empty_hint">Add an account to authenticate with the local SOCKS5 or mixed proxy.</string>
+    <string name="proxy_account_description">Local proxy account</string>
     <string name="proxy_accounts_save_failed">Proxy accounts changed elsewhere or could not be saved. Secure settings were reloaded; try again.</string>
     <string name="proxy_account_required_for_lan">At least one proxy account with a password is required while listening on all interfaces.</string>
     <string name="proxy_account_limit_reached">The maximum of %1$d proxy accounts has been reached.</string>

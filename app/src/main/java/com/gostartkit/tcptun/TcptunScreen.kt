@@ -851,12 +851,9 @@ internal fun TcptunScreen(
             onShowLogs = { showLogs = true },
         )
     } else if (destination == MainDestination.Settings) {
-        SettingsPage(
-            onBack = { destination = MainDestination.Profiles },
-            onProxyAccounts = { destination = MainDestination.LocalProxyAccounts },
-        )
+        SettingsPage(onBack = { destination = MainDestination.Profiles })
     } else if (destination == MainDestination.LocalProxyAccounts) {
-        LocalProxyAccountsPage(onBack = { destination = MainDestination.Settings })
+        LocalProxyAccountsPage(onBack = { destination = MainDestination.Profiles })
     } else if (destination == MainDestination.FlowAnalysis) {
         FlowAnalysisPage(onBack = { destination = MainDestination.Profiles })
     } else if (destination == MainDestination.RouteManagement) {
@@ -888,6 +885,7 @@ internal fun TcptunScreen(
                 title = stringResource(R.string.profiles_title),
                 actionsEnabled = !isVpnTransitionStatus(profilesRuntime.status),
                 onDiagnostics = { destination = MainDestination.Diagnostics },
+                onProxyAccounts = { destination = MainDestination.LocalProxyAccounts },
                 onRouteManagement = { destination = MainDestination.RouteManagement },
                 onFlowAnalysis = { destination = MainDestination.FlowAnalysis },
                 onSettings = { destination = MainDestination.Settings },
