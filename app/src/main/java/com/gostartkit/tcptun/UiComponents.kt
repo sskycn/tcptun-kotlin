@@ -67,6 +67,7 @@ internal fun ChoiceRow(
     value: String,
     options: List<String>,
     enabled: Boolean = true,
+    optionLabels: Map<String, String> = emptyMap(),
     onChange: (String) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -75,7 +76,7 @@ internal fun ChoiceRow(
         onExpandedChange = { if (enabled) expanded = !expanded },
     ) {
         OutlinedTextField(
-            value = value,
+            value = optionLabels[value] ?: value,
             onValueChange = {},
             readOnly = true,
             enabled = enabled,
@@ -94,7 +95,7 @@ internal fun ChoiceRow(
         ) {
             options.forEach { option ->
                 DropdownMenuItem(
-                    text = { Text(option) },
+                    text = { Text(optionLabels[option] ?: option) },
                     onClick = {
                         onChange(option)
                         expanded = false

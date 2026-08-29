@@ -49,6 +49,14 @@ as Native” is explicit and clears the old credential. A legacy `realityFingerp
 accepted by the reader and discarded; all new storage omits it. Full JSON using removed endpoint
 types, outbound `uuid`, or `security.fingerprint` is rejected rather than rewritten.
 
+Structured Native profiles persist `carrierPrefer` exactly as `adaptive`, `quic`, or `tcp`.
+Missing values remain empty and mean the Core adaptive policy, so upgrading does not change an
+existing auto profile's network behavior. A preference requires mux plus `carrierMode=auto`; TLS
+and REALITY are both supported. Switching to the TCP or QUIC single-carrier mode clears the
+preference, and disabling mux clears all dependent carrier settings. Raw JSON preserves a valid
+outbound `carrier.prefer` but rejects inbound placement, unknown values, and preferences on a
+non-auto mode.
+
 Each local proxy account has independent A1 QR/copy/share actions. One `A1:` payload contains one
 username/password pair only; there is no multi-account bundle. Scanning A1 opens a password-masked
 preview. A new username is appended, an identical account is reused, and a conflicting username

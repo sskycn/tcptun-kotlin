@@ -5,6 +5,8 @@ import org.json.JSONArray
 
 internal data class BridgeOutboundHealthStatus(
     val tag: String,
+    val carrierMode: String,
+    val carrierPreference: String,
     val health: ProfileHealthStatus,
     val latencyMs: Long?,
     val failures: Long,
@@ -179,6 +181,8 @@ internal object BridgeStatusJson {
                 add(
                     BridgeOutboundHealthStatus(
                         tag = status.optStatusString("tag"),
+                        carrierMode = status.optStatusString("carrier_mode"),
+                        carrierPreference = status.optStatusString("carrier_preference"),
                         health = health,
                         latencyMs = status.optLong("latency_ms").takeIf { it > 0 },
                         failures = status.optLong("failures").coerceAtLeast(0),

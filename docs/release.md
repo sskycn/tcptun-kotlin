@@ -76,7 +76,7 @@ debug-symbol ZIP through `packageReleaseNativeSymbols`.
 ## Compatibility checklist
 
 - Confirm the AAR ABI set matches Gradle filters.
-- Confirm no Bridge method or Profile/URI schema changed.
+- Confirm the Bridge method set and Profile/URI schema match the pinned Core contract.
 - Run App Link, persistence, QR, and SavedState security tests on Android.
 - Test VPN start/stop and replacement on at least one physical or emulated device.
 - Archive the app version, core build ID, AAB, and native symbols together.

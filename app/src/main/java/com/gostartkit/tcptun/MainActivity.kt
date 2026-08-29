@@ -317,6 +317,7 @@ internal fun AppConfig.boundedForEditor(): AppConfig = copy(
     echPublicKey = echPublicKey.take(MaxEchKeyInputLength),
     echPorts = echPorts.take(MaxProfileChoiceInputLength),
     carrierMode = carrierMode.take(MaxProfileChoiceInputLength),
+    carrierPrefer = carrierPrefer.take(MaxProfileChoiceInputLength),
     carrierUdpMode = carrierUdpMode.take(MaxProfileChoiceInputLength),
     upstreamProtocol = upstreamProtocol.take(MaxProfileChoiceInputLength),
     rawConfigJson = rawConfigJson.take(MaxProfileImportLength),

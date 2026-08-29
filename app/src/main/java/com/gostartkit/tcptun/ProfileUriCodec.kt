@@ -127,6 +127,8 @@ object ProfileUriCodec {
         }
         val mux = uri.getBooleanParameterCompat("mux", false)
         val currentCarrierMode = uri.getQueryParameter("carrier_mode").orEmpty()
+        val currentCarrierPrefer = uri.getQueryParameter("carrier_prefer").orEmpty()
+        requireSupportedCarrierPreference(currentCarrierPrefer)
         val currentCarrierUdpMode = uri.getQueryParameter("carrier_udp_mode").orEmpty()
         val legacyCarrierMode = uri.getQueryParameter("mux_mode").orEmpty()
         val legacyCarrierUdpMode = uri.getQueryParameter("mux_udp_mode").orEmpty()
@@ -178,6 +180,7 @@ object ProfileUriCodec {
             realitySpiderX = uri.getQueryParameter("spx").orEmpty(),
             mux = mux,
             carrierMode = migrated.carrierMode,
+            carrierPrefer = currentCarrierPrefer.trim().lowercase(),
             carrierUdpMode = migrated.carrierUdpMode,
             muxResume = uri.getBooleanParameterCompat("mux_resume", false),
             muxResumeTimeoutMillis = uri.getDurationMillisParameter("mux_resume_timeout"),
@@ -260,6 +263,8 @@ object ProfileUriCodec {
         }
         val mux = obj.optBoolean("tunnel_mux", true)
         val currentCarrierMode = obj.optString("tunnel_carrier_mode")
+        val currentCarrierPrefer = obj.optString("tunnel_carrier_prefer")
+        requireSupportedCarrierPreference(currentCarrierPrefer)
         val currentCarrierUdpMode = obj.optString("tunnel_carrier_udp_mode")
         val legacyCarrierMode = obj.optString("tunnel_mux_mode")
         val legacyCarrierUdpMode = obj.optString("tunnel_mux_udp_mode")
@@ -298,6 +303,7 @@ object ProfileUriCodec {
             realitySpiderX = obj.optString("reality_spider_x"),
             mux = mux,
             carrierMode = migrated.carrierMode,
+            carrierPrefer = currentCarrierPrefer.trim().lowercase(),
             carrierUdpMode = migrated.carrierUdpMode,
             muxResume = obj.optBoolean("tunnel_mux_resume", false),
             muxResumeTimeoutMillis = obj.optDurationMillis("tunnel_mux_resume_timeout"),
@@ -332,6 +338,7 @@ object ProfileUriCodec {
         params["network"] = AndroidTunNetworks.joinToString(",")
         params["mux"] = config.mux.toString()
         putIfNotBlank(params, "carrier_mode", config.carrierMode)
+        putIfNotBlank(params, "carrier_prefer", config.carrierPrefer.trim().lowercase())
         putIfNotBlank(params, "carrier_udp_mode", config.carrierUdpMode)
         if (config.muxResume) params["mux_resume"] = "true"
         if (config.muxResumeTimeoutMillis > 0) {
@@ -408,6 +415,13 @@ object ProfileUriCodec {
             if (network !in setOf("tcp", "udp")) {
                 error("unsupported network: $network")
             }
+        }
+    }
+
+    private fun requireSupportedCarrierPreference(value: String) {
+        val normalized = value.trim().lowercase()
+        if (normalized !in AppConfig.CarrierPreferences) {
+            error("unsupported carrier preference: $value")
         }
     }
 

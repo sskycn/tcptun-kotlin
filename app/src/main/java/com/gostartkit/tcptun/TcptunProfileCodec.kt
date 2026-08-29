@@ -112,6 +112,7 @@ private fun AppConfig.toBridgeProfileJson(): JSONObject {
         .put("realitySpiderX", realitySpiderX)
         .put("mux", mux)
         .put("carrierMode", carrierMode)
+        .put("carrierPrefer", carrierPrefer)
         .put("carrierUdpMode", carrierUdpMode)
         .put("muxMaxSessions", muxMaxSessions)
         .put("muxMaxStreamsPerSession", muxMaxStreamsPerSession)

@@ -31,3 +31,7 @@ distinguishes Java/native crashes, ANRs, low-memory kills, and OEM actions such 
 
 If a bug report needs the raw profile or credentials, collect those separately through an
 explicit user-controlled channel; never add them to automatic diagnostics.
+
+Core outbound status may include the forward-compatible fields `carrier_mode` and
+`carrier_preference`. Android's parser accepts and bounds both fields as well as unknown future
+fields; it does not treat a new status property as a failure of the complete status document.

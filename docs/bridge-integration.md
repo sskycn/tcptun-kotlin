@@ -54,8 +54,8 @@ fake native artifact. Bridge and managed-device CI build the real AAR in a separ
 ## Compatibility rules
 
 - Do not modify the tcptun-go ABI from this Android project.
-- Keep `bridge.lock` pinned to tcptun-go v0.4.0 commit
-  `fce12b21fb8d71a9e15c45a75b168b9435a6f55c`. The exported gomobile contract remains Bridge API 3.
+- Keep `bridge.lock` pinned to tcptun-go v0.4.1 commit
+  `017b9270d99dade16b90ca7d26edc6ecbad7c0ee`. The exported gomobile contract remains Bridge API 3.
 - Pass local `socks5`/`mixed` accounts as `users[]` (maximum 256); omit the field for no-auth.
   Preserve legacy top-level credentials only when they already belong to a non-reserved raw
   inbound. The public mobile Bridge API includes the A1 account codec and is version 3.
@@ -74,6 +74,12 @@ fake native artifact. Bridge and managed-device CI build the real AAR in a separ
   in Kotlin.
 - Structured profile DTOs and runtime JSON are Native-only. Do not emit outbound `uuid`, map a
   removed protocol credential to `token`, or emit REALITY `fingerprint`.
+- The profile DTO fields `carrierMode`, `carrierPrefer`, and `carrierUdpMode` map to outbound
+  `carrier.mode`, `carrier.prefer`, and `carrier.udp_mode`. Preference is outbound-only and valid
+  only with `carrier.mode=auto`; Kotlin configures it but never implements carrier selection.
+- Native auto is a Core-owned TCP + QUIC topology for both TLS and REALITY. Both socket families
+  continue through the existing `SocketProtector` boundary; Android does not open a QUIC socket or
+  schedule QUIC probes.
 - Increment `bridge.lock`'s Bridge API version whenever the required Java contract changes.
 
 ## Contract tests

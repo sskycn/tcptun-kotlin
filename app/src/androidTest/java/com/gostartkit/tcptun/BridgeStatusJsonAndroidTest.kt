@@ -49,7 +49,7 @@ class BridgeStatusJsonAndroidTest {
     fun outboundParserKeepsOnlyRecognizedBoundedHealthRecords() {
         val statuses = BridgeStatusJson.parseOutboundHealth(
             """[
-                {"tag":"a","health":"healthy","latency_ms":17,"failures":-2},
+                {"tag":"a","health":"healthy","carrier_mode":"auto","carrier_preference":"quic","latency_ms":17,"failures":-2,"future_field":true},
                 {"tag":"b","health":"degraded","last_observed_at_ms":20},
                 {"tag":"c","health":"unknown"}
             ]""".trimIndent(),
@@ -57,6 +57,8 @@ class BridgeStatusJsonAndroidTest {
 
         assertEquals(2, statuses.size)
         assertEquals(ProfileHealthStatus.Healthy, statuses[0].health)
+        assertEquals("auto", statuses[0].carrierMode)
+        assertEquals("quic", statuses[0].carrierPreference)
         assertEquals(17L, statuses[0].latencyMs)
         assertEquals(0L, statuses[0].failures)
         assertEquals(ProfileHealthStatus.Degraded, statuses[1].health)
