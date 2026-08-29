@@ -15,7 +15,7 @@ Local clients -> SOCKS5/mixed listener ------------------------> selected outbou
 - Foreground `VpnService` with IPv4/IPv6 routes and event-driven recovery.
 - Multiple structured profiles in one dynamic, session-affine outbound pool.
 - Complete strict tcptun-go JSON profiles without changing their schema.
-- Native, VLESS, VMess, and Trojan URI import/export; compact `T2:`/`T3:` profile QR support.
+- Native URI import/export and compact `T2:`/`T3:` profile QR support.
 - Per-account `A1:` QR, copy, share, preview, and conflict-safe import for local proxy credentials.
 - Versioned HTTPS App Links at `https://x.tcptun.com/v1#p=...`.
 - Optional Android 10+ App routing and single-app traffic analysis.
@@ -68,8 +68,8 @@ See [docs/device-testing.md](docs/device-testing.md) for repeatable device valid
 
 ## tcptun-go authentication
 
-The Android bridge is generated from tcptun-go commit
-`159053ff8853d278130da25e887c9360b83a2454` (Bridge API 3). Secure authentication uses the
+The Android bridge is generated from tcptun-go v0.4.0 commit
+`fce12b21fb8d71a9e15c45a75b168b9435a6f55c` (Bridge API 3). Secure authentication uses the
 tcptun-go v2 protocol: HKDF-SHA256 derives the authentication key and the Go core performs all
 challenge/response processing. It is intended for high-entropy shared secrets and is not
 transport encryption.
@@ -82,10 +82,14 @@ protocol itself.
 
 Android-created local proxy inbounds use `users[]`; all configured accounts protect the same
 listener and mixed-protocol surfaces. Existing encrypted single-account settings migrate
-automatically. Full JSON profiles preserve multi-user `mixed`, `socks5`, `native`, `vless`,
-`vmess`, and `trojan` inbounds, including per-user VLESS flow. Outbounds remain one client
-identity. Passwords remain in encrypted secret storage and listen-all cannot run without an
-account.
+automatically. Full JSON profiles preserve multi-user `mixed`, `socks5`, and `native` inbounds,
+including per-user Native flow. Outbounds remain one client identity. Passwords remain in
+encrypted secret storage and listen-all cannot run without an account.
+
+tcptun-go v0.4.0 is Native-only for tunnel endpoints. Stored VLESS, VMess, and Trojan structured
+profiles remain readable but are marked unsupported and cannot start or export; they are never
+silently converted to Native. Legacy REALITY fingerprint values are ignored on read and are not
+written to storage, profile payloads, or runtime JSON. Incompatible full JSON remains fail-closed.
 
 Each local proxy account can be shared independently as `A1:<Base45>`. One A1 payload always
 contains exactly one username/password pair; it never contains listener settings or a tunnel

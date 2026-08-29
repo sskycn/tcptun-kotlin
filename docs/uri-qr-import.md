@@ -3,9 +3,11 @@
 Supported direct schemes:
 
 - `native://`
-- `vless://`
-- `vmess://`
-- `trojan://`
+
+VLESS, VMess, and Trojan were removed from tcptun-go v0.4.0. Pasting or scanning one of those
+legacy URIs returns a protocol-specific unsupported error; its credential is never reinterpreted
+as a Native token. A legacy Native URI may contain `fp=` for compatibility, but the value is
+ignored and is absent from every new URI and T3 export.
 
 Versioned HTTPS links use exactly:
 
@@ -17,7 +19,7 @@ The fragment keeps the profile payload out of ordinary HTTP requests. The Androi
 and codec both restrict the host and path to `/v1`; non-canonical payloads, queries, ports,
 unknown paths, oversized inputs, and unsupported schemes are rejected.
 
-Tunnel profile QR export continues to use the existing tcptun-go compact `T2:`/`T3:` codec.
+Tunnel profile QR export continues to use the tcptun-go Native compact `T2:`/`T3:` codec.
 Profiles whose fields cannot be represented compactly, including resumable mux or ECH settings,
 are not silently lossy-encoded.
 

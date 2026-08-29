@@ -24,7 +24,7 @@ rule target and becomes usable again when that profile is started.
 - Mutation revisions protect concurrent UI/service updates.
 - Import and delete operations are bounded and recoverable.
 - Credentials are not included in diagnostics or ordinary logs.
-- Existing migrations, raw JSON fields, and compatibility behavior remain unchanged.
+- Existing supported migrations remain unchanged. Removed v0.4.0 fields are handled explicitly.
 
 ## Local proxy accounts
 
@@ -38,9 +38,16 @@ An empty list omits `users` and preserves loopback no-auth behavior. Listen-all 
 account and generates a 192-bit password when enabled from an empty list. Duplicate usernames and
 the Go 255-byte SOCKS credential limit are checked before save; tcptun-go remains authoritative.
 
-Full JSON preserves `users[]` for mixed, socks5, native, VLESS (including per-user `flow`), VMess,
-and Trojan inbounds unless the inbound is the reserved Android listener being replaced. Tunnel
-users are never imported into local settings, and outbounds remain a single client identity.
+Full JSON preserves `users[]` for mixed, socks5, and native inbounds unless the inbound is the
+reserved Android listener being replaced. Tunnel users are never imported into local settings,
+and outbounds remain a single client identity.
+
+Structured storage intentionally keeps a removed protocol string so an existing VLESS, VMess, or
+Trojan profile can be displayed, edited, or deleted without changing the credential's meaning.
+Validation marks it unsupported and excludes it from runtime and sharing. Choosing “Reconfigure
+as Native” is explicit and clears the old credential. A legacy `realityFingerprint` property is
+accepted by the reader and discarded; all new storage omits it. Full JSON using removed endpoint
+types, outbound `uuid`, or `security.fingerprint` is rejected rather than rewritten.
 
 Each local proxy account has independent A1 QR/copy/share actions. One `A1:` payload contains one
 username/password pair only; there is no multi-account bundle. Scanning A1 opens a password-masked
