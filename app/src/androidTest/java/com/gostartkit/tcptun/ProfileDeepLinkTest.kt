@@ -169,6 +169,64 @@ class ProfileDeepLinkTest {
     }
 
     @Test
+    fun nativeUriAndT3RoundTripAllAutoCarrierPreferencesForTlsAndReality() {
+        val tls = AppConfig(
+            name = "tls-auto",
+            serverHost = "edge.example.com",
+            serverPort = "443",
+            protocol = "native",
+            transport = "raw",
+            token = "secret",
+            sni = "edge.example.com",
+            tls = true,
+            mux = true,
+            carrierMode = "auto",
+            carrierUdpMode = "auto",
+        )
+        val reality = tls.copy(
+            name = "reality-auto",
+            tls = false,
+            tunnelSecurity = "reality",
+            realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
+            realityShortId = "a65f93c1dbc5d54a",
+        )
+
+        listOf(tls, reality).forEach { source ->
+            listOf("adaptive", "quic", "tcp").forEach { preference ->
+                val profile = source.copy(carrierPrefer = preference)
+                assertNull(profile.validate())
+
+                val uri = requireNotNull(ProfileUriCodec.encode(profile))
+                assertTrue(uri.contains("carrier_mode=auto"))
+                assertTrue(uri.contains("carrier_prefer=$preference"))
+                assertEquals(preference, ProfileUriCodec.decode(uri).getOrThrow().carrierPrefer)
+
+                val t3 = requireNotNull(ProfileUriCodec.encodeForQr(profile))
+                assertTrue(t3.startsWith("T3:"))
+                val decoded = ProfileUriCodec.decode(t3).getOrThrow()
+                assertEquals("auto", decoded.carrierMode)
+                assertEquals(preference, decoded.carrierPrefer)
+                assertEquals(profile.tls, decoded.tls)
+                assertEquals(profile.tunnelSecurity, decoded.tunnelSecurity)
+                assertNull(decoded.validate())
+            }
+        }
+    }
+
+    @Test
+    fun nativeUriRejectsUnknownCarrierPreferenceAliases() {
+        listOf("fastest", "prefer_quic", "prefer_tcp").forEach { preference ->
+            val result = ProfileUriCodec.decode(
+                "native://secret@edge.example.com:443" +
+                    "?v=1&type=raw&security=tls&sni=edge.example.com&mux=true" +
+                    "&carrier_mode=auto&carrier_prefer=$preference",
+            )
+            assertTrue(preference, result.isFailure)
+            assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("unsupported carrier preference"))
+        }
+    }
+
+    @Test
     fun legacyRealityTcpUriMigratesToRealityWithTcpCarrier() {
         val uri = "native://tcp-token@edge.example.com:443" +
             "?v=1&type=raw&security=reality-tcp&sni=example.com&fp=chrome" +

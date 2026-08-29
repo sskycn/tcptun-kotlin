@@ -35,8 +35,8 @@ class AndroidBridgeContractTest {
 
     @Test
     fun currentBridgeReportsVersionedCoreIdentity() {
-        assertEquals("v0.4.0", Androidbridge.coreVersion())
-        assertTrue(Androidbridge.coreBuildID().matches(Regex("[0-9a-f]{12,40}(?:-dirty)?")))
+        assertEquals("v0.4.1", Androidbridge.coreVersion())
+        assertEquals("017b9270d99d", Androidbridge.coreBuildID())
     }
 
     @Test
@@ -222,6 +222,84 @@ class AndroidBridgeContractTest {
         assertEquals(4_194_304, mux.getInt("resume_buffer_size"))
         assertNull(ProfileUriCodec.encodeForQr(restored))
         Androidbridge.validateConfig(config.toString())
+    }
+
+    @Test
+    fun structuredAutoCarrierPreferenceRoundTripsThroughBridgeT3() {
+        val profile = AppConfig(
+            name = "auto-tcp-preference",
+            serverHost = "edge.example.com",
+            serverPort = "443",
+            protocol = "native",
+            transport = "raw",
+            token = "secret",
+            sni = "edge.example.com",
+            tls = true,
+            mux = true,
+            carrierMode = "auto",
+            carrierPrefer = "tcp",
+            carrierUdpMode = "auto",
+        )
+        val persisted = AppConfig.fromJson(profile.toJson())
+        assertEquals("tcp", persisted.carrierPrefer)
+
+        val runtime = JSONObject(persisted.toBridgeJson("127.0.0.1:1080"))
+        val carrier = runtime.getJSONArray("outbounds").getJSONObject(0).getJSONObject("carrier")
+        assertEquals("auto", carrier.getString("mode"))
+        assertEquals("tcp", carrier.getString("prefer"))
+        assertEquals("auto", carrier.getString("udp_mode"))
+        Androidbridge.validateConfig(runtime.toString())
+
+        val encoded = TcptunProfileCodec.encode(persisted)
+        assertTrue(encoded.startsWith("T3:"))
+        val decoded = TcptunProfileCodec.decode(encoded)
+        assertEquals("auto", decoded.carrierMode)
+        assertEquals("tcp", decoded.carrierPrefer)
+        assertEquals("auto", decoded.carrierUdpMode)
+    }
+
+    @Test
+    fun rawJsonPreservesValidOutboundPreferenceAndRejectsInvalidPlacement() {
+        val valid = AppConfig(
+            name = "raw auto",
+            rawConfigJson = """{
+                "inbounds":[],
+                "outbounds":[{
+                    "tag":"proxy","type":"native","address":["edge.example.com:443"],
+                    "token":"secret","network":["tcp","udp"],"transport":{"type":"raw"},
+                    "security":{"type":"tls","server_name":"edge.example.com"},
+                    "carrier":{"mode":"auto","prefer":"quic"},"mux":{"enabled":true}
+                }],
+                "route":{"default_outbound":"proxy","rules":[]}
+            }""".trimIndent(),
+        )
+        val prepared = JSONObject(valid.toBridgeJson("127.0.0.1:1080"))
+        val carrier = prepared.getJSONArray("outbounds").getJSONObject(0).getJSONObject("carrier")
+        assertEquals("auto", carrier.getString("mode"))
+        assertEquals("quic", carrier.getString("prefer"))
+        Androidbridge.validateConfig(prepared.toString())
+
+        val inboundPreference = valid.copy(
+            rawConfigJson = """{
+                "inbounds":[{"tag":"server","type":"native","carrier":{"mode":"auto","prefer":"tcp"}}],
+                "outbounds":[{"tag":"direct","type":"direct"}],
+                "route":{"default_outbound":"direct"}
+            }""".trimIndent(),
+        )
+        assertTrue(inboundPreference.validate().orEmpty().contains("outbound-only"))
+
+        val singleCarrierPreference = valid.copy(
+            rawConfigJson = valid.rawConfigJson.replace(
+                "\"mode\":\"auto\",\"prefer\":\"quic\"",
+                "\"mode\":\"tcp\",\"prefer\":\"tcp\"",
+            ),
+        )
+        assertTrue(singleCarrierPreference.validate().orEmpty().contains("requires carrier.mode=auto"))
+
+        val unknownPreference = valid.copy(
+            rawConfigJson = valid.rawConfigJson.replace("\"prefer\":\"quic\"", "\"prefer\":\"fastest\""),
+        )
+        assertTrue(unknownPreference.validate().orEmpty().contains("unsupported value"))
     }
 
     @Test
