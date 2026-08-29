@@ -48,9 +48,6 @@
                 <category android:name="android.intent.category.BROWSABLE" />
 
                 <data android:scheme="native" />
-                <data android:scheme="vless" />
-                <data android:scheme="vmess" />
-                <data android:scheme="trojan" />
             </intent-filter>
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />

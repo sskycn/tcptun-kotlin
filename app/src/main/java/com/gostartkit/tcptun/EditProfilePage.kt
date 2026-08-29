@@ -358,23 +358,22 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                     modifier = Modifier.weight(0.52f),
                                 )
                             }
-                            ChoiceRow(
-                                stringResource(R.string.protocol),
-                                config.protocol,
-                                AppConfig.Protocols,
-                            ) {
-                                config = config.copy(
-                                    protocol = it,
-                                    carrierMode = if (it == "native") config.carrierMode else "tcp",
-                                    carrierUdpMode = if (it == "native") config.carrierUdpMode else "",
+                            if (config.protocol != "native") {
+                                Text(
+                                    text = stringResource(
+                                        R.string.legacy_protocol_unsupported,
+                                        config.protocol,
+                                    ),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.error,
                                 )
-                                if (it != "native") {
-                                    config = config.withoutResumableMux().withoutEch().copy(
-                                        carrierInitialStreamReceiveWindow = 0,
-                                        carrierMaxStreamReceiveWindow = 0,
-                                        carrierInitialConnectionReceiveWindow = 0,
-                                        carrierMaxConnectionReceiveWindow = 0,
-                                    )
+                                Button(
+                                    onClick = {
+                                        config = config.copy(protocol = "native", token = "")
+                                        formError = ""
+                                    },
+                                ) {
+                                    Text(stringResource(R.string.reconfigure_as_native))
                                 }
                             }
                             ChoiceRow(
@@ -433,7 +432,6 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                         tunnelSecurity = "reality",
                                         tls = false,
                                         tlsInsecure = false,
-                                        realityFingerprint = config.realityFingerprint.ifBlank { "chrome" },
                                         carrierMode = if (config.protocol == "native" && config.mux) {
                                             config.carrierMode.takeIf { it in AppConfig.CarrierModes && it != "tcp" }
                                                 ?: "auto"
@@ -473,30 +471,17 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                     singleLine = true,
                                     modifier = Modifier.fillMaxWidth(),
                                 )
-                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    OutlinedTextField(
-                                        value = config.realityFingerprint,
-                                        onValueChange = {
-                                            config = config.copy(
-                                                realityFingerprint = it.take(MaxProfileChoiceInputLength),
-                                            )
-                                        },
-                                        label = { FieldChromeText(stringResource(R.string.field_fingerprint)) },
-                                        singleLine = true,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    OutlinedTextField(
-                                        value = config.realityShortId,
-                                        onValueChange = {
-                                            config = config.copy(
-                                                realityShortId = it.take(MaxProfileChoiceInputLength),
-                                            )
-                                        },
-                                        label = { FieldChromeText(stringResource(R.string.field_short_id)) },
-                                        singleLine = true,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                }
+                                OutlinedTextField(
+                                    value = config.realityShortId,
+                                    onValueChange = {
+                                        config = config.copy(
+                                            realityShortId = it.take(MaxProfileChoiceInputLength),
+                                        )
+                                    },
+                                    label = { FieldChromeText(stringResource(R.string.field_short_id)) },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
                             }
                             if (isReality) {
                                 OutlinedTextField(
@@ -625,7 +610,6 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                         tunnelSecurity = "reality",
                                         tls = false,
                                         tlsInsecure = false,
-                                        realityFingerprint = config.realityFingerprint.ifBlank { "chrome" },
                                         mux = true,
                                         carrierMode = "auto",
                                     ).withoutEch()
@@ -636,11 +620,6 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                         mux = true,
                                         carrierMode = "quic",
                                         carrierUdpMode = config.carrierUdpMode.ifBlank { "auto" },
-                                        realityFingerprint = if (isReality) {
-                                            config.realityFingerprint.ifBlank { "chrome" }
-                                        } else {
-                                            config.realityFingerprint
-                                        },
                                     ).withoutResumableMux().withoutEch()
                                     else -> config.copy(
                                         carrierMode = "tcp",
@@ -871,5 +850,4 @@ private fun EditTopBar(
         },
     )
 }
-
 

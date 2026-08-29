@@ -7,10 +7,16 @@ internal fun AppConfig.validationError(): String? {
     if (serverHost.isBlank()) return "server address is required"
     val port = serverPort.toIntOrNull() ?: return "server port must be a number"
     if (port !in 1..65535) return "server port must be between 1 and 65535"
-    if (protocol !in AppConfig.Protocols) return "unsupported protocol: $protocol"
+    if (protocol != "native") {
+        return if (protocol.trim().lowercase() in RemovedTunnelProtocols) {
+            unsupportedTunnelProtocolMessage(protocol)
+        } else {
+            "unsupported protocol: $protocol"
+        }
+    }
     if (transport !in AppConfig.Transports) return "unsupported transport: $transport"
     if (upstreamProtocol !in AppConfig.UpstreamProtocols) return "unsupported upstream protocol: $upstreamProtocol"
-    if (protocol != "native" && token.isBlank()) return "$protocol credential is required"
+    if (token.isBlank()) return "native token is required"
     val normalizedSecurity = tunnelSecurity.trim().lowercase()
     if (normalizedSecurity !in AppConfig.TunnelSecurityTypes) return "unsupported security: $tunnelSecurity"
     if (normalizedSecurity.isNotBlank() && tls) return "TLS cannot be combined with tunnel security"
@@ -119,13 +125,8 @@ internal fun AppConfig.validationError(): String? {
         }
         if (normalizedSecurity == "reality") {
             if (realityShortId.isBlank()) return "$normalizedCarrierMode carrier requires a short ID"
-            val fingerprint = realityFingerprint.trim().lowercase()
-            if (fingerprint.isNotBlank() && fingerprint != "chrome") {
-                return "$normalizedCarrierMode carrier currently supports only the chrome fingerprint"
-            }
         }
     }
     if (path.isBlank()) return "path is required"
     return null
 }
-

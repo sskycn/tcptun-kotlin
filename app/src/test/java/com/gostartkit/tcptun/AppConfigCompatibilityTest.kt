@@ -58,7 +58,6 @@ class AppConfigCompatibilityTest {
             tunnelSecurity = "reality",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
             realityShortId = "a65f93c1",
-            realityFingerprint = "chrome",
             realitySpiderX = "/",
             mux = true,
             carrierMode = "tcp",
@@ -83,7 +82,6 @@ class AppConfigCompatibilityTest {
             mux = true,
             carrierMode = "auto",
             realityShortId = "a65f93c1",
-            realityFingerprint = "chrome",
         )
         assertNull(reality.validate())
         assertNull(reality.copy(carrierMode = "tcp").validate())
@@ -102,17 +100,19 @@ class AppConfigCompatibilityTest {
     }
 
     @Test
-    fun nonNativeProfilesRequireCredentials() {
+    fun removedStructuredProtocolsRemainReadableButAreRejected() {
         listOf("vless", "vmess", "trojan").forEach { protocol ->
             val profile = AppConfig(
                 name = protocol,
                 serverHost = "edge.example.com",
                 serverPort = "443",
                 protocol = protocol,
-                token = "",
+                token = "legacy-credential",
             )
 
-            assertEquals("$protocol credential is required", profile.validate())
+            assertEquals(protocol, profile.protocol)
+            assertEquals("legacy-credential", profile.token)
+            assertEquals("tcptun-go v0.4.0 no longer supports $protocol", profile.validate())
         }
     }
 
@@ -128,7 +128,7 @@ class AppConfigCompatibilityTest {
         val profile = resumableRealityProfile()
 
         assertEquals(
-            "mux resume requires native protocol",
+            "tcptun-go v0.4.0 no longer supports vless",
             profile.copy(protocol = "vless").validate(),
         )
         assertEquals(
@@ -173,7 +173,7 @@ class AppConfigCompatibilityTest {
         assertNull(profile.validate())
         assertEquals(listOf(443, 8443), parseEchPorts(profile.echPorts))
         assertEquals(
-            "ECH requires native protocol",
+            "tcptun-go v0.4.0 no longer supports vless",
             profile.copy(protocol = "vless").validate(),
         )
         assertEquals(
@@ -201,7 +201,6 @@ class AppConfigCompatibilityTest {
         tunnelSecurity = "reality",
         realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
         realityShortId = "a65f93c1",
-        realityFingerprint = "chrome",
         mux = true,
         carrierMode = "auto",
         muxResume = true,

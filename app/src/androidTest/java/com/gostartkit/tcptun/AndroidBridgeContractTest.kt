@@ -35,7 +35,7 @@ class AndroidBridgeContractTest {
 
     @Test
     fun currentBridgeReportsVersionedCoreIdentity() {
-        assertEquals("v0.3.1", Androidbridge.coreVersion())
+        assertEquals("v0.4.0", Androidbridge.coreVersion())
         assertTrue(Androidbridge.coreBuildID().matches(Regex("[0-9a-f]{12,40}(?:-dirty)?")))
     }
 
@@ -152,6 +152,48 @@ class AndroidBridgeContractTest {
     }
 
     @Test
+    fun legacyStoredRealityFingerprintIsDiscardedFromCurrentModelAndRuntime() {
+        val legacy = JSONObject()
+            .put("name", "legacy reality")
+            .put("serverHost", "edge.example.com")
+            .put("serverPort", "443")
+            .put("protocol", "native")
+            .put("token", "native-secret")
+            .put("sni", "example.com")
+            .put("tunnelSecurity", "reality")
+            .put("realityPublicKey", "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY")
+            .put("realityShortId", "a65f93c1")
+            .put("realityFingerprint", "chrome")
+        val profile = AppConfig.fromJson(legacy)
+
+        assertFalse(profile.toJson().has("realityFingerprint"))
+        val security = JSONObject(profile.toBridgeJson("127.0.0.1:1080"))
+            .getJSONArray("outbounds")
+            .getJSONObject(0)
+            .getJSONObject("security")
+        assertFalse(security.has("fingerprint"))
+        Androidbridge.validateConfig(JSONObject(profile.toBridgeJson("127.0.0.1:1080")).toString())
+    }
+
+    @Test
+    fun rawProfilesRejectRemovedTunnelProtocolsAndRealityFingerprint() {
+        RemovedTunnelProtocols.forEach { protocol ->
+            val profile = AppConfig(
+                name = "legacy $protocol",
+                rawConfigJson = """{"outbounds":[{"tag":"proxy","type":"$protocol"}]}""",
+            )
+            assertTrue(profile.validate().orEmpty().contains("no longer supports $protocol"))
+            assertTrue(runCatching { profile.toBridgeJson("127.0.0.1:1080") }.isFailure)
+        }
+        val fingerprint = AppConfig(
+            name = "legacy fingerprint",
+            rawConfigJson = """{"outbounds":[{"tag":"proxy","type":"native","token":"secret","security":{"fingerprint":"chrome"}}]}""",
+        )
+        assertTrue(fingerprint.validate().orEmpty().contains("security.fingerprint was removed"))
+        assertTrue(runCatching { fingerprint.toBridgeJson("127.0.0.1:1080") }.isFailure)
+    }
+
+    @Test
     fun structuredResumableProfileRoundTripsAndValidatesInCurrentBridge() {
         val profile = AppConfig(
             name = "resumable",
@@ -164,7 +206,6 @@ class AndroidBridgeContractTest {
             tunnelSecurity = "reality",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
             realityShortId = "a65f93c1",
-            realityFingerprint = "chrome",
             mux = true,
             carrierMode = "auto",
             muxResume = true,
@@ -776,14 +817,9 @@ class AndroidBridgeContractTest {
 
     @Test
     fun localProxyUsersGenerateNewSchemaAndRawAuthenticatedUsersRemainUntouched() {
-        val uuidA = "11111111-1111-4111-8111-111111111111"
-        val uuidB = "22222222-2222-4222-8222-222222222222"
         val raw = """{
             "inbounds":[
                 {"tag":"native-users","type":"native","address":["127.0.0.1:19201"],"network":["tcp"],"users":[{"id":"native-a"},{"id":"native-b"}],"transport":{"type":"raw"}},
-                {"tag":"vless-users","type":"vless","address":["127.0.0.1:19202"],"network":["tcp"],"users":[{"id":"$uuidA","flow":"xtls-rprx-vision"},{"id":"$uuidB"}],"transport":{"type":"raw"}},
-                {"tag":"vmess-users","type":"vmess","address":["127.0.0.1:19203"],"network":["tcp"],"users":[{"id":"$uuidA"},{"id":"$uuidB"}],"transport":{"type":"raw"}},
-                {"tag":"trojan-users","type":"trojan","address":["127.0.0.1:19204"],"network":["tcp"],"users":[{"password":"trojan-a"},{"password":"trojan-b"}],"transport":{"type":"raw"}},
                 {"tag":"mixed-users","type":"mixed","address":["127.0.0.1:19205"],"network":["tcp","udp"],"users":[{"username":"raw-a","password":"a"},{"username":"raw-b","password":"b"}]},
                 {"tag":"socks-users","type":"socks5","address":["127.0.0.1:19206"],"network":["tcp","udp"],"users":[{"username":"raw-c","password":"c"},{"username":"raw-d","password":"d"}]}
             ],
@@ -1369,7 +1405,6 @@ class AndroidBridgeContractTest {
             tunnelSecurity = "reality",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
             realityShortId = "a65f93c1dbc5d54a",
-            realityFingerprint = "chrome",
             mux = true,
             carrierMode = "quic",
             carrierUdpMode = "auto",
@@ -1383,7 +1418,7 @@ class AndroidBridgeContractTest {
         val security = proxy.getJSONObject("security")
         assertEquals("reality", security.getString("type"))
         assertEquals("example.com", security.getString("server_name"))
-        assertEquals("chrome", security.getString("fingerprint"))
+        assertFalse(security.has("fingerprint"))
         assertFalse(security.has("insecure"))
         val carrier = proxy.getJSONObject("carrier")
         assertEquals("quic", carrier.getString("mode"))
@@ -1399,34 +1434,33 @@ class AndroidBridgeContractTest {
     }
 
     @Test
-    fun strictConfigMapsProtocolCredentials() {
-        val uuid = "00000000-0000-4000-8000-000000000000"
+    fun strictConfigUsesNativeTokenAndRejectsRemovedProtocols() {
+        val token = "native-token"
         val localOnly = JSONObject(
             AppConfig(
                 serverHost = "2001:db8::1",
                 serverPort = "443",
-                token = uuid,
-                protocol = "vless",
+                token = token,
+                protocol = "native",
             ).toBridgeJson(localListenAddr = "0.0.0.0:18081"),
         )
         val localOnlyOutbounds = localOnly.getJSONArray("outbounds")
-        assertEquals(uuid, localOnlyOutbounds.getJSONObject(0).getString("uuid"))
+        assertEquals(token, localOnlyOutbounds.getJSONObject(0).getString("token"))
+        assertFalse(localOnlyOutbounds.getJSONObject(0).has("uuid"))
+        assertFalse(localOnlyOutbounds.getJSONObject(0).has("password"))
         assertEquals("[2001:db8::1]:443", localOnlyOutbounds.getJSONObject(0).getJSONArray("address").getString(0))
         assertEquals(2, localOnlyOutbounds.length())
 
-        val routedExternal = JSONObject(
-            AppConfig(
+        RemovedTunnelProtocols.forEach { removed ->
+            assertTrue(runCatching {
+                AppConfig(
                 serverHost = "192.0.2.1",
                 serverPort = "443",
-                token = "trojan-password",
-                protocol = "trojan",
-            ).toBridgeJson(localListenAddr = "0.0.0.0:18082"),
-        )
-        val routedOutbounds = routedExternal.getJSONArray("outbounds")
-        assertEquals("trojan-password", routedOutbounds.getJSONObject(0).getString("password"))
-        assertEquals(2, routedOutbounds.length())
-        val routedRules = routedExternal.getJSONObject("route").getJSONArray("rules")
-        assertEquals(0, routedRules.length())
+                    token = "legacy-credential",
+                    protocol = removed,
+                ).toBridgeJson(localListenAddr = "0.0.0.0:18082")
+            }.isFailure)
+        }
     }
 
     @Test
@@ -1682,7 +1716,6 @@ class AndroidBridgeContractTest {
                 "security": {
                   "type": "reality",
                   "server_name": "example.com",
-                  "fingerprint": "chrome",
                   "public_key": "3HNAKQ6cNuB2YDXVmwtMRLKpfGhBnykI2rXDmW9CKT4",
                   "short_id": "00",
                   "spider_x": "/"
@@ -1702,6 +1735,7 @@ class AndroidBridgeContractTest {
         val outbound = prepared.getJSONArray("outbounds").getJSONObject(0)
         assertEquals("[2001:db8::1]:443", outbound.getJSONArray("address").getString(0))
         assertEquals("reality", outbound.getJSONObject("security").getString("type"))
+        assertFalse(outbound.getJSONObject("security").has("fingerprint"))
     }
 
     private fun assertEngineStarts(config: String) {

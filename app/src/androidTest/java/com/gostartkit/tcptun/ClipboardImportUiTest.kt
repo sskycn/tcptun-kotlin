@@ -68,7 +68,6 @@ class ClipboardImportUiTest {
                 "security": {
                   "type": "reality",
                   "server_name": "example.com",
-                  "fingerprint": "chrome",
                   "public_key": "3HNAKQ6cNuB2YDXVmwtMRLKpfGhBnykI2rXDmW9CKT4",
                   "short_id": "00",
                   "spider_x": "/"

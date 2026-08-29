@@ -41,7 +41,7 @@ class PendingUiStateCodecTest {
 
     @Test
     fun deepLinkSavedStateContainsOnlyOpaqueOneTimeId() {
-        val profileUri = "vless://secret-token@secret.example:443"
+        val profileUri = "native://secret-token@secret.example:443"
         val operationId = encodePendingProfileUri(profileUri)
 
         assertFalse(operationId.contains("secret-token"))

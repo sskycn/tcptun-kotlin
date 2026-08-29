@@ -46,7 +46,6 @@ class ProfileQrCodeUiTest {
             sni = "example.com",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
             realityShortId = "a65f93c1dbc5d54a",
-            realityFingerprint = "chrome",
             realitySpiderX = "/",
             mux = true,
         )
@@ -85,7 +84,6 @@ class ProfileQrCodeUiTest {
             tunnelSecurity = "reality",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
             realityShortId = "a65f93c1",
-            realityFingerprint = "chrome",
             mux = true,
             carrierMode = "auto",
             muxResume = true,

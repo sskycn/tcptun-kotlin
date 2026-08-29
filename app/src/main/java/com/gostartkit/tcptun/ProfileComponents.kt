@@ -486,6 +486,7 @@ internal data class ProfilePresentation(
     val label: String,
     val maskedAddress: String,
     val shareUri: String?,
+    val validationError: String?,
 )
 
 @Composable
@@ -495,6 +496,7 @@ internal fun rememberProfilePresentation(profile: AppConfig): ProfilePresentatio
             label = profile.label(),
             maskedAddress = if (profile.rawConfigJson.isBlank()) profile.maskedAddress() else "",
             shareUri = null,
+            validationError = profile.validate(),
         )
     }
     val presentation by produceState(initialValue = initial, profile) {
@@ -503,6 +505,7 @@ internal fun rememberProfilePresentation(profile: AppConfig): ProfilePresentatio
                 label = profile.label(),
                 maskedAddress = profile.maskedAddress(),
                 shareUri = ProfileUriCodec.encode(profile),
+                validationError = profile.validate(),
             )
         }
     }
@@ -530,11 +533,13 @@ internal fun ProfileRow(
     val shareable = presentation.shareUri != null
     val colors = MaterialTheme.colorScheme
     val degraded = running && health?.status == ProfileHealthStatus.Degraded
-    val primaryContentColor = if (degraded) colors.onErrorContainer else colors.onSurface
-    val secondaryContentColor = if (degraded) colors.onErrorContainer else colors.onSurfaceVariant
+    val invalid = presentation.validationError != null
+    val primaryContentColor = if (degraded || invalid) colors.onErrorContainer else colors.onSurface
+    val secondaryContentColor = if (degraded || invalid) colors.onErrorContainer else colors.onSurfaceVariant
     val rowColor by animateColorAsState(
         targetValue = when {
             degraded -> colors.errorContainer
+            invalid -> colors.errorContainer
             running -> colors.secondaryContainer
             else -> colors.surfaceContainerLow
         },
@@ -558,7 +563,7 @@ internal fun ProfileRow(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 88.dp)
-                        .clickable(enabled = enabled) {
+                        .clickable(enabled = enabled && !invalid) {
                             if (actionsRevealed) {
                                 closeActions()
                             } else {
@@ -608,6 +613,15 @@ internal fun ProfileRow(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        presentation.validationError?.let { validationError ->
+                            Text(
+                                validationError,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = secondaryContentColor,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                         if (degraded && !health?.error.isNullOrBlank()) {
                             Text(
                                 profileHealthErrorSummary(health?.error.orEmpty()),

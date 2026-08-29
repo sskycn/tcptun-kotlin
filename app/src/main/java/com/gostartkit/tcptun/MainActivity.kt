@@ -312,7 +312,6 @@ internal fun AppConfig.boundedForEditor(): AppConfig = copy(
     flow = flow.take(MaxProfileChoiceInputLength),
     realityPublicKey = realityPublicKey.take(MaxRealityKeyInputLength),
     realityShortId = realityShortId.take(MaxProfileChoiceInputLength),
-    realityFingerprint = realityFingerprint.take(MaxProfileChoiceInputLength),
     realitySpiderX = realitySpiderX.take(MaxProfileUriLength),
     echPublicName = echPublicName.take(MaxProfileHostInputLength),
     echPublicKey = echPublicKey.take(MaxEchKeyInputLength),

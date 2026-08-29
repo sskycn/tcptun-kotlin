@@ -41,5 +41,6 @@ class VpnMembershipStressFixtureTest {
         name = id,
         serverHost = "127.0.0.1",
         serverPort = port.toString(),
+        token = "$id-token",
     )
 }

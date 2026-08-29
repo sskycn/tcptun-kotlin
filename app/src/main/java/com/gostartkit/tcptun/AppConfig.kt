@@ -15,6 +15,10 @@ internal val LogLevels = listOf("debug", DefaultLogLevel, "warn", "error", "off"
 internal val AndroidTunNetworks = listOf("tcp", "udp")
 internal const val MaxProfileIdLength = 256
 internal const val DefaultEchPorts = "443"
+internal val RemovedTunnelProtocols = setOf("vless", "vmess", "trojan")
+
+internal fun unsupportedTunnelProtocolMessage(protocol: String): String =
+    "tcptun-go v0.4.0 no longer supports ${protocol.trim().lowercase()}"
 
 /** Inbound tags matched by managed route rules. TUN always; local mixed/SOCKS when enabled. */
 internal fun managedRouteInboundTags(routeLocalProxyTraffic: Boolean): JSONArray =
@@ -148,7 +152,6 @@ data class AppConfig(
     val flow: String = "",
     val realityPublicKey: String = "",
     val realityShortId: String = "",
-    val realityFingerprint: String = "",
     val realitySpiderX: String = "",
     val echEnabled: Boolean = false,
     val echPublicName: String = "",
@@ -205,7 +208,6 @@ data class AppConfig(
             flow,
             realityPublicKey,
             realityShortId,
-            realityFingerprint,
             realitySpiderX,
             echPublicName,
             echPublicKey,
@@ -236,6 +238,13 @@ data class AppConfig(
                 routeLocalProxyTraffic = routeLocalProxyTraffic,
             )
         }
+        require(protocol.trim().equals("native", ignoreCase = true)) {
+            if (protocol.trim().lowercase() in RemovedTunnelProtocols) {
+                unsupportedTunnelProtocolMessage(protocol)
+            } else {
+                "unsupported protocol: $protocol"
+            }
+        }
         val (listenHost, listenPort) = splitHostPort(localListenAddr)
         val normalizedListenAddr = joinHostPort(listenHost, listenPort)
         val normalizedLocalProxyProtocol = normalizeLocalProxyProtocol(localProxyProtocol)
@@ -250,7 +259,7 @@ data class AppConfig(
 
         val proxy = JSONObject()
             .put("tag", "proxy")
-            .put("type", protocol)
+            .put("type", "native")
             .put("address", JSONArray().put(serverAddr))
             .put("flow", flow.trim())
             .put("network", JSONArray().apply { AndroidTunNetworks.forEach(::put) })
@@ -319,11 +328,7 @@ data class AppConfig(
                 },
             )
         }
-        when (protocol) {
-            "vless", "vmess" -> proxy.put("uuid", token.trim())
-            "trojan" -> proxy.put("password", token.trim())
-            else -> proxy.put("token", token.trim())
-        }
+        proxy.put("token", token.trim())
         val normalizedSecurity = tunnelSecurity.trim().lowercase()
         if (normalizedSecurity == "reality") {
             proxy.put(
@@ -331,7 +336,6 @@ data class AppConfig(
                 JSONObject().apply {
                     put("type", "reality")
                     .put("server_name", sni.trim())
-                    .put("fingerprint", realityFingerprint.trim())
                     .put("public_key", realityPublicKey.trim())
                     .put("short_id", realityShortId.trim())
                     .put("spider_x", realitySpiderX.trim())
@@ -403,6 +407,7 @@ data class AppConfig(
     ): String {
         requireSafeJsonNesting(rawConfigJson)
         val root = JSONObject(rawConfigJson)
+        validateRawCoreCompatibility(root)?.let { throw IllegalArgumentException(it) }
         // tcptun-go removed the top-level discovery config in 30ff0a1 and now
         // rejects it through strict JSON decoding. Keep previously saved full
         // configs usable while preserving every currently supported section.
@@ -817,6 +822,7 @@ data class AppConfig(
             requireSafeJsonNesting(raw)
             val root = JSONObject(raw)
             if (root.has("mode")) return@runRecoverableCatching "legacy mode-based configuration is not supported"
+            validateRawCoreCompatibility(root)?.let { return@runRecoverableCatching it }
             val outbounds = root.optJSONArray("outbounds")
                 ?: return@runRecoverableCatching "outbounds is required"
             if (outbounds.length() == 0) return@runRecoverableCatching "outbounds must not be empty"
@@ -825,6 +831,26 @@ data class AppConfig(
             }
             if (hasTaggedOutbound) null else "at least one tagged outbound is required"
         }.getOrElse { it.message ?: "invalid tcptun JSON" }
+    }
+
+    private fun validateRawCoreCompatibility(root: JSONObject): String? {
+        listOf("inbounds", "outbounds").forEach { section ->
+            val entries = root.optJSONArray(section) ?: return@forEach
+            for (index in 0 until entries.length()) {
+                val endpoint = entries.optJSONObject(index) ?: continue
+                val type = endpoint.optString("type").trim().lowercase()
+                if (type in RemovedTunnelProtocols) {
+                    return "$section[$index]: ${unsupportedTunnelProtocolMessage(type)}"
+                }
+                if (section == "outbounds" && endpoint.has("uuid")) {
+                    return "$section[$index].uuid was removed in tcptun-go v0.4.0"
+                }
+                if (endpoint.optJSONObject("security")?.has("fingerprint") == true) {
+                    return "$section[$index].security.fingerprint was removed in tcptun-go v0.4.0"
+                }
+            }
+        }
+        return null
     }
 
     private fun splitHostPort(address: String): Pair<String, Int> {
@@ -858,7 +884,7 @@ data class AppConfig(
     }
 
     companion object {
-        val Protocols = listOf("native", "vless", "vmess", "trojan")
+        val Protocols = listOf("native")
         val Transports = listOf("raw", "ws", "h2", "h3")
         val UpstreamProtocols = LocalProxyProtocols
         val CarrierModes = listOf("", "tcp", "auto", "quic")
@@ -917,7 +943,6 @@ data class AppConfig(
                 flow = obj.optString("flow"),
                 realityPublicKey = obj.optString("realityPublicKey"),
                 realityShortId = obj.optString("realityShortId"),
-                realityFingerprint = obj.optString("realityFingerprint"),
                 realitySpiderX = obj.optString("realitySpiderX"),
                 echEnabled = obj.optBoolean("echEnabled", false),
                 echPublicName = obj.optString("echPublicName"),
@@ -1035,7 +1060,6 @@ data class AppConfig(
             .put("flow", flow)
             .put("realityPublicKey", realityPublicKey)
             .put("realityShortId", realityShortId)
-            .put("realityFingerprint", realityFingerprint)
             .put("realitySpiderX", realitySpiderX)
             .put("echEnabled", echEnabled)
             .put("echPublicName", echPublicName)

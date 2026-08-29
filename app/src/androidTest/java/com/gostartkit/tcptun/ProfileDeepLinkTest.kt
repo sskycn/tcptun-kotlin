@@ -19,7 +19,7 @@ class ProfileDeepLinkTest {
     @Test
     fun manifestHandlesEveryTcptunGoUriScheme() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        assertEquals(setOf("native", "vless", "vmess", "trojan"), SupportedProfileUriSchemes)
+        assertEquals(setOf("native"), SupportedProfileUriSchemes)
 
         SupportedProfileUriSchemes.forEach { scheme ->
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse("$scheme://credential@example.com:443"))
@@ -77,7 +77,7 @@ class ProfileDeepLinkTest {
 
     @Test
     fun versionedHttpsLinkRoundTripsExistingProfileUri() {
-        val profileUri = "vless://00000000-0000-4000-8000-000000000000@example.com:443" +
+        val profileUri = "native://native-token@example.com:443" +
             "?security=tls&type=raw#edge"
         val link = ProfileDeepLinkCodec.encode(profileUri)
 
@@ -85,9 +85,18 @@ class ProfileDeepLinkTest {
         assertFalse(link.substringAfter("#p=").contains('='))
         assertEquals(profileUri, ProfileDeepLinkCodec.decode(link).getOrThrow())
         val profile = ProfileUriCodec.decode(link).getOrThrow()
-        assertEquals("vless", profile.protocol)
+        assertEquals("native", profile.protocol)
         assertEquals("example.com", profile.serverHost)
         assertEquals("edge", profile.name)
+    }
+
+    @Test
+    fun removedProtocolUrisFailWithoutConvertingCredentialsToNative() {
+        RemovedTunnelProtocols.forEach { protocol ->
+            val result = ProfileUriCodec.decode("$protocol://legacy-credential@example.com:443")
+            assertTrue(result.isFailure)
+            assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("no longer supports $protocol"))
+        }
     }
 
     @Test
@@ -228,7 +237,6 @@ class ProfileDeepLinkTest {
         assertEquals("reality", qrProfile.tunnelSecurity)
         assertEquals(profile.realityPublicKey, qrProfile.realityPublicKey)
         assertEquals(profile.realityShortId, qrProfile.realityShortId)
-        assertEquals("chrome", qrProfile.realityFingerprint)
         assertEquals("", qrProfile.realitySpiderX)
         assertEquals("quic", qrProfile.carrierMode)
         assertEquals("auto", qrProfile.carrierUdpMode)
@@ -248,11 +256,11 @@ class ProfileDeepLinkTest {
                 serverHost = "edge.example.com",
                 serverPort = "443",
                 protocol = protocol,
-                transport = if (protocol == "vmess") "ws" else "raw",
+                transport = "raw",
                 token = "00000000-0000-4000-8000-000000000000",
                 tls = true,
                 sni = "edge.example.com",
-                path = if (protocol == "vmess") "/ray" else "/proxy",
+                path = "/proxy",
                 mux = true,
                 carrierMode = "tcp",
                 muxMaxSessions = 4,
@@ -302,9 +310,8 @@ class ProfileDeepLinkTest {
                 sni = "example.com",
                 realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
                 realityShortId = "a65f93c1dbc5d54a",
-                realityFingerprint = "chrome",
                 realitySpiderX = "/",
-                flow = if (protocol == "vless") "xtls-rprx-vision" else "",
+                flow = "xtls-rprx-vision",
                 mux = false,
             )
             val qrPayload = requireNotNull(ProfileUriCodec.encodeForQr(profile))
@@ -315,26 +322,23 @@ class ProfileDeepLinkTest {
             val decoded = ProfileUriCodec.decode(qrPayload).getOrThrow()
             assertEquals(protocol, decoded.protocol)
             assertEquals("reality", decoded.tunnelSecurity)
-            assertEquals("chrome", decoded.realityFingerprint)
             assertEquals("a65f93c1dbc5d54a", decoded.realityShortId)
             assertEquals("/", decoded.realitySpiderX)
             assertEquals(profile.realityPublicKey, decoded.realityPublicKey)
             assertEquals(profile.sni, decoded.sni)
             assertFalse(decoded.mux)
             assertEquals("raw", decoded.transport)
-            if (protocol == "vless") {
-                assertEquals("xtls-rprx-vision", decoded.flow)
-            }
+            assertEquals("xtls-rprx-vision", decoded.flow)
         }
     }
 
     @Test
     fun compactQrKeepsExplicitNonDefaults() {
         val profile = AppConfig(
-            name = "vless-tls",
+            name = "native-tls",
             serverHost = "edge.example.com",
             serverPort = "443",
-            protocol = "vless",
+            protocol = "native",
             transport = "ws",
             token = "00000000-0000-4000-8000-000000000000",
             tls = true,
@@ -346,7 +350,7 @@ class ProfileDeepLinkTest {
         assertTrue(qrPayload.startsWith("T3:"))
 
         val decoded = ProfileUriCodec.decode(qrPayload).getOrThrow()
-        assertEquals("vless", decoded.protocol)
+        assertEquals("native", decoded.protocol)
         assertEquals("", decoded.tunnelSecurity)
         assertTrue(decoded.tls)
         assertEquals("ws", decoded.transport)
@@ -360,7 +364,7 @@ class ProfileDeepLinkTest {
             name = "edge|prod #1",
             serverHost = "www.microsoft.com",
             serverPort = "443",
-            protocol = "vless",
+            protocol = "native",
             transport = "raw",
             token = "00000000-0000-4000-8000-000000000000",
             tunnelSecurity = "reality",
@@ -368,7 +372,6 @@ class ProfileDeepLinkTest {
             flow = "xtls-rprx-vision",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
             realityShortId = "abcd1234",
-            realityFingerprint = "firefox",
             realitySpiderX = "/crawl",
             mux = false,
             tlsInsecure = false,
@@ -382,7 +385,6 @@ class ProfileDeepLinkTest {
         assertEquals("reality", decoded.tunnelSecurity)
         assertEquals(profile.realityPublicKey, decoded.realityPublicKey)
         assertEquals(profile.realityShortId, decoded.realityShortId)
-        assertEquals(profile.realityFingerprint, decoded.realityFingerprint)
         assertEquals(profile.realitySpiderX, decoded.realitySpiderX)
         assertEquals(profile.flow, decoded.flow)
         assertFalse(decoded.mux)
@@ -420,12 +422,42 @@ class ProfileDeepLinkTest {
     }
 
     @Test
-    fun legacyT2PayloadStillDecodesAndReencodesAsT3() {
+    fun legacyT2RemovedProtocolPayloadIsRejected() {
         val legacy = "T2:+1REESK007MO4UU1V2TDWL%53+UKDNS6ONP18VCRZCB\$CBECP9EXYC/:52%E1/DXTDJPC -DB\$CBECP9ERZCUPCAZDA8GLB0  C93D:"
 
-        val decoded = ProfileUriCodec.decode(legacy).getOrThrow()
-        assertEquals("vless", decoded.protocol)
-        assertTrue(requireNotNull(ProfileUriCodec.encodeForQr(decoded)).startsWith("T3:"))
+        assertTrue(ProfileUriCodec.decode(legacy).isFailure)
+    }
+
+    @Test
+    fun currentBridgeStillDecodesNativeT2Golden() {
+        val nativeT2 = "T2:*FMG:K-50KFEOEDQX5%3E1\$CTB0  C93D.%5\$9FQ\$DTVD\$J1\$9FQ\$DTVD+%5+3E400I1LN*4*M93RR\$ZJE627A9UBW7DH2K4-GGTLEFQLFM604JG 4L1LPUIBZRH/QZM0OK2IEC/EDDZCZKEAEC-ED3EFKFEOED:"
+
+        val decoded = ProfileUriCodec.decode(nativeT2).getOrThrow()
+
+        assertEquals("native", decoded.protocol)
+        assertEquals("edge.example.com", decoded.serverHost)
+        assertEquals("quic", decoded.carrierMode)
+        assertEquals("reality", decoded.tunnelSecurity)
+    }
+
+    @Test
+    fun nativeQrRoundTripsIpv4Ipv6AndHostnameEndpoints() {
+        listOf("192.0.2.10", "2001:db8::10", "edge.example.com").forEach { host ->
+            val source = AppConfig(
+                name = host,
+                serverHost = host,
+                serverPort = "443",
+                token = "native-token",
+                tls = true,
+                sni = "edge.example.com",
+            )
+
+            val decoded = ProfileUriCodec.decode(requireNotNull(ProfileUriCodec.encodeForQr(source))).getOrThrow()
+
+            assertEquals(host, decoded.serverHost)
+            assertEquals("native", decoded.protocol)
+            assertEquals("native-token", decoded.token)
+        }
     }
 
     @Test
@@ -444,7 +476,6 @@ class ProfileDeepLinkTest {
             sni = "example.com",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
             realityShortId = "a65f93c1dbc5d54a",
-            realityFingerprint = "chrome",
             realitySpiderX = "/",
             mux = true,
         )
@@ -476,7 +507,6 @@ class ProfileDeepLinkTest {
             sni = "example.com",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
             realityShortId = "a65f93c1dbc5d54a",
-            realityFingerprint = "chrome",
             realitySpiderX = "/",
             mux = true,
             carrierMode = "auto",
@@ -504,6 +534,8 @@ class ProfileDeepLinkTest {
         val profile = ProfileUriCodec.decode(uri).getOrThrow()
         assertEquals("/proxy", profile.path)
         assertEquals("/", profile.realitySpiderX)
+        val exported = requireNotNull(ProfileUriCodec.encode(profile))
+        assertFalse(exported.contains("fp="))
         assertTrue(requireNotNull(ProfileUriCodec.encodeForQr(profile)).startsWith("T3:"))
     }
 

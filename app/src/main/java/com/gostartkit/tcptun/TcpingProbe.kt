@@ -29,7 +29,7 @@ internal fun transientQuicRetryDelayMillis(error: Throwable): Long? {
             RejectedPeerUniStreamPattern.containsMatchIn(message)
         ) {
             // A failed native-QUIC carrier records its own backoff immediately
-            // after surfacing these uQUIC carrier errors. Retry shortly after;
+            // after surfacing transient QUIC carrier errors. Retry shortly after;
             // the next attempt will either succeed or expose the exact backoff.
             return 100L
         }

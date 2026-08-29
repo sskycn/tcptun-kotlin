@@ -22,7 +22,7 @@ class MainActivityRecreationTest {
         val activity = instrumentation.startActivitySync(
             Intent(
                 Intent.ACTION_VIEW,
-                Uri.parse("vless://$token@recreation-secret.example:443"),
+                Uri.parse("native://$token@recreation-secret.example:443"),
                 context,
                 MainActivity::class.java,
             ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),

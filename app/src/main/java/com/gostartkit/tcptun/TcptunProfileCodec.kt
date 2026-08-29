@@ -109,7 +109,6 @@ private fun AppConfig.toBridgeProfileJson(): JSONObject {
         .put("flow", flow)
         .put("realityPublicKey", realityPublicKey)
         .put("realityShortId", realityShortId)
-        .put("realityFingerprint", realityFingerprint)
         .put("realitySpiderX", realitySpiderX)
         .put("mux", mux)
         .put("carrierMode", carrierMode)

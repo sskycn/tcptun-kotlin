@@ -295,7 +295,8 @@
     <string name="field_security">Security</string>
     <string name="field_flow">Flow</string>
     <string name="field_reality_public_key">REALITY public key</string>
-    <string name="field_fingerprint">Fingerprint</string>
+    <string name="legacy_protocol_unsupported">tcptun-go v0.4.0 已不再支持 %1$s。重新配置前，此配置不能运行。</string>
+    <string name="reconfigure_as_native">重新配置为 Native</string>
     <string name="field_short_id">Short ID</string>
     <string name="field_spider_x">SpiderX</string>
     <string name="field_tls_insecure">TLS insecure</string>
