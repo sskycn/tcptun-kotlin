@@ -54,8 +54,9 @@ fake native artifact. Bridge and managed-device CI build the real AAR in a separ
 ## Compatibility rules
 
 - Do not modify the tcptun-go ABI from this Android project.
-- Keep `bridge.lock` pinned to tcptun-go v0.4.1 commit
-  `017b9270d99dade16b90ca7d26edc6ecbad7c0ee`. The exported gomobile contract remains Bridge API 3.
+- Keep `bridge.lock` pinned to tcptun-go v0.4.1 plus the silent mux-carrier
+  recovery fix at commit `dd93a24dd1f4e7fa36478626490393dd7748cd18`. The exported gomobile contract
+  remains Bridge API 3.
 - Pass local `socks5`/`mixed` accounts as `users[]` (maximum 256); omit the field for no-auth.
   Preserve legacy top-level credentials only when they already belong to a non-reserved raw
   inbound. The public mobile Bridge API includes the A1 account codec and is version 3.
