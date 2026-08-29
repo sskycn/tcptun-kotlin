@@ -9,6 +9,11 @@ legacy URIs returns a protocol-specific unsupported error; its credential is nev
 as a Native token. A legacy Native URI may contain `fp=` for compatibility, but the value is
 ignored and is absent from every new URI and T3 export.
 
+Native URIs use `carrier_mode=auto` and `carrier_prefer=adaptive|quic|tcp`. Unknown aliases fail
+closed. T3 represents auto mode and all three preference values for TLS and REALITY profiles.
+T2 is decode-only compatibility in Android and cannot represent a non-empty preference; new shares
+always use T3 and never silently drop or convert the preference.
+
 Versioned HTTPS links use exactly:
 
 ```text

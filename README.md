@@ -68,8 +68,8 @@ See [docs/device-testing.md](docs/device-testing.md) for repeatable device valid
 
 ## tcptun-go authentication
 
-The Android bridge is generated from tcptun-go v0.4.0 commit
-`fce12b21fb8d71a9e15c45a75b168b9435a6f55c` (Bridge API 3). Secure authentication uses the
+The Android bridge is generated from tcptun-go v0.4.1 commit
+`017b9270d99dade16b90ca7d26edc6ecbad7c0ee` (Bridge API 3). Secure authentication uses the
 tcptun-go v2 protocol: HKDF-SHA256 derives the authentication key and the Go core performs all
 challenge/response processing. It is intended for high-entropy shared secrets and is not
 transport encryption.
@@ -90,6 +90,13 @@ tcptun-go v0.4.0 is Native-only for tunnel endpoints. Stored VLESS, VMess, and T
 profiles remain readable but are marked unsupported and cannot start or export; they are never
 silently converted to Native. Legacy REALITY fingerprint values are ignored on read and are not
 written to storage, profile payloads, or runtime JSON. Incompatible full JSON remains fail-closed.
+
+Native `raw` profiles with mux enabled can use `carrier.mode=auto` with either TLS or REALITY.
+The Core maintains TCP and QUIC carriers and owns health/load selection, fallback, backoff, QUIC
+DATAGRAM requirements, and path probes. Structured outbound profiles expose
+`carrier.prefer=adaptive|quic|tcp`: adaptive is the dynamic policy, while QUIC/TCP preferences
+fall back to the other carrier when the preferred path is unhealthy. They are not single-carrier
+modes. Existing auto profiles omit the preference and therefore retain adaptive behavior.
 
 Each local proxy account can be shared independently as `A1:<Base45>`. One A1 payload always
 contains exactly one username/password pair; it never contains listener settings or a tunnel
