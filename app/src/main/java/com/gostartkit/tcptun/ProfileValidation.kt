@@ -34,6 +34,13 @@ internal fun AppConfig.validationError(): String? {
     }
     val normalizedCarrierMode = carrierMode.trim().lowercase()
     if (normalizedCarrierMode !in AppConfig.CarrierModes) return "unsupported carrier mode: $carrierMode"
+    val normalizedCarrierPrefer = carrierPrefer.trim().lowercase()
+    if (normalizedCarrierPrefer !in AppConfig.CarrierPreferences) {
+        return "unsupported carrier preference: $carrierPrefer"
+    }
+    if (normalizedCarrierPrefer.isNotBlank() && normalizedCarrierMode != "auto") {
+        return "carrier preference requires automatic carrier mode"
+    }
     val normalizedCarrierUdpMode = carrierUdpMode.trim().lowercase()
     if (normalizedCarrierUdpMode !in AppConfig.CarrierUdpModes) {
         return "unsupported carrier UDP mode: $carrierUdpMode"
@@ -46,8 +53,17 @@ internal fun AppConfig.validationError(): String? {
     )
     val resumableSettingsConfigured =
         muxResume || muxResumeTimeoutMillis != 0 || muxResumeBufferSize != 0
-    if (!mux && (resumableSettingsConfigured || muxMaxSessions != 0 || muxMaxStreamsPerSession != 0 || muxWarmSpare != 0)) {
-        return "mux must be enabled when mux options are configured"
+    val carrierSettingsConfigured =
+        normalizedCarrierMode.isNotBlank() ||
+            normalizedCarrierPrefer.isNotBlank() ||
+            normalizedCarrierUdpMode.isNotBlank() ||
+            carrierReceiveWindows.any { it != 0 }
+    if (
+        !mux &&
+        (carrierSettingsConfigured || resumableSettingsConfigured || muxMaxSessions != 0 ||
+            muxMaxStreamsPerSession != 0 || muxWarmSpare != 0)
+    ) {
+        return "mux must be enabled when carrier or mux options are configured"
     }
     if (!muxResume && (muxResumeTimeoutMillis != 0 || muxResumeBufferSize != 0)) {
         return "mux resume must be enabled when resume limits are configured"
@@ -117,8 +133,8 @@ internal fun AppConfig.validationError(): String? {
         if (protocol != "native") return "$normalizedCarrierMode carrier requires native protocol"
         if (transport != "raw") return "$normalizedCarrierMode carrier requires raw transport"
         if (!mux) return "$normalizedCarrierMode carrier requires mux"
-        if (normalizedCarrierMode == "auto" && normalizedSecurity != "reality") {
-            return "automatic carrier requires reality security"
+        if (normalizedCarrierMode == "auto" && !tls && normalizedSecurity != "reality") {
+            return "automatic carrier requires TLS or reality security"
         }
         if (normalizedCarrierMode == "quic" && !tls && normalizedSecurity != "reality") {
             return "QUIC carrier requires TLS or reality security"

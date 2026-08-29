@@ -335,7 +335,7 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                             val carrierOptions = when {
                                 config.protocol != "native" -> listOf("tcp")
                                 isReality -> listOf("tcp", "auto", "quic")
-                                selectedSecurity == "tls" -> listOf("tcp", "quic")
+                                selectedSecurity == "tls" -> listOf("tcp", "auto", "quic")
                                 else -> listOf("tcp")
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -384,7 +384,15 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                             ) {
                                 config = config.copy(transport = it)
                                 if (it != "raw") {
-                                    config = config.withoutResumableMux().withoutEch()
+                                    config = config.withoutResumableMux().withoutEch().copy(
+                                        carrierMode = "tcp",
+                                        carrierPrefer = "",
+                                        carrierUdpMode = "",
+                                        carrierInitialStreamReceiveWindow = 0,
+                                        carrierMaxStreamReceiveWindow = 0,
+                                        carrierInitialConnectionReceiveWindow = 0,
+                                        carrierMaxConnectionReceiveWindow = 0,
+                                    )
                                 }
                             }
                             OutlinedTextField(
@@ -422,9 +430,12 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                     "tls" -> config.copy(
                                         tunnelSecurity = "",
                                         tls = true,
-                                        carrierMode = config.carrierMode.takeIf { it == "quic" } ?: "tcp",
+                                        carrierMode = config.carrierMode.takeIf { it in setOf("auto", "quic") } ?: "tcp",
+                                        carrierPrefer = config.carrierPrefer.takeIf {
+                                            config.carrierMode == "auto"
+                                        }.orEmpty(),
                                         carrierUdpMode = config.carrierUdpMode.takeIf {
-                                            config.carrierMode == "quic"
+                                            config.carrierMode in setOf("auto", "quic")
                                         }.orEmpty(),
                                     ).withoutResumableMux().withoutEch()
                                     "reality" -> config.copy(
@@ -438,12 +449,16 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                         } else {
                                             "tcp"
                                         },
+                                        carrierPrefer = config.carrierPrefer.takeIf {
+                                            config.carrierMode == "auto"
+                                        }.orEmpty(),
                                     ).withoutEch()
                                     else -> config.copy(
                                         tunnelSecurity = "",
                                         tls = false,
                                         tlsInsecure = false,
                                         carrierMode = "tcp",
+                                        carrierPrefer = "",
                                         carrierUdpMode = "",
                                         carrierInitialStreamReceiveWindow = 0,
                                         carrierMaxStreamReceiveWindow = 0,
@@ -518,6 +533,7 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                         tls = false,
                                         tlsInsecure = false,
                                         carrierMode = "tcp",
+                                        carrierPrefer = "",
                                         carrierUdpMode = "",
                                         echEnabled = true,
                                         echPorts = config.echPorts.ifBlank { DefaultEchPorts },
@@ -586,7 +602,8 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                 config = config.copy(mux = it)
                                 if (!it) {
                                     config = config.withoutResumableMux().copy(
-                                        carrierMode = "tcp",
+                                        carrierMode = "",
+                                        carrierPrefer = "",
                                         carrierUdpMode = "",
                                         muxMaxSessions = 0,
                                         muxMaxStreamsPerSession = 0,
@@ -607,9 +624,9 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                     "auto" -> config.copy(
                                         protocol = "native",
                                         transport = "raw",
-                                        tunnelSecurity = "reality",
-                                        tls = false,
-                                        tlsInsecure = false,
+                                        tunnelSecurity = if (isReality) "reality" else "",
+                                        tls = !isReality,
+                                        tlsInsecure = config.tlsInsecure.takeIf { !isReality } ?: false,
                                         mux = true,
                                         carrierMode = "auto",
                                     ).withoutEch()
@@ -619,10 +636,12 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                         tls = !isReality,
                                         mux = true,
                                         carrierMode = "quic",
+                                        carrierPrefer = "",
                                         carrierUdpMode = config.carrierUdpMode.ifBlank { "auto" },
                                     ).withoutResumableMux().withoutEch()
                                     else -> config.copy(
                                         carrierMode = "tcp",
+                                        carrierPrefer = "",
                                         carrierUdpMode = "",
                                         carrierInitialStreamReceiveWindow = 0,
                                         carrierMaxStreamReceiveWindow = 0,
@@ -630,6 +649,30 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                         carrierMaxConnectionReceiveWindow = 0,
                                     ).withoutResumableMux()
                                 }
+                            }
+                            if (config.mux && config.carrierMode == "auto") {
+                                val effectiveCarrierPreference = config.carrierPrefer.ifBlank { "adaptive" }
+                                val carrierPreferenceLabels = mapOf(
+                                    "adaptive" to stringResource(R.string.carrier_preference_adaptive),
+                                    "quic" to stringResource(R.string.carrier_preference_quic),
+                                    "tcp" to stringResource(R.string.carrier_preference_tcp),
+                                )
+                                ChoiceRow(
+                                    stringResource(R.string.field_carrier_preference),
+                                    effectiveCarrierPreference,
+                                    listOf("adaptive", "quic", "tcp"),
+                                    optionLabels = carrierPreferenceLabels,
+                                ) { preference -> config = config.copy(carrierPrefer = preference) }
+                                val preferenceDescription = when (effectiveCarrierPreference) {
+                                    "quic" -> R.string.carrier_preference_quic_note
+                                    "tcp" -> R.string.carrier_preference_tcp_note
+                                    else -> R.string.carrier_preference_adaptive_note
+                                }
+                                Text(
+                                    stringResource(preferenceDescription),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
                             }
                             if (config.mux && config.carrierMode in setOf("quic", "auto")) {
                                 ChoiceRow(
@@ -850,4 +893,3 @@ private fun EditTopBar(
         },
     )
 }
-

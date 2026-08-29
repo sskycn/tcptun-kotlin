@@ -18,7 +18,7 @@ internal const val DefaultEchPorts = "443"
 internal val RemovedTunnelProtocols = setOf("vless", "vmess", "trojan")
 
 internal fun unsupportedTunnelProtocolMessage(protocol: String): String =
-    "tcptun-go v0.4.0 no longer supports ${protocol.trim().lowercase()}"
+    "tcptun-go v0.4.1 no longer supports ${protocol.trim().lowercase()}"
 
 /** Inbound tags matched by managed route rules. TUN always; local mixed/SOCKS when enabled. */
 internal fun managedRouteInboundTags(routeLocalProxyTraffic: Boolean): JSONArray =
@@ -159,6 +159,7 @@ data class AppConfig(
     val echPorts: String = "",
     val mux: Boolean = true,
     val carrierMode: String = "",
+    val carrierPrefer: String = "",
     val carrierUdpMode: String = "",
     val muxResume: Boolean = false,
     val muxResumeTimeoutMillis: Int = 0,
@@ -213,6 +214,7 @@ data class AppConfig(
             echPublicKey,
             echPorts,
             carrierMode,
+            carrierPrefer,
             carrierUdpMode,
             upstreamProtocol,
         ).all { it.length <= MaxProfileUriLength }
@@ -238,6 +240,7 @@ data class AppConfig(
                 routeLocalProxyTraffic = routeLocalProxyTraffic,
             )
         }
+        validationError()?.let { error -> throw IllegalArgumentException(error) }
         require(protocol.trim().equals("native", ignoreCase = true)) {
             if (protocol.trim().lowercase() in RemovedTunnelProtocols) {
                 unsupportedTunnelProtocolMessage(protocol)
@@ -285,9 +288,11 @@ data class AppConfig(
             )
         }
         val normalizedCarrierMode = carrierMode.trim().lowercase()
+        val normalizedCarrierPrefer = carrierPrefer.trim().lowercase()
         val normalizedCarrierUdpMode = carrierUdpMode.trim().lowercase()
         if (
             normalizedCarrierMode.isNotBlank() ||
+            normalizedCarrierPrefer.isNotBlank() ||
             normalizedCarrierUdpMode.isNotBlank() ||
             carrierInitialStreamReceiveWindow > 0 ||
             carrierMaxStreamReceiveWindow > 0 ||
@@ -298,6 +303,7 @@ data class AppConfig(
                 "carrier",
                 JSONObject().apply {
                     if (normalizedCarrierMode.isNotBlank()) put("mode", normalizedCarrierMode)
+                    if (normalizedCarrierPrefer.isNotBlank()) put("prefer", normalizedCarrierPrefer)
                     if (normalizedCarrierUdpMode.isNotBlank()) put("udp_mode", normalizedCarrierUdpMode)
                     if (carrierInitialStreamReceiveWindow > 0) {
                         put("initial_stream_receive_window", carrierInitialStreamReceiveWindow)
@@ -848,6 +854,18 @@ data class AppConfig(
                 if (endpoint.optJSONObject("security")?.has("fingerprint") == true) {
                     return "$section[$index].security.fingerprint was removed in tcptun-go v0.4.0"
                 }
+                val carrier = endpoint.optJSONObject("carrier") ?: continue
+                val preference = carrier.optString("prefer").trim().lowercase()
+                if (preference.isBlank()) continue
+                if (section == "inbounds") {
+                    return "$section[$index].carrier.prefer is outbound-only"
+                }
+                if (preference !in CarrierPreferences) {
+                    return "$section[$index].carrier.prefer has unsupported value: $preference"
+                }
+                if (!carrier.optString("mode").trim().equals("auto", ignoreCase = true)) {
+                    return "$section[$index].carrier.prefer requires carrier.mode=auto"
+                }
             }
         }
         return null
@@ -888,6 +906,7 @@ data class AppConfig(
         val Transports = listOf("raw", "ws", "h2", "h3")
         val UpstreamProtocols = LocalProxyProtocols
         val CarrierModes = listOf("", "tcp", "auto", "quic")
+        val CarrierPreferences = listOf("", "adaptive", "quic", "tcp")
         val CarrierUdpModes = listOf("", "reliable", "auto", "datagram")
         val SecurityOptions = listOf("none", "tls", "reality")
         val TunnelSecurityTypes = listOf("", "reality")
@@ -914,6 +933,7 @@ data class AppConfig(
             val mux = obj.optBoolean("mux", true)
             val currentCarrierSchema =
                 obj.has("carrierMode") ||
+                    obj.has("carrierPrefer") ||
                     obj.has("carrierUdpMode") ||
                     obj.has("carrierInitialStreamReceiveWindow") ||
                     obj.has("carrierMaxStreamReceiveWindow") ||
@@ -950,6 +970,7 @@ data class AppConfig(
                 echPorts = obj.optString("echPorts"),
                 mux = mux,
                 carrierMode = migrated.carrierMode,
+                carrierPrefer = obj.optString("carrierPrefer"),
                 carrierUdpMode = migrated.carrierUdpMode,
                 muxResume = obj.optBoolean("muxResume", false),
                 muxResumeTimeoutMillis = obj.optInt("muxResumeTimeoutMillis", 0),
@@ -1067,6 +1088,7 @@ data class AppConfig(
             .put("echPorts", echPorts)
             .put("mux", mux)
             .put("carrierMode", carrierMode)
+            .put("carrierPrefer", carrierPrefer)
             .put("carrierUdpMode", carrierUdpMode)
             .put("muxResume", muxResume)
             .put("muxResumeTimeoutMillis", muxResumeTimeoutMillis)
