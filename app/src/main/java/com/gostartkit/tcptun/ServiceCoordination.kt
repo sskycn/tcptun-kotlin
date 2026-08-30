@@ -18,6 +18,11 @@ internal data class VpnRuntimeOwnership(
     }
 }
 
+internal fun VpnRuntimeOwnership.diagnosticId(): String =
+    "service_id=${runtimeToken.serviceInstanceId} " +
+        "runtime_token=${runtimeToken.persistentGeneration}:${runtimeToken.lifecycleGeneration} " +
+        "lifecycle_generation=${runtimeToken.lifecycleGeneration} bridge_epoch=$bridgeEpoch"
+
 internal fun VpnRuntimeOwnership.isCurrent(
     runtimeTokenCurrent: Boolean,
     activeBridgeEpoch: Long,

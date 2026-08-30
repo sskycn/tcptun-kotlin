@@ -571,6 +571,13 @@ object TcptunState {
         return event
     }
 
+    /** Sparse listener/lifecycle evidence must remain available with the UI hidden. */
+    fun appendProxyDiagnostic(line: String) {
+        val clean = redactSensitiveText(line.take(MAX_LOG_LENGTH)).trim()
+        if (!isUiVisible && clean.isNotEmpty()) Log.i(LOG_TAG, clean)
+        appendLog(clean)
+    }
+
     @Synchronized
     fun appendLog(line: String) {
         val clean = redactSensitiveText(line.take(MAX_LOG_LENGTH)).trim()

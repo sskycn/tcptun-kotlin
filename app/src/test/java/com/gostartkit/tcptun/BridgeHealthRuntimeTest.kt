@@ -4,6 +4,8 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.net.ServerSocket
+import java.net.InetAddress
 
 class BridgeHealthRuntimeTest {
     @After
@@ -104,14 +106,30 @@ class BridgeHealthRuntimeTest {
         TcptunState.endBridgeSession(epoch)
     }
 
+    @Test
+    fun backgroundListenerFailureIsDetectedWithoutAnyJniOrInternetProbe() {
+        val epoch = TcptunState.beginBridgeSession()
+        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { server ->
+            Harness(ownership(1, epoch), server.localPort).use { harness ->
+                val failure = harness.runtime.probeLocalListener(requireNotNull(harness.activeOwnership))
+                assertTrue(failure.orEmpty().contains("B_handshake"))
+                assertEquals(0, harness.statusJsonCalls)
+                assertTrue(harness.logLines.any { "bridge_epoch=$epoch" in it && "scope=loopback" in it })
+            }
+        }
+        TcptunState.endBridgeSession(epoch)
+    }
+
     private class Harness(
         initialOwnership: VpnRuntimeOwnership? = ownership(generation = 1, epoch = 10),
+        localPort: Int = 1080,
     ) : AutoCloseable {
         private val lifecycleExecutor = newLifecycleScheduledExecutor("BridgeHealthRuntimeTest")
         var activeOwnership = initialOwnership
         var acceptStatusEvents = true
         var statusJsonCalls = 0
         var onStatusJson: () -> Unit = {}
+        val logLines = mutableListOf<String>()
         val restartRequests = mutableListOf<VpnRuntimeOwnership>()
         val runtime = BridgeHealthRuntime(
             lifecycleExecutor = lifecycleExecutor,
@@ -135,7 +153,7 @@ class BridgeHealthRuntimeTest {
             currentOwnership = { activeOwnership },
             isOwnershipCurrent = { it == activeOwnership },
             currentPlan = { null },
-            currentSettings = { AppliedRuntimeSettings() },
+            currentSettings = { AppliedRuntimeSettings(socksPort = localPort) },
             memberProbesAllowed = { true },
             canHandleStatusEvent = { acceptStatusEvents },
             restoreConnectionsReady = {},
@@ -144,7 +162,8 @@ class BridgeHealthRuntimeTest {
                 true
             },
             onRestartRequired = { ownership, _, _ -> restartRequests += ownership },
-            log = {},
+            log = logLines::add,
+            localProxyHealthProbe = LocalProxyHealthProbe(localConnectTimeoutMs = 100),
             parseRuntimeSnapshot = { _, epoch ->
                 BridgeRuntimeSnapshot(
                     epoch = epoch,

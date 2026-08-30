@@ -1,9 +1,8 @@
 package com.tcptun.client
 
 /**
- * Event-first VPN health policy. There is no routine timer-based health polling
- * in either power-saving or normal mode. The monitor sleeps until an event wakes
- * it (network change, core status, UI refresh, connection membership change).
+ * Event-first VPN health policy, with a sparse LOCAL listener safety check.
+ * This timer never forces Internet probes or JNI status reconciliation.
  *
  * A detected failure still gets one bounded confirmation timer so recovery can
  * reach its restart threshold without waiting for an unrelated event.
@@ -16,6 +15,8 @@ package com.tcptun.client
 internal object BridgeHealthPolicy {
     /** One-shot retry used to confirm a failure before restarting the bridge. */
     const val FAILURE_CONFIRM_INTERVAL_MS = 15_000L
+
+    const val LOCAL_LISTENER_SAFETY_INTERVAL_MS = 5 * 60_000L
 
     /** Let Android finish a handover before rebuilding sockets on the selected network. */
     const val NETWORK_HANDOVER_SETTLE_MS = 1_500L
@@ -34,8 +35,9 @@ internal object BridgeHealthPolicy {
     /** Short settle after StartOutbound / StopOutbound pool membership changes. */
     const val MEMBER_HEALTH_MEMBERSHIP_DELAY_MS = 2_000L
 
-    /** Background safety checks only ask engine status via callbacks; loopback TCP is UI-facing. */
-    fun shouldProbeLocalProxy(uiVisible: Boolean): Boolean = uiVisible
+    /** A background proxy still serves clients; authentication never dials an upstream. */
+    @Suppress("UNUSED_PARAMETER")
+    fun shouldProbeLocalProxy(uiVisible: Boolean): Boolean = true
 
     /**
      * Aggregate SOCKS/TLS/HTTP upstream probes are never timed. They run only
@@ -78,16 +80,16 @@ internal object BridgeHealthPolicy {
     }
 
     /**
-     * No routine timer in any mode. A detected failure still gets one bounded
-     * confirmation check so the restart threshold can be reached.
+     * A sparse local check detects missing native callbacks. A detected failure
+     * gets a bounded confirmation before the existing recovery threshold.
      *
      * [powerSaving] is retained for call-site compatibility and no longer
-     * enables a safety poll interval.
+     * changes the local safety interval.
      */
     @Suppress("UNUSED_PARAMETER")
     fun nextCheckDelayMs(powerSaving: Boolean, confirmingFailure: Boolean): Long? = when {
         confirmingFailure -> FAILURE_CONFIRM_INTERVAL_MS
-        else -> null
+        else -> LOCAL_LISTENER_SAFETY_INTERVAL_MS
     }
 
     /** Exponential restart retry with a bounded delay; attempts continue while VPN is desired. */

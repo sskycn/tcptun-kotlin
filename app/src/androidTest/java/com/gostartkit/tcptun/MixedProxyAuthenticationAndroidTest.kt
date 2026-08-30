@@ -13,6 +13,8 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.io.File
+import org.junit.Assert.assertEquals
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 
@@ -138,16 +140,126 @@ class MixedProxyAuthenticationAndroidTest {
         }
     }
 
-    private fun withMixedProxy(block: (Int) -> Unit) {
+    @Test
+    fun socksAndMixedListenerEnduranceWithRestartsAndResourceBaselines() {
+        for (protocol in listOf("socks5", "mixed")) {
+            withProxy(protocol) { engine, port ->
+                val baselines = mutableListOf<Int>()
+                // Warm JNI/native allocation before comparing per-cycle baselines.
+                assertEcho(port, httpConnect = false)
+                repeat(20) { cycle ->
+                    repeat(20) { request ->
+                        assertEcho(port, httpConnect = protocol == "mixed" && request % 2 == 1)
+                    }
+                    val session = engine.sessionID()
+                    engine.stop()
+                    engine.waitStopped(session, 5_000)
+                    assertEquals("A_listener", LocalProxyHealthProbe().listener(port).layer)
+                    val fd = requireNotNull(File("/proc/self/fd").list()).size
+                    baselines += fd
+                    println("LOCAL_PROXY_RESOURCE protocol=$protocol cycle=$cycle fd=$fd threads=${File("/proc/self/task").list()?.size}")
+                    engine.configure(mixedConfig(port, protocol))
+                    engine.startConfiguredSessionWithDisabledOutbounds("[]")
+                    waitForListener(engine, port)
+                    assertEquals("Running", engine.status())
+                }
+                val first = baselines.take(5).sorted()[2]
+                val last = baselines.takeLast(5).sorted()[2]
+                assertTrue("FD baseline grew: $baselines", last <= first + 8)
+            }
+        }
+    }
+
+    @Test
+    fun socksAndMixedSlowClientsDoNotStarveNewRequestsAndExpire() {
+        for (protocol in listOf("socks5", "mixed")) {
+            withProxy(protocol) { _, port ->
+                val clients = mutableListOf<Socket>()
+                try {
+                    repeat(96) { index ->
+                        val client = openProxySocket(port)
+                        clients += client
+                        when (index % 3) {
+                            1 -> client.getOutputStream().write(byteArrayOf(5))
+                            2 -> if (protocol == "mixed") {
+                                client.getOutputStream().write("CONNECT 127.0.0.1:9 HTTP/1.1\r\nHost:".encodeToByteArray())
+                            }
+                        }
+                    }
+                    val started = System.nanoTime()
+                    assertEcho(port, httpConnect = protocol == "mixed")
+                    assertTrue("slow clients starved $protocol", (System.nanoTime() - started) / 1_000_000 < 3_000)
+                    // The existing core handshake deadline is 10 seconds. Verify
+                    // actual server closure, not merely client-side cleanup.
+                    Thread.sleep(10_500)
+                    clients.forEach { client ->
+                        client.soTimeout = 1_000
+                        assertEquals("stalled handshake did not expire", -1, client.getInputStream().read())
+                    }
+                    assertEcho(port, httpConnect = false)
+                } finally {
+                    clients.forEach(Socket::close)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun wildcardListenerServesDeviceInterfaceAddress() {
+        val addresses = localProxyInterfaceAddresses()
+        org.junit.Assume.assumeTrue("no non-loopback IPv4 interface", addresses.isNotEmpty())
+        withProxy("mixed", listenHost = "0.0.0.0") { _, port ->
+            for (host in addresses) {
+                val result = LocalProxyHealthProbe().listener(port, LocalProxyUser(Username, Password), host)
+                assertTrue("interface $host ${result.summary()}", result.healthy)
+                assertEcho(port, httpConnect = false, host = host)
+            }
+        }
+    }
+
+    private fun assertEcho(port: Int, httpConnect: Boolean, host: String = Loopback) {
+        ServerSocket(0, 1, InetAddress.getByName(Loopback)).use { origin ->
+            val echoed = CompletableFuture<Unit>()
+            val worker = Thread {
+                runCatching {
+                    origin.accept().use { accepted ->
+                        accepted.soTimeout = SocketTimeoutMillis
+                        val data = accepted.getInputStream().readExact(OpaquePayload.size)
+                        accepted.getOutputStream().write(data)
+                    }
+                }.fold({ echoed.complete(Unit) }, echoed::completeExceptionally)
+            }.apply { isDaemon = true; start() }
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress(host, port), 2_000)
+                socket.soTimeout = 2_000
+                if (httpConnect) {
+                    socket.getOutputStream().write(connectRequest(origin.localPort, basicAuthorization(Username, Password)).encodeToByteArray())
+                    assertTrue(socket.getInputStream().readHttpHeaders().contains(" 200 "))
+                } else {
+                    Socks5Client.connect(socket, Loopback, origin.localPort, Username, Password)
+                }
+                socket.getOutputStream().write(OpaquePayload)
+                assertArrayEquals(OpaquePayload, socket.getInputStream().readExact(OpaquePayload.size))
+                socket.shutdownOutput()
+            }
+            echoed.get(3, TimeUnit.SECONDS)
+            worker.join(3_000)
+            assertFalse(worker.isAlive)
+        }
+    }
+
+    private fun withMixedProxy(block: (Int) -> Unit) = withProxy("mixed") { _, port -> block(port) }
+
+    private fun withProxy(protocol: String, listenHost: String = Loopback, block: (Engine, Int) -> Unit) {
         val port = availablePort()
         val engine = Androidbridge.newEngine()
-        var sessionId = 0L
         try {
-            engine.configure(mixedConfig(port))
-            sessionId = engine.startConfiguredSessionWithDisabledOutbounds("[]")
+            engine.configure(mixedConfig(port, protocol, listenHost))
+            engine.startConfiguredSessionWithDisabledOutbounds("[]")
             waitForListener(engine, port)
-            block(port)
+            block(engine, port)
         } finally {
+            val sessionId = engine.sessionID()
             if (sessionId > 0) {
                 engine.stop()
                 engine.waitStopped(sessionId, 5_000)
@@ -161,7 +273,8 @@ class MixedProxyAuthenticationAndroidTest {
         var lastFailure: Throwable? = null
         while (System.currentTimeMillis() < deadline) {
             try {
-                Socket().use { it.connect(InetSocketAddress(Loopback, port), 200) }
+                val result = LocalProxyHealthProbe().listener(port, LocalProxyUser(Username, Password))
+                check(result.healthy && engine.status() == "Running") { result.summary() }
                 return
             } catch (error: Throwable) {
                 lastFailure = error
@@ -247,14 +360,13 @@ class MixedProxyAuthenticationAndroidTest {
         it.localPort
     }
 
-    private fun mixedConfig(port: Int): String = """{
+    private fun mixedConfig(port: Int, protocol: String = "mixed", listenHost: String = Loopback): String = """{
         "inbounds":[{
             "tag":"mixed-auth-test",
-            "type":"mixed",
-            "address":["$Loopback:$port"],
+            "type":"$protocol",
+            "address":["$listenHost:$port"],
             "network":["tcp"],
-            "username":"$Username",
-            "password":"$Password"
+            "users":[{"username":"$Username","password":"$Password"}]
         }],
         "outbounds":[{"tag":"direct","type":"direct","network":["tcp"]}],
         "route":{"default_outbound":"direct","rules":[]}

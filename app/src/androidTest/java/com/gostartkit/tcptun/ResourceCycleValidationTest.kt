@@ -29,6 +29,7 @@ class ResourceCycleValidationTest {
             settleForSampling()
             printSample(cycle = 0, state = "idle")
 
+            val fdBaselines = mutableListOf<Int>()
             repeat(cycles) { index ->
                 harness.start(if (index % 2 == 0) harness.lifecyclePlanA else harness.lifecyclePlanB)
                 harness.waitForRunning(timeoutMillis = 30_000)
@@ -44,9 +45,14 @@ class ResourceCycleValidationTest {
                 harness.waitForStopped(timeoutMillis = 30_000)
                 waitForSessionThreadsToTerminate(harness)
                 settleForSampling()
-                printSample(cycle = index + 1, state = "stopped")
+                fdBaselines += printSample(cycle = index + 1, state = "stopped")
             }
 
+            if (fdBaselines.size >= 10) {
+                val first = fdBaselines.take(5).sorted()[2]
+                val last = fdBaselines.takeLast(5).sorted()[2]
+                assertTrue("FD baseline drift: $fdBaselines", last <= first + 8)
+            }
             harness.assertNoProcessFailureEvidence()
             println("RESOURCE_CYCLES_COMPLETED=$cycles")
         }
@@ -64,7 +70,7 @@ class ResourceCycleValidationTest {
         Thread.sleep(SampleSettleMillis)
     }
 
-    private fun printSample(cycle: Int, state: String) {
+    private fun printSample(cycle: Int, state: String): Int {
         val memory = Debug.MemoryInfo()
         Debug.getMemoryInfo(memory)
         val javaHeapKb = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / 1024L
@@ -88,6 +94,7 @@ class ResourceCycleValidationTest {
                 "$javaHeapKb,$nativeHeapKb,${memory.totalPss},$rssKb",
         )
         println("RESOURCE_THREADS,$cycle,$actorThreads,$lifecycleThreads")
+        return fd
     }
 
     private fun liveJavaThreadNames(): List<String> =

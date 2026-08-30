@@ -188,6 +188,35 @@ class BridgeSessionRuntimeTest {
         assertFalse(runtime.sharesBridgeLock(Any()))
     }
 
+    @Test
+    fun controlDiagnosticsDistinguishWaitingForLockFromEnteredNativeCall() {
+        val lock = Any()
+        val lines = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val waiting = java.util.concurrent.CountDownLatch(1)
+        val owner = VpnRuntimeOwnership(VpnRuntimeCommandToken(3, 4, 5), 6)
+        val bridge = FakeTcptunBridge()
+        val port = LockedHealthBridgePort(lock, { bridge }, { true }, { true }) { line ->
+            lines += line
+            if ("phase=waiting_lock" in line) waiting.countDown()
+        }
+        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            val result = synchronized(lock) {
+                val future = executor.submit<String> { port.statusJson(owner) }
+                assertTrue(waiting.await(1, java.util.concurrent.TimeUnit.SECONDS))
+                assertFalse(future.isDone)
+                assertTrue(lines.none { "phase=entered" in it })
+                future
+            }
+            result.get(1, java.util.concurrent.TimeUnit.SECONDS)
+            assertTrue(lines.any { "phase=entered" in it })
+            assertTrue(lines.any { "phase=returned" in it })
+            assertTrue(lines.all { "service_id=3" in it && "bridge_epoch=6" in it })
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
     private class Harness(
         private val bridge: FakeTcptunBridge,
         bridgeInitialized: Boolean = true,

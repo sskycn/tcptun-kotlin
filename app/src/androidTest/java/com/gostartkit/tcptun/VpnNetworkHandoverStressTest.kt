@@ -20,18 +20,25 @@ class VpnNetworkHandoverStressTest {
                 "device has no telephony feature",
                 harness.context.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY),
             )
+            controls.enableWifi()
+            waitForTransport(harness, NetworkCapabilities.TRANSPORT_WIFI, "initial Wi-Fi")
             harness.start()
             harness.waitForRunning()
+            val wifiEpoch = harness.activeOwnershipSnapshot().bridgeEpoch
             controls.enableCellular()
             controls.disableWifi()
             waitForTransport(harness, NetworkCapabilities.TRANSPORT_CELLULAR, "cellular handover")
-            harness.updateConnections(harness.lifecyclePlanB)
+            waitForReplacement(harness, wifiEpoch)
+            harness.updateConnectionsAndWait(harness.lifecyclePlanB)
             harness.applySettings()
             harness.tcping()
+            harness.waitForRunning()
             harness.assertRuntimeInvariants()
 
+            val cellularEpoch = harness.activeOwnershipSnapshot().bridgeEpoch
             controls.enableWifi()
             waitForTransport(harness, NetworkCapabilities.TRANSPORT_WIFI, "Wi-Fi handover")
+            waitForReplacement(harness, cellularEpoch)
             harness.assertRuntimeInvariants()
 
             harness.stop()
@@ -199,6 +206,16 @@ class VpnNetworkHandoverStressTest {
         }
     }
 
+    private fun waitForReplacement(harness: VpnRuntimeStressHarness, previousEpoch: Long) {
+        // Includes the production 30-second restart cooldown. Checking only
+        // Running could accidentally validate the old listener during settle.
+        harness.waitUntil("handover replacement listener", 45_000) {
+            TcptunState.status == VpnStatus.Running && TcptunState.state.value.connectionsReady &&
+                harness.activeOwnershipSnapshot().bridgeEpoch > previousEpoch
+        }
+        harness.assertLocalProxyReady()
+    }
+
     private fun waitForTransport(
         harness: VpnRuntimeStressHarness,
         transport: Int,
@@ -252,7 +269,17 @@ class VpnNetworkHandoverStressTest {
                 key.matches(Regex("mobile_data[0-9]*")) && value == "1"
             }
 
-        fun enableWifi() = shell("svc wifi enable")
+        fun enableWifi() {
+            shell("svc wifi enable")
+            if (InstrumentationRegistry.getArguments().getString("runtimeStressEmulatorWifiReconnect").toBoolean()) {
+                check(android.os.Build.PRODUCT.startsWith("sdk_gphone")) {
+                    "AndroidWifi reconnect is restricted to the emulator fixture"
+                }
+                // Some emulator images leave the saved test AP disconnected
+                // after svc wifi enable; request association explicitly.
+                shell("cmd wifi connect-network AndroidWifi open")
+            }
+        }
 
         fun disableWifi() = shell("svc wifi disable")
 

@@ -28,7 +28,8 @@ double-close from silently taking ownership of an existing TUN.
 4. Configure the core and log level.
 5. Mark TUN transfer pending, call `SetTun`, and mark start pending.
 6. Start the configured session and record the exact native session ID.
-7. Wait for the core-ready status before publishing `Running`.
+7. Wait for core-ready and a bounded local SOCKS authentication/request probe before publishing `Running`.
+   The probe does not dial an outbound. The same check runs after bridge replacement.
 
 If Configure, SetTun, or Start fails, the state machine retains exactly the cleanup
 obligations that may have crossed into native code. The stop controller then performs the

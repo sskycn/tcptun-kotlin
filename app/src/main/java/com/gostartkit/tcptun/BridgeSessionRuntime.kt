@@ -212,7 +212,7 @@ internal class BridgeSessionRuntime(
                 logLevel = request.settings.logLevel,
             ),
             callbacks = BridgeSessionCallbacks(
-                onLog = callbacks.onLog,
+                onLog = { line -> callbacks.onLog("native bridge_epoch=$epoch $line") },
                 onStatus = { json -> handleStatusEvent(epoch, json, callbacks) },
                 protectSocket = callbacks.protectSocket,
                 configureFlowAnalysis = {

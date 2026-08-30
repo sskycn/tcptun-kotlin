@@ -37,6 +37,42 @@ internal object Socks5Client {
         authenticationRequired: Boolean = username.isNotEmpty() || password.isNotEmpty(),
     ) {
         require(port in 1..65535) { "invalid SOCKS5 destination port" }
+        negotiate(input, output, username, password, authenticationRequired)
+
+        connectDestination(input, output, host, port)
+    }
+
+    /** Authentication only: no DNS, outbound dial, or Internet traffic. */
+    fun negotiate(socket: Socket, username: String, password: String, authenticationRequired: Boolean) =
+        negotiate(socket.getInputStream(), socket.getOutputStream(), username, password, authenticationRequired)
+
+    fun connectDestination(socket: Socket, host: String, port: Int) {
+        require(port in 1..65535) { "invalid SOCKS5 destination port" }
+        connectDestination(socket.getInputStream(), socket.getOutputStream(), host, port)
+    }
+
+    /** Complete a local request without opening an outbound (RFC 1928 REP=7).
+     * Simply closing after auth makes debug-level cores log EOF as a connection
+     * issue, which can feed the health monitor's own callback loop.
+     */
+    fun finishListenerProbe(socket: Socket) {
+        val output = socket.getOutputStream()
+        // Unassigned command 0x09; numeric target avoids DNS even if parsed.
+        output.write(byteArrayOf(5, 9, 0, 1, 127, 0, 0, 1, 0, 1))
+        output.flush()
+        val reply = socket.getInputStream().readExact(10)
+        require(reply[0] == 5.toByte() && reply[1] == 7.toByte() && reply[2] == 0.toByte() && reply[3] == 1.toByte()) {
+            "unexpected local SOCKS5 probe response"
+        }
+    }
+
+    private fun negotiate(
+        input: InputStream,
+        output: OutputStream,
+        username: String,
+        password: String,
+        authenticationRequired: Boolean,
+    ) {
         output.write(if (authenticationRequired) byteArrayOf(0x05, 0x01, 0x02) else byteArrayOf(0x05, 0x01, 0x00))
         output.flush()
 
@@ -47,7 +83,9 @@ internal object Socks5Client {
             0x02 -> authenticate(input, output, username, password)
             else -> error("SOCKS5 method rejected")
         }
+    }
 
+    private fun connectDestination(input: InputStream, output: OutputStream, host: String, port: Int) {
         val hostBytes = host.encodeToByteArray()
         require(hostBytes.size <= 255) { "host is too long" }
         val request = ByteArray(7 + hostBytes.size)

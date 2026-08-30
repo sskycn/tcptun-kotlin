@@ -339,3 +339,30 @@ network types, and result for every row.
 For each version run clean install, permission denial and grant, foreground/background start,
 screen-off/Doze, Wi-Fi/cellular handover where supported, task removal, revoke, rapid command
 matrix, and a final stop confirming no TUN/native/foreground ownership remains.
+
+
+## Local proxy endurance and split-path diagnosis
+
+See [the investigation](investigations/local-proxy-stall.md) for the confirmed accept
+backoff failure, A–E evidence, limits, and the read-only capture command. The existing
+`MixedProxyAuthenticationAndroidTest` now covers socks5/mixed endurance, repeated native
+restarts, 96 slow clients per protocol, handshake expiration, and device interface echo.
+`ResourceCycleValidationTest` asserts FD baseline drift, and the runtime stress harness
+checks local SOCKS/echo after Running. Handover checks wait for a replacement bridge epoch.
+
+```bash
+./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.tcptun.client.MixedProxyAuthenticationAndroidTest
+```
+
+For the optional network test, require an initially working Wi-Fi AP and cellular transport.
+The test performs Wi-Fi/cellular switches and restores switch settings afterward. On the
+standard `sdk_gphone` emulator only, add
+`-Pandroid.testInstrumentationRunnerArguments.runtimeStressEmulatorWifiReconnect=true`
+with `runtimeStressNetworkControl=true` to explicitly rejoin the saved open `AndroidWifi`
+fixture after enabling Wi-Fi. This flag is rejected on physical devices. Without it, some
+emulator images leave Wi-Fi enabled but unassociated; report that as a test prerequisite
+failure, not a proxy failure or a successful handover.
+
+App sockets are excluded from the VPN. Local echo success is not a TUN connectivity
+assertion; use a separate UID covered by the VPN for that measurement.

@@ -2,7 +2,6 @@ package com.tcptun.client
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -43,9 +42,9 @@ class BridgeHealthPolicyTest {
     }
 
     @Test
-    fun localProxyProbeOnlyWhileUiVisible() {
+    fun localProxyProbeAlsoRunsWhileUiInvisible() {
         assertTrue(BridgeHealthPolicy.shouldProbeLocalProxy(uiVisible = true))
-        assertFalse(BridgeHealthPolicy.shouldProbeLocalProxy(uiVisible = false))
+        assertTrue(BridgeHealthPolicy.shouldProbeLocalProxy(uiVisible = false))
     }
 
     @Test
@@ -110,14 +109,16 @@ class BridgeHealthPolicyTest {
     }
 
     @Test
-    fun healthChecksAreAlwaysEventDrivenExceptFailureConfirmation() {
-        assertNull(
+    fun safetyTimerOnlyChangesLocalCheckCadence() {
+        assertEquals(
+            BridgeHealthPolicy.LOCAL_LISTENER_SAFETY_INTERVAL_MS,
             BridgeHealthPolicy.nextCheckDelayMs(
                 powerSaving = true,
                 confirmingFailure = false,
             ),
         )
-        assertNull(
+        assertEquals(
+            BridgeHealthPolicy.LOCAL_LISTENER_SAFETY_INTERVAL_MS,
             BridgeHealthPolicy.nextCheckDelayMs(
                 powerSaving = false,
                 confirmingFailure = false,

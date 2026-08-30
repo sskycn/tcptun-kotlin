@@ -12,6 +12,11 @@ import androidx.core.content.ContextCompat
 import androidx.test.platform.app.InstrumentationRegistry
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.net.Socket
+import java.net.InetSocketAddress
+import java.io.DataInputStream
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -129,8 +134,51 @@ internal class VpnRuntimeStressHarness : AutoCloseable {
         context.startService(TcptunVpnService.refreshClientIpsIntent(context))
     }
 
-    fun waitForRunning(timeoutMillis: Long = 25_000) = waitUntil("VPN Running", timeoutMillis) {
-        TcptunState.status == VpnStatus.Running && TcptunState.state.value.connectionsReady
+    fun waitForRunning(timeoutMillis: Long = 25_000) {
+        waitUntil("VPN Running", timeoutMillis) {
+            TcptunState.status == VpnStatus.Running && TcptunState.state.value.connectionsReady
+        }
+        assertLocalProxyReady()
+    }
+
+    fun assertLocalProxyReady() {
+        val settings = TcptunVpnService.readRuntimeSettings(context)
+        val user = settings.localProxyUsers.firstOrNull()
+        val targets = listOf("127.0.0.1") + if (settings.socksListenAll) localProxyInterfaceAddresses() else emptyList()
+        for (target in targets) {
+            val result = LocalProxyHealthProbe().listener(settings.socksPort, user, target)
+            assertTrue("Running without ready proxy: ${result.summary()}", result.healthy)
+        }
+        // App UID is excluded from the VPN: this proves local proxy forwarding,
+        // not TUN connectivity. TUN must be checked from a separate client UID.
+        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { origin ->
+            val done = CompletableFuture<Unit>()
+            val payload = "handover-echo".encodeToByteArray()
+            val worker = Thread {
+                runCatching {
+                    origin.accept().use { connection ->
+                        connection.soTimeout = 2_000
+                        val received = ByteArray(payload.size)
+                        DataInputStream(connection.getInputStream()).readFully(received)
+                        connection.getOutputStream().write(received)
+                    }
+                }.fold({ done.complete(Unit) }, done::completeExceptionally)
+            }.apply { isDaemon = true; start() }
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress("127.0.0.1", settings.socksPort), 2_000)
+                socket.soTimeout = 2_000
+                Socks5Client.connect(socket, "127.0.0.1", origin.localPort,
+                    user?.username.orEmpty(), user?.password.orEmpty(), user != null)
+                socket.getOutputStream().write(payload)
+                val response = ByteArray(payload.size)
+                DataInputStream(socket.getInputStream()).readFully(response)
+                org.junit.Assert.assertArrayEquals(payload, response)
+            }
+            done.get(3, TimeUnit.SECONDS)
+            worker.join(3_000)
+        }
+        assertEquals("Running", TcptunState.diagnostics.bridgeStatus)
+        println("LOCAL_PROXY_RUNNING_ASSERTION protocol=${settings.localProxyProtocol} targets=$targets epoch=${activeOwnershipSnapshot().bridgeEpoch}")
     }
 
     fun waitForStopped(timeoutMillis: Long = 15_000) = waitUntil("VPN Stopped", timeoutMillis) {

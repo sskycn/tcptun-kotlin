@@ -130,6 +130,7 @@ class TcptunVpnService : VpnService() {
         bridge = { bridge },
         isOwnershipCurrent = ::ownsRuntime,
         hasActiveConfig = { bridgeResources.activeConfigJson != null },
+        log = TcptunState::appendProxyDiagnostic,
     )
     private val bridgeHealthRuntime: BridgeHealthRuntime by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         BridgeHealthRuntime(
@@ -155,11 +156,17 @@ class TcptunVpnService : VpnService() {
                 requestBridgeRestart(reason, cancelIfHealthy = cancelIfHealthy, ownership = ownership)
             },
             log = { message ->
-                if (!destroyed.get()) TcptunState.appendLog(message)
+                if (!destroyed.get()) {
+                    if (message.startsWith("local_proxy ") || message.startsWith("upstream_probe ")) {
+                        TcptunState.appendProxyDiagnostic(message)
+                    } else TcptunState.appendLog(message)
+                }
             },
         )
     }
-    private val tcpingBridgePort = LockedTcpingBridgePort(bridgeLock, { bridge }, ::ownsRuntime)
+    private val tcpingBridgePort = LockedTcpingBridgePort(
+        bridgeLock, { bridge }, ::ownsRuntime, TcptunState::appendProxyDiagnostic,
+    )
     private val outboundTcpingRuntime = OutboundTcpingRuntime(
         bridgePort = tcpingBridgePort,
         currentOwnership = ::currentRuntimeOwnership,
@@ -1811,6 +1818,17 @@ class TcptunVpnService : VpnService() {
             ),
             callbacks = bridgeSessionServicePort.callbacks(commandOwner),
         )
+        // CORE_RUNTIME_READY confirms bind/Serve startup, but not a completed
+        // handshake. Validate the configured local path before publishing Running.
+        check(commandOwner()) { "tcptun start was superseded" }
+        val listener = LocalProxyHealthProbe().listener(settings.socksPort, settings.localProxyUsers.firstOrNull())
+        check(commandOwner()) { "tcptun start was superseded" }
+        TcptunState.appendProxyDiagnostic(
+            "local_proxy startup service_id=$serviceInstanceId bridge_epoch=${bridgeResources.activeEpoch} " +
+                "native_session=${bridgeResources.snapshot.sessionId} protocol=${settings.localProxyProtocol} " +
+                "listen_all=${settings.socksListenAll} ${listener.summary()}",
+        )
+        check(listener.healthy) { "local proxy startup ${listener.summary()}" }
     }
 
     private fun stopBridge() {
@@ -1975,6 +1993,10 @@ class TcptunVpnService : VpnService() {
             val bridgeToken = bridgeRecoveryCoordinator.requestRestart(
                 lifecycleGeneration = runtimeSnapshot.lifecycleGeneration,
                 cancelIfHealthy = cancelIfHealthy,
+            )
+            TcptunState.appendProxyDiagnostic(
+                "bridge_restart ${ownership.diagnosticId()} restart_token=$bridgeToken " +
+                    "recovery_generation=${recoveryToken.recoveryGeneration} reason=$reason",
             )
             scheduleBridgeRestart(
                 request = VpnRuntimeRecoveryRequest(plan, reason),

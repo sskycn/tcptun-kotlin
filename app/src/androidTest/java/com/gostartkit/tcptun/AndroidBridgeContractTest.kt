@@ -36,7 +36,7 @@ class AndroidBridgeContractTest {
     @Test
     fun currentBridgeReportsVersionedCoreIdentity() {
         assertEquals("v0.4.1", Androidbridge.coreVersion())
-        assertEquals("017b9270d99d", Androidbridge.coreBuildID())
+        assertEquals("5fea14bb57f9", Androidbridge.coreBuildID())
     }
 
     @Test

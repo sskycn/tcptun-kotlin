@@ -33,6 +33,8 @@ internal class BridgeHealthRuntime(
     private val dispatchDiagnostics: (() -> Unit) -> Boolean,
     private val onRestartRequired: (VpnRuntimeOwnership, String, Boolean) -> Unit,
     private val log: (String) -> Unit,
+    private val localProxyHealthProbe: LocalProxyHealthProbe = LocalProxyHealthProbe(),
+    private val interfaceAddresses: () -> List<String> = ::localProxyInterfaceAddresses,
     private val parseRuntimeSnapshot: (String, Long) -> BridgeRuntimeSnapshot = { raw, epoch ->
         BridgeStatusJson.parse(raw).runtimeSnapshot(epoch)
     },
@@ -47,7 +49,6 @@ internal class BridgeHealthRuntime(
     private val monitorGeneration = AtomicInteger()
     private val monitorWakeGeneration = AtomicInteger()
     private val monitorWaitLock = Object()
-    private val localProxyHealthProbe = LocalProxyHealthProbe()
     private val monitor = BridgeHealthMonitorLoop(
         failureLimit = HealthFailureLimit,
         nextCheckDelayMillis = { confirmingFailure ->
@@ -201,64 +202,23 @@ internal class BridgeHealthRuntime(
         ownership: VpnRuntimeOwnership,
     ): HealthFailure? {
         if (!isOwnershipCurrent(ownership)) return null
-        val sessionEpoch = ownership.bridgeEpoch
-        val uiVisible = TcptunState.isUiVisible
-        val previous = TcptunState.state.value.diagnostics
-        // Prefer callback state already folded into TcptunState. Only a forced
-        // refresh reconciles against the authoritative StatusJSON snapshot.
+        // Check sockets before JNI: a blocked status call must not hide the last
+        // known listener layer. No native lock, DNS, or Internet dial is needed.
+        val localFailure = probeLocalListener(ownership)
+        if (!isOwnershipCurrent(ownership)) return null
+        if (localFailure != null) return HealthFailure(localFailure)
         val reconcile = shouldReconcileStatusJson()
         val observedStatus = if (reconcile) {
-            reconcileStatusFromJson(ownership)?.ifBlank { TcptunState.status.displayName }
-                ?: run {
-                    TcptunState.updateDiagnosticsForBridgeEpoch(sessionEpoch) {
-                        it.copy(localProxyReachable = false)
-                    }
-                    return HealthFailure("status unavailable")
-                }
+            reconcileStatusFromJson(ownership)
+                ?: return HealthFailure("control_plane status unavailable (listener checked separately)")
         } else {
             TcptunState.state.value.diagnostics.bridgeStatus
                 .ifBlank { TcptunState.status.displayName }
-                .ifBlank { "Unknown" }
-        }
-        val probeLocalProxy = BridgeHealthPolicy.shouldProbeLocalProxy(uiVisible)
-        val settings = currentSettings()
-        val localProxyReachable = if (probeLocalProxy) {
-            localProxyHealthProbe.canConnect(settings.socksPort)
-        } else {
-            true
         }
         if (!isOwnershipCurrent(ownership)) return null
-        val localProxyAddress = localProxyHealthProbe.connectAddress(settings.socksPort)
-        val nextLocalProxyReachable = if (probeLocalProxy) {
-            localProxyReachable
-        } else {
-            previous.localProxyReachable
-        }
-        if (
-            uiVisible ||
-            previous.localProxyReachable != nextLocalProxyReachable ||
-            previous.localProxyAddress != localProxyAddress ||
-            previous.localProxyPort != settings.socksPort
-        ) {
-            if (!isOwnershipCurrent(ownership)) return null
-            TcptunState.updateDiagnosticsForBridgeEpoch(sessionEpoch) {
-                it.copy(
-                    localProxyReachable = nextLocalProxyReachable,
-                    localProxyAddress = localProxyAddress,
-                    localProxyPort = settings.socksPort,
-                )
-            }
-        }
-        val status = TcptunState.state.value.diagnostics.bridgeStatus
-            .ifBlank { observedStatus }
-            .ifBlank { "Unknown" }
+        val status = TcptunState.state.value.diagnostics.bridgeStatus.ifBlank { observedStatus }
         if (status != "Running") return HealthFailure("bridge status is $status")
-        if (probeLocalProxy && !localProxyReachable) {
-            return HealthFailure("local proxy $localProxyAddress is not accepting connections")
-        }
-        if (reconcile && probeLocalProxy && localProxyReachable) {
-            restoreConnectionsReady(ownership)
-        }
+        if (reconcile) restoreConnectionsReady(ownership)
         // Member probes only run when an event forced them. The aggregate local
         // SOCKS/HTTP probe remains UI-only through shouldRunUpstreamProbe().
         if (shouldProbeMemberHealth()) {
@@ -271,8 +231,45 @@ internal class BridgeHealthRuntime(
             if (!isOwnershipCurrent(ownership)) return null
             val upstreamFailure = upstreamProbeFailure(targets)
             if (!isOwnershipCurrent(ownership)) return null
+            log("upstream_probe ${ownership.diagnosticId()} result=${upstreamFailure ?: "ready"}")
             updateRawProfileHealth(upstreamFailure, ownership)
             upstreamFailure?.let { return HealthFailure(it) }
+        }
+        return null
+    }
+
+    internal fun probeLocalListener(ownership: VpnRuntimeOwnership): String? {
+        if (!isOwnershipCurrent(ownership)) return null
+        if (!BridgeHealthPolicy.shouldProbeLocalProxy(TcptunState.isUiVisible)) return null
+        val settings = currentSettings()
+        val user = settings.localProxyUsers.firstOrNull()
+        val loopback = localProxyHealthProbe.listener(settings.socksPort, user)
+        if (!isOwnershipCurrent(ownership)) return null
+        val diagnostics = TcptunState.state.value.diagnostics
+        val context = "${ownership.diagnosticId()} native_session=${diagnostics.bridgeSessionId} " +
+            "status_seq=${diagnostics.bridgeSequence} status=${diagnostics.bridgeStatus} " +
+            "network=${diagnostics.underlyingNetwork} protocol=${settings.localProxyProtocol} " +
+            "listen=${if (settings.socksListenAll) "0.0.0.0" else "127.0.0.1"}:${settings.socksPort} " +
+            "listen_all=${settings.socksListenAll}"
+        log("local_proxy $context scope=loopback ${loopback.summary()}")
+        TcptunState.updateDiagnosticsForBridgeEpoch(ownership.bridgeEpoch) {
+            it.copy(localProxyReachable = loopback.healthy, localProxyAddress = loopback.address,
+                localProxyPort = settings.socksPort)
+        }
+        if (!loopback.healthy) return "local_proxy ${loopback.summary()}"
+        if (settings.socksListenAll) {
+            val addresses = runRecoverableCatching(interfaceAddresses).getOrElse { error ->
+                log("local_proxy $context scope=interface layer=E_unknown error=${error.javaClass.simpleName}")
+                emptyList()
+            }
+            if (addresses.isEmpty()) log("local_proxy $context scope=interface layer=E_unverified no_address=true")
+            for (address in addresses.distinct().take(8)) {
+                if (!isOwnershipCurrent(ownership)) return null
+                val result = localProxyHealthProbe.listener(settings.socksPort, user, address)
+                if (!isOwnershipCurrent(ownership)) return null
+                log("local_proxy $context scope=interface lan=${if (result.healthy) "device_reachable_remote_unverified" else "E_interface_failure"} ${result.summary()}")
+            }
+            // Interface/firewall/tethering failures must not restart a healthy TUN.
         }
         return null
     }

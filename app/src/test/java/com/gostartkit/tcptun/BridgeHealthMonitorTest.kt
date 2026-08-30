@@ -6,6 +6,26 @@ import org.junit.Test
 
 class BridgeHealthMonitorTest {
     @Test
+    fun silentBackgroundFailureGetsSafetyCheckThenBoundedConfirmation() {
+        var active = true
+        val waits = mutableListOf<Long?>()
+        BridgeHealthMonitorLoop(2) {
+            BridgeHealthPolicy.nextCheckDelayMs(powerSaving = true, confirmingFailure = it)
+        }.run(
+            initialWakeGeneration = 0,
+            isCurrent = { active },
+            canProbe = { BridgeHealthPolicy.shouldProbeLocalProxy(uiVisible = false) },
+            awaitEvent = { generation, timeout -> waits += timeout; generation },
+            probeFailureReason = { "B_handshake SocketTimeoutException" },
+            onSchedule = {},
+            onFailure = {},
+            onRestartRequired = { active = false },
+            onRecoverableError = { throw AssertionError(it) },
+        )
+        assertEquals(listOf(300_000L, 15_000L), waits)
+    }
+
+    @Test
     fun consecutiveFailuresSwitchToConfirmationTimerAndRequestRestart() {
         var active = true
         val waits = mutableListOf<Pair<Int, Long?>>()
