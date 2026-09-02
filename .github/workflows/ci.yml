@@ -15,11 +15,36 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Check out locked tcptun-go core
+        uses: actions/checkout@v4
+        with:
+          repository: gostartkit/tcptun-go
+          ref: c4959ca9edf4ecfcdd6370eb058615c8ad7c7ab6
+          path: .ci/tcptun-go
+          token: ${{ github.token }}
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: .ci/tcptun-go/go.mod
+          cache-dependency-path: .ci/tcptun-go/go.sum
+
+      - name: Install gomobile
+        working-directory: .ci/tcptun-go
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260611195102-4dd8f1dbf5d2
+          "$(go env GOPATH)/bin/gomobile" init
+
+      - name: Build locked Android bridge
+        env:
+          TCPTUN_GO_DIR: ${{ github.workspace }}/.ci/tcptun-go
+        run: ./scripts/build-androidbridge.sh
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
