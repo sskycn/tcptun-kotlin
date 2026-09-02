@@ -18,7 +18,7 @@ internal const val DefaultEchPorts = "443"
 internal val RemovedTunnelProtocols = setOf("vless", "vmess", "trojan")
 
 internal fun unsupportedTunnelProtocolMessage(protocol: String): String =
-    "tcptun-go v0.4.1 no longer supports ${protocol.trim().lowercase()}"
+    "tcptun-go v0.4.2 no longer supports ${protocol.trim().lowercase()}"
 
 /** Inbound tags matched by managed route rules. TUN always; local mixed/SOCKS when enabled. */
 internal fun managedRouteInboundTags(routeLocalProxyTraffic: Boolean): JSONArray =
