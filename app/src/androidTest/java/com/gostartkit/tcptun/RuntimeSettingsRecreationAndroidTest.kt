@@ -10,20 +10,13 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class RuntimeSettingsRecreationAndroidTest {
     @Test
-    fun splitRoutePlanPersistsAndOldSavedStateDefaultsToFullTunnel() {
+    fun savedStateAlwaysRestoresFullTunnel() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val original = RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()
-        val split = AndroidVpnRoutePlan.SplitTunnel(
-            routes = listOf(
-                IpPrefix.parse("192.168.50.99/24"),
-                IpPrefix.parse("fd12:3456:789a::1/64"),
-            ),
-            dnsServers = listOf("192.168.50.1", "fd12:3456:789a::53"),
-        )
         try {
-            RuntimeSettingsRepository.write(context, original.copy(vpnRoutePlan = split))
+            RuntimeSettingsRepository.write(context, original.copy(vpnRoutePlan = AndroidVpnRoutePlan.FullTunnel))
             val reloaded = RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()
-            assertEquals(normalizeAndroidVpnRoutePlan(split), reloaded.vpnRoutePlan)
+            assertEquals(AndroidVpnRoutePlan.FullTunnel, reloaded.vpnRoutePlan)
 
             val legacySavedState = """{"mtu":1400,"logLevel":"info"}"""
             assertEquals(
@@ -52,6 +45,7 @@ class RuntimeSettingsRecreationAndroidTest {
             assertFalse(savedState.contains(persisted.localProxyUsers.single().password))
             val restoredDraft = requireNotNull(decodeRuntimeSettingsSavedState(savedState))
             assertEquals(emptyList<LocalProxyUser>(), restoredDraft.localProxyUsers)
+            assertEquals(AndroidVpnRoutePlan.FullTunnel, restoredDraft.vpnRoutePlan)
 
             val hydrated = hydrateRuntimeSettingsCredentials(
                 restoredDraft,
@@ -63,6 +57,7 @@ class RuntimeSettingsRecreationAndroidTest {
             assertEquals(1500, reloaded.mtu)
             assertEquals("debug", reloaded.logLevel)
             assertEquals(persisted.localProxyUsers, reloaded.localProxyUsers)
+            assertEquals(AndroidVpnRoutePlan.FullTunnel, reloaded.vpnRoutePlan)
         } finally {
             RuntimeSettingsRepository.write(context, original)
         }
@@ -93,6 +88,7 @@ class RuntimeSettingsRecreationAndroidTest {
             assertEquals(1500, reloaded.mtu)
             assertEquals("mixed", reloaded.localProxyProtocol)
             assertEquals(persisted.localProxyUsers, reloaded.localProxyUsers)
+            assertEquals(AndroidVpnRoutePlan.FullTunnel, reloaded.vpnRoutePlan)
         } finally {
             RuntimeSettingsRepository.write(context, original)
         }
