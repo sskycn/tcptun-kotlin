@@ -12,8 +12,8 @@ Local clients -> SOCKS5/mixed listener ------------------------> selected outbou
 
 ## Features
 
-- Foreground `VpnService` with IPv4/IPv6 routes and event-driven recovery.
-- Backward-compatible dual-stack Full Tunnel and explicit IPv4/IPv6 home-network Split Tunnel.
+- Foreground `VpnService` with IPv4/IPv6 Full Tunnel routes and event-driven recovery.
+- One Android platform route mode: dual-stack Full Tunnel; Core/Edge routing selects Internet, direct, and Reverse Subnet outbounds per flow.
 - Reverse Subnet Remote support through encrypted Full JSON, including Core-owned relay and optional P2P direct QUIC.
 - Multiple structured profiles in one dynamic, session-affine outbound pool.
 - Complete strict tcptun-go JSON profiles without changing their schema.
