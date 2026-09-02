@@ -13,7 +13,9 @@ class AndroidVpnRoutePlanTest {
         )
 
         assertEquals("full", compiled.mode)
-        assertEquals(listOf("0.0.0.0/0", "0:0:0:0:0:0:0:0/0"), compiled.routes.map(String::valueOf))
+        assertEquals(2, compiled.routes.size)
+        assertTrue(compiled.routes.any { it.isIpv4 && it.prefixLength == 0 })
+        assertTrue(compiled.routes.any { !it.isIpv4 && it.prefixLength == 0 })
         assertEquals(listOf(AndroidVpnDnsAddress), compiled.dnsServers)
         assertTrue(compiled.fakeIpRoutes.isEmpty())
     }
