@@ -15,9 +15,10 @@ Android Remote → Go Edge → Go Home Connector → IPv4/IPv6 LAN targets
 2. Start from `examples/reverse-subnet-p2p-edge.json`, `-home.json`, and `-remote.json` in that
    checkout. Replace placeholders through a protected secret mechanism; never commit rendered
    configs or paste them into the report.
-3. Import the Remote config as Full JSON on Android. Keep `host_candidates: false` and omit
-   `strategy` (the v0.5.0 `balanced` default) for the first pass. Configure the Android Split
-   Tunnel with the same IPv4/IPv6 home CIDRs and unicast DNS.
+3. Import the Remote config as Full JSON on Android. Android always runs Full Tunnel, so both
+   ordinary Internet traffic and home-CIDR traffic enter the same TUN; use the Core/Edge compiled
+   route rules to send the home CIDRs to `reverse_subnet`. Keep `host_candidates: false` and omit
+   `strategy` (the v0.5.0 `balanced` default) for the first pass.
 4. Run TCP echo/HTTP and UDP echo targets on both LAN families. Run a DNS server reachable over
    UDP and TCP 53.
 
