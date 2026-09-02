@@ -94,6 +94,24 @@ class RuntimeSettingsAuthoritativeReadTest {
     }
 
     @Test
+    fun legacySplitRoutePlanIsRetiredAndLoadsAsFullTunnel() {
+        val preferences = encryptedPreferences().apply {
+            values[RuntimeSettingsStorageKeys.VpnRoutePlan] =
+                """{"mode":"split","routes":["192.168.50.0/24"],"dnsServers":["192.168.50.1"]}"""
+        }
+        val secrets = FakeSecretStorage().apply {
+            values[SecretId] = "real-user\u0000real-secret"
+        }
+
+        val result = engine(preferences, secrets).read() as RuntimeSettingsRead.Success
+
+        assertEquals(AndroidVpnRoutePlan.FullTunnel, result.settings.vpnRoutePlan)
+        assertFalse(preferences.values.containsKey(RuntimeSettingsStorageKeys.VpnRoutePlan))
+        assertEquals(SecretId, preferences.values[RuntimeSettingsStorageKeys.SecretsId])
+        assertEquals("real-user\u0000real-secret", secrets.values[SecretId])
+    }
+
+    @Test
     fun encryptedAnonymousLanListenerIsRepairedBeforeBecomingAuthoritative() {
         val preferences = encryptedPreferences().apply {
             values[RuntimeSettingsStorageKeys.SocksListenAll] = true
@@ -251,6 +269,7 @@ internal class FakeRuntimeSettingsPreferences : RuntimeSettingsPreferences {
         values[RuntimeSettingsStorageKeys.FlowAnalysisApp] = settings.flowAnalysisApp
         values.remove(RuntimeSettingsStorageKeys.SocksUsername)
         values.remove(RuntimeSettingsStorageKeys.SocksPassword)
+        values.remove(RuntimeSettingsStorageKeys.VpnRoutePlan)
         return true
     }
 }
