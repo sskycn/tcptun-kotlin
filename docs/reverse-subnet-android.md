@@ -19,8 +19,9 @@ principal.
 
 Current full configs preserve `route_mode`, `principals`, `subnets`, `export_subnets`, destination
 `ports`, `reverse_subnet`, resource budgets, root P2P listen configuration, outbound `p2p`, IPv4
-and IPv6 rendezvous arrays, optional STUN, and `host_candidates`. Go `ValidateConfig` and the Go
-compiler are authoritative after Android size/nesting/deprecation safety checks.
+and IPv6 rendezvous arrays, optional STUN, `host_candidates`, and the v0.5.0
+`strategy: balanced|aggressive` field. Go `ValidateConfig` and the Go compiler are authoritative
+after Android size/nesting/deprecation safety checks.
 
 ## Platform route modes
 
@@ -47,6 +48,10 @@ P2P defaults to disabled. `host_candidates` also defaults to disabled; enabling 
 may disclose selected private interface addresses to the authorized peer. Tokens, credentials,
 session secrets, probe credentials, permits, private keys, complete payloads, and candidate
 endpoints are excluded from ordinary logs and diagnostics.
+
+`strategy` defaults to `balanced`. `aggressive` enables Core-owned bounded retry, evidence-gated
+port prediction, and shorter background refresh intervals. Android preserves this field but does
+not predict ports, schedule candidate checks, or infer Direct/Relay state from logs.
 
 All Go-created TCP/UDP/IPv4/IPv6 sockets continue through the existing `SocketProtector` callback
 and `VpnService.protect(fd)`. Android does not open punching sockets or choose direct versus relay.

@@ -107,6 +107,7 @@ class RawCurrentCoreConfigTest {
         assertEquals("203.0.113.10:9555", p2p.getJSONArray("rendezvous").getString(0))
         assertEquals("[2001:db8::10]:9555", p2p.getJSONArray("rendezvous").getString(1))
         assertEquals("stun.example.com:3478", p2p.getJSONArray("stun").getString(0))
+        assertEquals("aggressive", p2p.getString("strategy"))
         assertEquals(1, outbound.getJSONArray("network").length())
         assertEquals("tcp", outbound.getJSONArray("network").getString(0))
         assertFalse(outbound.getJSONArray("network").toString().contains("udp"))
@@ -151,7 +152,8 @@ class RawCurrentCoreConfigTest {
                  "export_subnets": [{"name": "home", "cidrs": ["192.168.50.0/24"], "network": ["tcp"]}],
                  "p2p": {"enabled": true,
                    "rendezvous": ["203.0.113.10:9555", "[2001:db8::10]:9555"],
-                   "host_candidates": true, "stun": ["stun.example.com:3478"]}}
+                   "host_candidates": true, "stun": ["stun.example.com:3478"],
+                   "strategy": "aggressive"}}
               ],
               "route": {"default_outbound": "direct", "rules": [{
                 "network": ["tcp"], "ip_cidrs": ["192.168.50.0/24"], "outbound": "remote-edge"

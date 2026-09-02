@@ -164,7 +164,7 @@ class AppConfigCompatibilityTest {
 
             assertEquals(protocol, profile.protocol)
             assertEquals("legacy-credential", profile.token)
-            assertEquals("tcptun-go v0.4.2 no longer supports $protocol", profile.validate())
+            assertEquals("tcptun-go v0.5.0 no longer supports $protocol", profile.validate())
         }
     }
 
@@ -180,7 +180,7 @@ class AppConfigCompatibilityTest {
         val profile = resumableRealityProfile()
 
         assertEquals(
-            "tcptun-go v0.4.2 no longer supports vless",
+            "tcptun-go v0.5.0 no longer supports vless",
             profile.copy(protocol = "vless").validate(),
         )
         assertEquals(
@@ -225,7 +225,7 @@ class AppConfigCompatibilityTest {
         assertNull(profile.validate())
         assertEquals(listOf(443, 8443), parseEchPorts(profile.echPorts))
         assertEquals(
-            "tcptun-go v0.4.2 no longer supports vless",
+            "tcptun-go v0.5.0 no longer supports vless",
             profile.copy(protocol = "vless").validate(),
         )
         assertEquals(

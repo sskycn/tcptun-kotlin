@@ -298,7 +298,7 @@
     <string name="field_security">Security</string>
     <string name="field_flow">Flow</string>
     <string name="field_reality_public_key">REALITY public key</string>
-    <string name="legacy_protocol_unsupported">%1$s is no longer supported by tcptun-go v0.4.2. This profile cannot run until it is reconfigured.</string>
+    <string name="legacy_protocol_unsupported">%1$s is no longer supported by tcptun-go v0.5.0. This profile cannot run until it is reconfigured.</string>
     <string name="reconfigure_as_native">Reconfigure as Native</string>
     <string name="field_short_id">Short ID</string>
     <string name="field_spider_x">SpiderX</string>

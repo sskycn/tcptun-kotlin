@@ -72,8 +72,8 @@ See [docs/device-testing.md](docs/device-testing.md) for repeatable device valid
 
 ## tcptun-go authentication
 
-The Android bridge is generated from tcptun-go v0.4.2 commit
-`907130cb53b71a4317da057c9ca33fd128c29ffd` (Bridge API 3). Secure authentication uses the
+The Android bridge is generated from tcptun-go v0.5.0 commit
+`c4959ca9edf4ecfcdd6370eb058615c8ad7c7ab6` (Bridge API 3). Secure authentication uses the
 tcptun-go v2 protocol: HKDF-SHA256 derives the authentication key and the Go core performs all
 challenge/response processing. It is intended for high-entropy shared secrets and is not
 transport encryption.

@@ -35,8 +35,8 @@ class AndroidBridgeContractTest {
 
     @Test
     fun currentBridgeReportsVersionedCoreIdentity() {
-        assertEquals("v0.4.2", Androidbridge.coreVersion())
-        assertEquals("907130cb53b7", Androidbridge.coreBuildID())
+        assertEquals("v0.5.0", Androidbridge.coreVersion())
+        assertEquals("c4959ca9edf4", Androidbridge.coreBuildID())
     }
 
     @Test
@@ -372,7 +372,8 @@ class AndroidBridgeContractTest {
                  "mux": {"enabled": true},
                  "p2p": {"enabled": true,
                    "rendezvous": ["203.0.113.10:9555", "[2001:db8::10]:9555"],
-                   "host_candidates": false, "stun": ["stun.example.com:3478"]}}
+                   "host_candidates": false, "stun": ["stun.example.com:3478"],
+                   "strategy": "aggressive"}}
               ],
               "route": {"default_outbound": "direct", "rules": [{
                 "network": ["tcp", "udp"],
@@ -390,6 +391,12 @@ class AndroidBridgeContractTest {
         assertFalse(p2p.getBoolean("host_candidates"))
         assertEquals("[2001:db8::10]:9555", p2p.getJSONArray("rendezvous").getString(1))
         assertEquals("stun.example.com:3478", p2p.getJSONArray("stun").getString(0))
+        assertEquals("aggressive", p2p.getString("strategy"))
+
+        val invalid = JSONObject(prepared)
+        invalid.getJSONArray("outbounds").getJSONObject(1).getJSONObject("p2p")
+            .put("strategy", "unbounded")
+        assertTrue(runCatching { Androidbridge.validateConfig(invalid.toString()) }.isFailure)
     }
 
     @Test
@@ -892,10 +899,21 @@ class AndroidBridgeContractTest {
         )
         val raw = AppConfig(
             rawConfigJson = """{
-                "outbounds":[{"tag":"direct","type":"direct","network":["tcp"]}],
-                "route":{"default_outbound":"direct"}
+                "outbounds":[
+                    {"tag":"default","type":"direct","network":["tcp","udp"]},
+                    {"tag":"direct-tcp","type":"direct","network":["tcp"]}
+                ],
+                "route":{"default_outbound":"default","rules":[
+                    {"network":["tcp"],"outbound":"direct-tcp"}
+                ]}
             }""".trimIndent(),
         )
+
+        val preparedRaw = JSONObject(raw.toBridgeJson(localListenAddr = "127.0.0.1:1080"))
+        assertEquals("default", preparedRaw.getJSONObject("dns").getString("outbound"))
+        assertEquals(2, preparedRaw.getJSONArray("outbounds").getJSONObject(0).getJSONArray("network").length())
+        assertEquals(1, preparedRaw.getJSONArray("outbounds").getJSONObject(1).getJSONArray("network").length())
+        assertEngineStarts(preparedRaw.toString())
 
         listOf(structured, raw).forEach { profile ->
             LocalProxyProtocols.forEach { protocol ->
@@ -1766,12 +1784,12 @@ class AndroidBridgeContractTest {
                 rawConfigJson = """{
                     "outbounds":[
                         {"tag":"direct","type":"direct","network":["tcp"]},
-                        {"tag":"proxy","type":"direct","network":["tcp"]},
+                        {"tag":"proxy","type":"direct","network":["tcp","udp"]},
                         {"tag":"auto","type":"direct-first","primary":"direct","fallback":"proxy","network":["tcp"]}
                     ],
                     "route":{
                         "default_outbound":"auto",
-                        "rules":[{"domain_suffixes":["example.com"],"outbound":"auto"}]
+                        "rules":[{"domain_suffixes":["example.com"],"network":["tcp"],"outbound":"auto"}]
                     }
                 }""".trimIndent(),
             ).toBridgeJson(localListenAddr = "127.0.0.1:18092"),
@@ -1780,7 +1798,7 @@ class AndroidBridgeContractTest {
         assertEquals("proxy", prepared.getJSONObject("route").getString("default_outbound"))
         val outbounds = prepared.getJSONArray("outbounds")
         assertEquals(2, outbounds.length())
-        assertEquals(2, outbounds.getJSONObject(0).getJSONArray("network").length())
+        assertEquals(1, outbounds.getJSONObject(0).getJSONArray("network").length())
         assertEquals(2, outbounds.getJSONObject(1).getJSONArray("network").length())
         val rules = prepared.getJSONObject("route").getJSONArray("rules")
         assertEquals(1, rules.length())

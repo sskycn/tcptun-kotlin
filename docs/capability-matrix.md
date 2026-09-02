@@ -3,7 +3,7 @@
 Baseline audited on 2026-09-02:
 
 - tcptun-kotlin starting commit: `008a470ac758ca5429e73e50a4d69b72781f2362`
-- tcptun-go target commit: `907130cb53b71a4317da057c9ca33fd128c29ffd`
+- tcptun-go target: `v0.5.0` commit `c4959ca9edf4ecfcdd6370eb058615c8ad7c7ab6`
 - previous core pin: `5fea14bb57f997303044d1bbd7826a3eca2a2620`
 - gomobile contract: unchanged; Bridge API remains `3`
 
@@ -22,7 +22,7 @@ it does not mean that Kotlin implements the feature.
 | chain / `via` | Yes | Raw | Preserve current Go shape | raw round trip |
 | multiple outbound addresses | Yes | Raw; structured single address | Preserve arrays | Go example fixtures |
 | failover / carrier fallback | Yes | Core-owned | No Kotlin selection logic | AAR/core tests |
-| inbound/outbound network capability | Yes | TCP/UDP arrays | Raw preparation currently widens some outbounds | Stop rewriting supported network arrays | raw preservation tests |
+| inbound/outbound network capability | Yes | TCP/UDP arrays | Raw preparation preserves endpoint capability | Keep Core validation authoritative | raw preservation tests |
 | TCP / UDP | Yes | Both | Split platform routes needed | route-plan tests + device test |
 | IPv4 / IPv6 | Yes | Full-tunnel dual stack | Split platform routes needed | route-plan tests + device test |
 | raw / WebSocket / H2 / H3 transport | Yes | Structured and raw | Keep Go validation authoritative | profile + raw tests |
@@ -63,6 +63,8 @@ it does not mean that Kotlin implements the feature.
 | P2P enabled / rendezvous IPv4+IPv6 | Yes | Raw was preserved but old Core rejected | Upgrade AAR; show safe state | fixtures/AAR test |
 | host candidates | Yes, privacy-sensitive | No Android UI | Default off; explicit warning | settings/privacy test |
 | STUN / edge-reflexive / peer-reflexive | Yes | Core-owned | Preserve config only | Go tests/AAR fixture |
+| P2P strategy `balanced|aggressive` | Yes | Raw Full JSON | Preserve verbatim; Core validates and owns behavior | AAR fixture |
+| bounded retry/prediction/background readiness | Yes | Core-owned | No Kotlin state machine | Go tests + network qualification |
 | P2P control v2 + v1 fallback | Yes | Core-owned | No Kotlin protocol | Go tests/E2E |
 | authenticated direct QUIC / permits | Yes | Core-owned | Existing `SocketProtector` for every socket | Go bridge + device test |
 | relay fallback | Yes | Core-owned | Do not restart VPN or bypass auth | E2E |
