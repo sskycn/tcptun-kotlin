@@ -144,7 +144,8 @@ internal object VpnServiceIntents {
             runtimeSettings.localProxyProtocol.length +
             runtimeSettings.logLevel.length +
             runtimeSettings.defaultOutbound.length +
-            runtimeSettings.flowAnalysisApp.length
+            runtimeSettings.flowAnalysisApp.length +
+            encodeAndroidVpnRoutePlan(runtimeSettings.vpnRoutePlan).length
         require(isVpnCommandPayloadWithinLimit(configJson.length, planLength, settingsPayloadLength)) {
             "VPN configuration is too large"
         }

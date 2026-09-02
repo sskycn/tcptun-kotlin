@@ -146,6 +146,7 @@ internal class EncryptedVpnCommandStore(
         .put("routeLocalProxyTraffic", settings.routeLocalProxyTraffic)
         .put("defaultOutbound", settings.defaultOutbound)
         .put("flowAnalysisApp", settings.flowAnalysisApp)
+        .put("vpnRoutePlan", encodeAndroidVpnRoutePlan(settings.vpnRoutePlan))
 
     private fun decodeRuntimeSettings(json: JSONObject): RuntimeSettings = requireSafeRuntimeSettings(
         RuntimeSettings(
@@ -167,6 +168,7 @@ internal class EncryptedVpnCommandStore(
             routeLocalProxyTraffic = json.optBoolean("routeLocalProxyTraffic", false),
             defaultOutbound = normalizeDefaultOutboundSelection(json.optString("defaultOutbound")),
             flowAnalysisApp = normalizeFlowAnalysisApp(json.optString("flowAnalysisApp")),
+            vpnRoutePlan = decodeAndroidVpnRoutePlan(json.optString("vpnRoutePlan")),
         ),
     )
 

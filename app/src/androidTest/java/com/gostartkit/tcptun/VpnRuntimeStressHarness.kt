@@ -127,7 +127,9 @@ internal class VpnRuntimeStressHarness : AutoCloseable {
                 (active.serviceInstanceId != before.serviceInstanceId || active.bridgeEpoch != before.bridgeEpoch) &&
                 TcptunState.status == VpnStatus.Running &&
                 TcptunState.state.value.connectionsReady &&
-                TcptunState.diagnostics.vpnRouteMode == expectedMode
+                TcptunState.diagnostics.vpnRouteMode == expectedMode &&
+                TcptunState.diagnostics.bridgeStatus == "Running" &&
+                localProxyListenersReady()
         }
         assertLocalProxyReady()
         return activeOwnershipSnapshot()
@@ -202,6 +204,15 @@ internal class VpnRuntimeStressHarness : AutoCloseable {
         }
         assertEquals("Running", TcptunState.diagnostics.bridgeStatus)
         println("LOCAL_PROXY_RUNNING_ASSERTION protocol=${settings.localProxyProtocol} targets=$targets epoch=${activeOwnershipSnapshot().bridgeEpoch}")
+    }
+
+    private fun localProxyListenersReady(): Boolean {
+        val settings = TcptunVpnService.readRuntimeSettings(context)
+        val user = settings.localProxyUsers.firstOrNull()
+        val targets = listOf("127.0.0.1") + if (settings.socksListenAll) localProxyInterfaceAddresses() else emptyList()
+        return targets.all { target ->
+            LocalProxyHealthProbe().listener(settings.socksPort, user, target).healthy
+        }
     }
 
     fun waitForStopped(timeoutMillis: Long = 15_000) = waitUntil("VPN Stopped", timeoutMillis) {
