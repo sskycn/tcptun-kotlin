@@ -25,6 +25,8 @@ rule target and becomes usable again when that profile is started.
 - Import and delete operations are bounded and recoverable.
 - Credentials are not included in diagnostics or ordinary logs.
 - Existing supported migrations remain unchanged. Removed v0.4.0 fields are handled explicitly.
+- Android VPN route mode/CIDRs/DNS are non-secret runtime metadata, separate from FileConfig and
+  T2/T3/A1. Missing metadata always migrates to Full Tunnel.
 
 ## Local proxy accounts
 
@@ -53,9 +55,16 @@ Structured Native profiles persist `carrierPrefer` exactly as `adaptive`, `quic`
 Missing values remain empty and mean the Core adaptive policy, so upgrading does not change an
 existing auto profile's network behavior. A preference requires mux plus `carrierMode=auto`; TLS
 and REALITY are both supported. Switching to the TCP or QUIC single-carrier mode clears the
-preference, and disabling mux clears all dependent carrier settings. Raw JSON preserves a valid
-outbound `carrier.prefer` but rejects inbound placement, unknown values, and preferences on a
-non-auto mode.
+preference, and disabling mux clears all dependent carrier settings. Raw JSON preserves
+`carrier.prefer` without maintaining a second Kotlin schema; tcptun-go `ValidateConfig` is
+authoritative for placement, mode dependencies, and current/future values.
+
+Full JSON is the advanced topology boundary for Reverse Subnet, principal rules, subnet and
+port policy, resource budgets, and P2P. It remains encrypted as one secret document. Android
+preparation injects the platform listener/TUN boundary and managed rules but preserves supported
+`route_mode`, `principals`, `subnets`, `export_subnets`, `reverse_subnet`, `p2p`, rendezvous,
+STUN, host-candidate, IPv6, DNS, and resource fields. Endpoint `network` capability is never
+widened by Kotlin.
 
 Each local proxy account has independent A1 QR/copy/share actions. One `A1:` payload contains one
 username/password pair only; there is no multi-account bundle. Scanning A1 opens a password-masked

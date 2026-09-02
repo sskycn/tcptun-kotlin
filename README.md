@@ -13,6 +13,8 @@ Local clients -> SOCKS5/mixed listener ------------------------> selected outbou
 ## Features
 
 - Foreground `VpnService` with IPv4/IPv6 routes and event-driven recovery.
+- Backward-compatible dual-stack Full Tunnel and explicit IPv4/IPv6 home-network Split Tunnel.
+- Reverse Subnet Remote support through encrypted Full JSON, including Core-owned relay and optional P2P direct QUIC.
 - Multiple structured profiles in one dynamic, session-affine outbound pool.
 - Complete strict tcptun-go JSON profiles without changing their schema.
 - Native URI import/export and compact `T2:`/`T3:` profile QR support.
@@ -52,6 +54,8 @@ See [docs/device-testing.md](docs/device-testing.md) for repeatable device valid
 - [VPN lifecycle and ownership](docs/vpn-lifecycle.md)
 - [Bridge/AAR integration](docs/bridge-integration.md)
 - [Profiles and persistence](docs/profiles.md)
+- [Reverse Subnet on Android](docs/reverse-subnet-android.md)
+- [Reverse Subnet device lab](docs/reverse-subnet-lab.md)
 - [URI and QR import](docs/uri-qr-import.md)
 - [App routing](docs/app-routing.md)
 - [Traffic analysis](docs/traffic-analysis.md)

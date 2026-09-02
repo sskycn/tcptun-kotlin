@@ -21,6 +21,28 @@ logs/diagnostics:
 4. Start a known direct profile and verify the foreground notification.
 5. Confirm Diagnostics reports `Running`, a session ID, MTU, network, and core identity.
 
+## Full and split route plans
+
+Run the existing Full Tunnel first and confirm Diagnostics reports `full`, one IPv4 default
+route, one IPv6 default route, and the VPN DNS server. Existing installations with no route-plan
+metadata must report Full Tunnel after upgrade.
+
+For Split Tunnel, open Settings → Home network / Reverse Subnet and configure:
+
+```text
+IPv4: 192.168.50.0/24
+IPv6: fd12:3456:789a::/64
+DNS:  192.168.50.1, fd12:3456:789a::53
+```
+
+Verify the two home prefixes enter the VPN while ordinary IPv4 and IPv6 Internet traffic uses
+the physical network. Test DNS over both UDP 53 and TCP 53. Every configured DNS address must be
+inside a home prefix. With fake-IP enabled in Full JSON, Diagnostics must show the additional
+fake-IP routes and application connections to both fake pools must return to the TUN.
+
+Do not infer success from the route-plan JVM tests: record the device/emulator, the actual routes,
+and packet/connectivity observations. If no Android target is available, report `NOT RUN`.
+
 ## Start/stop and recreation
 
 1. Start and stop the same profile three times.
@@ -41,6 +63,8 @@ available. Manual runs are still required for OEM lifecycle behavior.
 4. Briefly disable all networks and re-enable the original network.
 5. Confirm a temporary no-network interval does not stop the VPN or cause duplicate recovery.
 6. Stop while recovery is scheduled and confirm no later recovery restarts the service.
+7. With P2P enabled, repeat Wi-Fi → cellular → Wi-Fi. An established direct session may end;
+   a new flow must gather again or use relay, without a duplicate VPN service or leaked TUN.
 
 ## Import and persistence
 

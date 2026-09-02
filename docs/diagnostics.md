@@ -3,10 +3,11 @@
 `TcptunDiagnosticsSnapshot` is the support-facing model. It contains:
 
 - Application version and build.
-- Core version and build ID.
-- VPN state and session ID.
+- Core version/build ID, Bridge API, and locked core commit.
+- VPN state, `connectionsReady`, and session ID.
 - Active network type and availability.
-- TUN MTU and TCP/UDP state fields.
+- TUN MTU, TCP/UDP state, Full/Split mode, IPv4/IPv6 route counts, DNS/fake-IP route counts,
+  and whether P2P is configured.
 - Outbound tag, health, latency, and last error.
 - Typed, timestamped user-safe errors.
 
