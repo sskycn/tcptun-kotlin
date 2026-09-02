@@ -223,6 +223,8 @@ internal fun SettingsPage(
         .firstOrNull { it.first == settings.defaultOutbound }
         ?.second
         ?: defaultPoolLabel
+    val fullTunnelLabel = stringResource(R.string.full_tunnel)
+    val splitTunnelLabel = stringResource(R.string.home_network_split_tunnel)
     LaunchedEffect(appContext, settingsReadAttempt) {
         when (val loaded = withContext(Dispatchers.IO) { readUiRuntimeSettings(appContext) }) {
             is RuntimeSettingsRead.Success -> {
@@ -524,18 +526,11 @@ internal fun SettingsPage(
                         )
                         ChoiceRow(
                             stringResource(R.string.vpn_route_mode),
-                            if (splitTunnelSelected) {
-                                stringResource(R.string.home_network_split_tunnel)
-                            } else {
-                                stringResource(R.string.full_tunnel)
-                            },
-                            listOf(
-                                stringResource(R.string.full_tunnel),
-                                stringResource(R.string.home_network_split_tunnel),
-                            ),
+                            if (splitTunnelSelected) splitTunnelLabel else fullTunnelLabel,
+                            listOf(fullTunnelLabel, splitTunnelLabel),
                             enabled = !savingSettings,
                         ) { selected ->
-                            splitTunnelSelected = selected == context.getString(R.string.home_network_split_tunnel)
+                            splitTunnelSelected = selected == splitTunnelLabel
                             settingsDirty = true
                         }
                         if (splitTunnelSelected) {
