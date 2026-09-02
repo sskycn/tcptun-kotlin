@@ -323,6 +323,7 @@ Every command transition asserts:
 | 17 | AppOps authorization-mode diagnostic (not revoke proof) | system-event opt-in; default appops mode |
 | 18 | Real VPN permission revoke while Running | system-event opt-in + `RUNTIME_STRESS_REVOKE_MODE=system`; manual Settings action |
 | 19 | Real VPN permission revoke during Recovery | network + system-event opt-ins + system revoke mode; manual Settings action |
+| 20 | Full → Split A → Split B → Full structural route rebuild | default stress test; asserts one TUN/Bridge/lease owner and final cleanup |
 
 Recovery tests require the real device to enter the coordinator's Recovering phase after all
 underlying networks are disabled. A device/core combination that does not enter that phase is

@@ -29,7 +29,7 @@ class VpnServiceLifecycleTest {
             id = "vpn-service-lifecycle",
             name = "VPN service lifecycle",
             rawConfigJson = """{
-                "outbounds":[{"tag":"direct","type":"direct","network":["tcp"]}],
+                "outbounds":[{"tag":"direct","type":"direct","network":["tcp","udp"]}],
                 "route":{
                     "default_outbound":"direct",
                     "rules":[{
@@ -61,7 +61,7 @@ class VpnServiceLifecycleTest {
         try {
             assertNull(VpnService.prepare(context))
             assertEquals("", TcptunVpnService.readRuntimeSettings(context).flowAnalysisApp)
-            repeat(2) { cycle ->
+            repeat(3) { cycle ->
                 TcptunState.clearLogs()
                 ContextCompat.startForegroundService(context, TcptunVpnService.startIntent(context, profile))
                 waitUntil("VPN reaches Running") { TcptunState.status == VpnStatus.Running }

@@ -55,6 +55,7 @@ internal class VpnRuntimeStressHarness : AutoCloseable {
                     socksListenAll = false,
                     localProxyUsers = emptyList(),
                     flowAnalysisApp = "",
+                    vpnRoutePlan = AndroidVpnRoutePlan.FullTunnel,
                 ),
             )
             ProfileStore.save(
@@ -108,6 +109,28 @@ internal class VpnRuntimeStressHarness : AutoCloseable {
             current.copy(logLevel = if (settingsToggle) "debug" else "info"),
         )
         context.startService(TcptunVpnService.applyRuntimeSettingsIntent(context))
+    }
+
+    fun applyRoutePlanAndWait(
+        routePlan: AndroidVpnRoutePlan,
+        timeoutMillis: Long = 45_000,
+    ): RuntimeOwnershipDebugSnapshot {
+        val before = activeOwnershipSnapshot()
+        val current = TcptunVpnService.readRuntimeSettings(context)
+        TcptunVpnService.writeRuntimeSettings(context, current.copy(vpnRoutePlan = routePlan))
+        context.startService(TcptunVpnService.applyRuntimeSettingsIntent(context))
+        val expectedMode = if (routePlan is AndroidVpnRoutePlan.SplitTunnel) "split" else "full"
+        waitUntil("$expectedMode VPN route plan rebuild", timeoutMillis) {
+            val active = TcptunVpnService.runtimeOwnershipDebugSnapshots()
+                .singleOrNull { it.activeServiceOwner && !it.destroyed }
+            active != null &&
+                (active.serviceInstanceId != before.serviceInstanceId || active.bridgeEpoch != before.bridgeEpoch) &&
+                TcptunState.status == VpnStatus.Running &&
+                TcptunState.state.value.connectionsReady &&
+                TcptunState.diagnostics.vpnRouteMode == expectedMode
+        }
+        assertLocalProxyReady()
+        return activeOwnershipSnapshot()
     }
 
     fun updateFlowAnalysis() {
