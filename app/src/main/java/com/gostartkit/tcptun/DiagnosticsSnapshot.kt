@@ -9,6 +9,8 @@ data class TcptunDiagnosticsApplication(
 data class TcptunDiagnosticsCore(
     val version: String?,
     val buildId: String?,
+    val bridgeApiVersion: Int = BuildConfig.TCPTUN_BRIDGE_API_VERSION,
+    val lockedCommit: String = BuildConfig.TCPTUN_CORE_COMMIT,
 )
 
 data class TcptunDiagnosticsNetwork(
@@ -20,6 +22,12 @@ data class TcptunDiagnosticsTunnel(
     val mtu: Int,
     val tcpState: String,
     val udpState: String,
+    val routeMode: String = "full",
+    val ipv4RouteCount: Int = 0,
+    val ipv6RouteCount: Int = 0,
+    val dnsServerCount: Int = 0,
+    val fakeIpRouteCount: Int = 0,
+    val p2pConfigured: Boolean = false,
 )
 
 data class TcptunDiagnosticsOutbound(
@@ -43,6 +51,7 @@ data class TcptunDiagnosticsSnapshot(
     val application: TcptunDiagnosticsApplication,
     val core: TcptunDiagnosticsCore,
     val vpnState: String,
+    val connectionsReady: Boolean = false,
     val sessionId: Long?,
     val network: TcptunDiagnosticsNetwork,
     val tunnel: TcptunDiagnosticsTunnel,
@@ -84,9 +93,17 @@ data class TcptunDiagnosticsSnapshot(
         buildString {
             appendLine("app=${safe.application.version} build=${safe.application.build}")
             appendLine("core=${safe.core.version.orEmpty()} buildId=${safe.core.buildId.orEmpty()}")
-            appendLine("vpn=${safe.vpnState} session=${safe.sessionId ?: "none"}")
+            appendLine(
+                "bridgeApi=${safe.core.bridgeApiVersion} lockedCommit=${safe.core.lockedCommit}",
+            )
+            appendLine("vpn=${safe.vpnState} ready=${safe.connectionsReady} session=${safe.sessionId ?: "none"}")
             appendLine("network=${safe.network.type} available=${safe.network.available}")
             appendLine("tun.mtu=${safe.tunnel.mtu} tcp=${safe.tunnel.tcpState} udp=${safe.tunnel.udpState}")
+            appendLine(
+                "tun.routes=${safe.tunnel.routeMode} ipv4=${safe.tunnel.ipv4RouteCount} " +
+                    "ipv6=${safe.tunnel.ipv6RouteCount} dns=${safe.tunnel.dnsServerCount} " +
+                    "fakeIp=${safe.tunnel.fakeIpRouteCount} p2p=${safe.tunnel.p2pConfigured}",
+            )
             safe.outbounds.forEach { outbound ->
                 appendLine(
                     "outbound=${outbound.tag} health=${outbound.health} " +
@@ -143,8 +160,11 @@ data class TcptunDiagnosticsSnapshot(
                 core = TcptunDiagnosticsCore(
                     version = coreIdentity.version.takeIf(String::isNotBlank),
                     buildId = coreIdentity.buildId.takeIf(String::isNotBlank),
+                    bridgeApiVersion = BuildConfig.TCPTUN_BRIDGE_API_VERSION,
+                    lockedCommit = BuildConfig.TCPTUN_CORE_COMMIT,
                 ),
                 vpnState = runtimeState.status.displayName,
+                connectionsReady = runtimeState.connectionsReady,
                 sessionId = diagnostics.bridgeSessionId.takeIf { it > 0L },
                 network = TcptunDiagnosticsNetwork(
                     type = diagnostics.underlyingNetwork,
@@ -154,6 +174,12 @@ data class TcptunDiagnosticsSnapshot(
                     mtu = diagnostics.mtu,
                     tcpState = diagnostics.bridgeEventState,
                     udpState = diagnostics.bridgeEventState,
+                    routeMode = diagnostics.vpnRouteMode,
+                    ipv4RouteCount = diagnostics.vpnIpv4RouteCount,
+                    ipv6RouteCount = diagnostics.vpnIpv6RouteCount,
+                    dnsServerCount = diagnostics.vpnDnsServerCount,
+                    fakeIpRouteCount = diagnostics.vpnFakeIpRouteCount,
+                    p2pConfigured = diagnostics.p2pConfigured,
                 ),
                 outbounds = runtimeState.profileHealth.map { (tag, health) ->
                     TcptunDiagnosticsOutbound(

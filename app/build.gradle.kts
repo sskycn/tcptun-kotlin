@@ -63,6 +63,12 @@ val targetAbi = providers.gradleProperty("targetAbi").orNull?.also { value ->
         "targetAbi must be one of ${supportedAbis.joinToString()}"
     }
 }
+val bridgeLock = rootProject.layout.projectDirectory.file("bridge.lock")
+val bridgeLockProperties = Properties().apply {
+    bridgeLock.asFile.inputStream().use(::load)
+}
+val lockedCoreCommit = requireNotNull(bridgeLockProperties.getProperty("coreCommit"))
+val lockedBridgeApiVersion = requireNotNull(bridgeLockProperties.getProperty("bridgeApiVersion"))
 
 android {
     namespace = "com.tcptun.client"
@@ -81,6 +87,8 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("boolean", "BENCHMARK", "false")
+        buildConfigField("String", "TCPTUN_CORE_COMMIT", "\"$lockedCoreCommit\"")
+        buildConfigField("int", "TCPTUN_BRIDGE_API_VERSION", lockedBridgeApiVersion)
         ndk {
             abiFilters += targetAbi?.let(::listOf) ?: supportedAbis
         }
@@ -207,7 +215,6 @@ tasks.named("check").configure {
 }
 
 val bridgeAar = layout.projectDirectory.file("libs/androidbridge.aar")
-val bridgeLock = rootProject.layout.projectDirectory.file("bridge.lock")
 val expectedCoreCommit = providers.gradleProperty("expectedCoreCommit")
     .orElse(providers.environmentVariable("EXPECTED_CORE_COMMIT"))
 

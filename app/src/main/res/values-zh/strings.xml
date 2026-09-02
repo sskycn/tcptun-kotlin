@@ -333,4 +333,26 @@
     <string name="full_config_mode">完整 tcptun-go JSON</string>
     <string name="full_config_json">tcptun-go 配置 JSON</string>
     <string name="full_config_note">保留 tcptun-go 支持的全部字段；VPN 流量通过 tag 为 tun 的原生 TUN 入站进入，本地代理监听仍独立保留。</string>
+    <string name="home_network_settings">家庭网络 / Reverse Subnet</string>
+    <string name="vpn_route_mode">VPN 路由模式</string>
+    <string name="full_tunnel">全量隧道</string>
+    <string name="home_network_split_tunnel">家庭网络分流</string>
+    <string name="home_ipv4_cidrs">家庭 IPv4 CIDR</string>
+    <string name="home_ipv6_cidrs">家庭 IPv6 CIDR</string>
+    <string name="cidr_list_hint">使用逗号或空格分隔；主机位会自动规范化</string>
+    <string name="home_dns_servers">可选家庭 DNS</string>
+    <string name="home_dns_route_note">每个 DNS 地址都必须包含在已配置的家庭路由内。</string>
+    <string name="current_edge_profile">当前 Edge 配置</string>
+    <string name="p2p_status">Direct QUIC / P2P</string>
+    <string name="relay_fallback">Relay 回退</string>
+    <string name="core_managed">由 Go Core 管理</string>
+    <string name="host_candidates">Host Candidates</string>
+    <string name="stun_servers">STUN 服务器</string>
+    <string name="reverse_subnet_full_json_note">Reverse Subnet 拓扑和 P2P 继续保存在加密的完整 JSON 中。T2/T3/A1 不变；Android 只安装上方显示的平台路由。</string>
+    <string name="host_candidates_privacy_note">Host Candidates 默认关闭。在完整 JSON 中启用后，已授权对端可能看到本机选中的私有接口地址。</string>
+    <string name="diag_connections_ready">连接就绪</string>
+    <string name="diag_bridge_api">Bridge API</string>
+    <string name="diag_bridge_commit">锁定 Core 提交</string>
+    <string name="diag_route_counts">VPN 路由数量</string>
+    <string name="diag_dns_routes">VPN DNS 路由</string>
 </resources>

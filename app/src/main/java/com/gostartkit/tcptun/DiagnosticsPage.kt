@@ -92,6 +92,10 @@ internal fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
                             )
                             DiagnosticsLine(stringResource(R.string.diag_vpn), snapshot.vpnState)
                             DiagnosticsLine(
+                                stringResource(R.string.diag_connections_ready),
+                                snapshot.connectionsReady.toString(),
+                            )
+                            DiagnosticsLine(
                                 stringResource(R.string.diag_underlying_network),
                                 "${snapshot.network.type} · ${snapshot.network.available}",
                             )
@@ -105,12 +109,33 @@ internal fun DiagnosticsPage(onBack: () -> Unit, onShowLogs: () -> Unit) {
                                 snapshot.core.buildId ?: noneLabel,
                             )
                             DiagnosticsLine(
+                                stringResource(R.string.diag_bridge_api),
+                                snapshot.core.bridgeApiVersion.toString(),
+                            )
+                            DiagnosticsLine(
+                                stringResource(R.string.diag_bridge_commit),
+                                snapshot.core.lockedCommit,
+                            )
+                            DiagnosticsLine(
                                 stringResource(R.string.diag_session),
                                 snapshot.sessionId?.toString() ?: noneLabel,
                             )
                             DiagnosticsLine(stringResource(R.string.diag_tun_mtu), snapshot.tunnel.mtu.toString())
                             DiagnosticsLine(stringResource(R.string.diag_tun_tcp), snapshot.tunnel.tcpState)
                             DiagnosticsLine(stringResource(R.string.diag_tun_udp), snapshot.tunnel.udpState)
+                            DiagnosticsLine(stringResource(R.string.vpn_route_mode), snapshot.tunnel.routeMode)
+                            DiagnosticsLine(
+                                stringResource(R.string.diag_route_counts),
+                                "IPv4 ${snapshot.tunnel.ipv4RouteCount} · IPv6 ${snapshot.tunnel.ipv6RouteCount}",
+                            )
+                            DiagnosticsLine(
+                                stringResource(R.string.diag_dns_routes),
+                                "DNS ${snapshot.tunnel.dnsServerCount} · fake-IP ${snapshot.tunnel.fakeIpRouteCount}",
+                            )
+                            DiagnosticsLine(
+                                stringResource(R.string.p2p_status),
+                                if (snapshot.tunnel.p2pConfigured) stringResource(R.string.enabled) else stringResource(R.string.disabled),
+                            )
                             DiagnosticsLine(stringResource(R.string.diag_go_state), diagnostics.bridgeEventState)
                             DiagnosticsLine(stringResource(R.string.diag_go_phase), diagnostics.bridgeEventPhase)
                             DiagnosticsLine(stringResource(R.string.diag_go_listen), diagnostics.bridgeListen.ifBlank { noneLabel })

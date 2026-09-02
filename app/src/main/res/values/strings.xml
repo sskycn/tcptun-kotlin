@@ -336,4 +336,26 @@
     <string name="full_config_mode">Full tcptun-go JSON</string>
     <string name="full_config_json">tcptun-go configuration JSON</string>
     <string name="full_config_note">All tcptun-go fields are preserved. VPN traffic enters through the native TUN inbound tagged tun; the local proxy listener remains available separately.</string>
+    <string name="home_network_settings">Home network / Reverse Subnet</string>
+    <string name="vpn_route_mode">VPN route mode</string>
+    <string name="full_tunnel">Full Tunnel</string>
+    <string name="home_network_split_tunnel">Home network Split Tunnel</string>
+    <string name="home_ipv4_cidrs">Home IPv4 CIDRs</string>
+    <string name="home_ipv6_cidrs">Home IPv6 CIDRs</string>
+    <string name="cidr_list_hint">Comma or space separated; host bits are canonicalized</string>
+    <string name="home_dns_servers">Optional home DNS servers</string>
+    <string name="home_dns_route_note">Every DNS address must be covered by a configured home route.</string>
+    <string name="current_edge_profile">Current Edge profile</string>
+    <string name="p2p_status">Direct QUIC / P2P</string>
+    <string name="relay_fallback">Relay fallback</string>
+    <string name="core_managed">Managed by Go Core</string>
+    <string name="host_candidates">Host candidates</string>
+    <string name="stun_servers">STUN servers</string>
+    <string name="reverse_subnet_full_json_note">Reverse Subnet topology and P2P remain in encrypted Full JSON. T2/T3/A1 are unchanged; Android only installs the platform routes shown above.</string>
+    <string name="host_candidates_privacy_note">Host candidates default to off. If enabled in Full JSON, the authorized peer may see selected private interface addresses.</string>
+    <string name="diag_connections_ready">Connections ready</string>
+    <string name="diag_bridge_api">Bridge API</string>
+    <string name="diag_bridge_commit">Locked core commit</string>
+    <string name="diag_route_counts">VPN route counts</string>
+    <string name="diag_dns_routes">VPN DNS routes</string>
 </resources>

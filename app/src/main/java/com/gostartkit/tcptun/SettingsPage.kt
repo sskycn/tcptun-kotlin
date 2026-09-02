@@ -187,6 +187,10 @@ internal fun SettingsPage(
         mutableStateOf(RuntimeSettings())
     }
     var socksPortText by rememberSaveable { mutableStateOf(settings.socksPort.toString()) }
+    var splitTunnelSelected by rememberSaveable { mutableStateOf(false) }
+    var homeIpv4CidrsText by rememberSaveable { mutableStateOf("") }
+    var homeIpv6CidrsText by rememberSaveable { mutableStateOf("") }
+    var homeDnsServersText by rememberSaveable { mutableStateOf("") }
     var settingsDirty by rememberSaveable { mutableStateOf(false) }
     var savingSettings by remember { mutableStateOf(false) }
     var settingsLoaded by rememberSaveable { mutableStateOf(false) }
@@ -201,6 +205,13 @@ internal fun SettingsPage(
     val runtimeUi by TcptunState.settingsRuntimeUiFlow.collectAsStateWithLifecycle(
         initialValue = TcptunState.settingsRuntimeUi,
     )
+    val coreIdentity = remember { tcptunCoreIdentity() }
+    val featureSummary by produceState(initialValue = AndroidCoreFeatureSummary(), appContext) {
+        value = withContext(Dispatchers.IO) {
+            val state = ProfileStore.load(appContext)
+            androidCoreFeatureSummary(state.activeProfiles.firstOrNull() ?: state.profiles.firstOrNull())
+        }
+    }
     val mtuOptions = listOf("1280", "1360", "1400", "1500")
     val defaultPoolLabel = stringResource(R.string.route_outbound_proxy)
     val defaultDirectLabel = stringResource(R.string.route_outbound_direct)
@@ -220,6 +231,12 @@ internal fun SettingsPage(
                 } else {
                     settings = loaded.settings
                     socksPortText = loaded.settings.socksPort.toString()
+                    splitTunnelSelected = loaded.settings.vpnRoutePlan is AndroidVpnRoutePlan.SplitTunnel
+                    androidVpnRouteDraft(loaded.settings.vpnRoutePlan).let { draft ->
+                        homeIpv4CidrsText = draft.ipv4Cidrs
+                        homeIpv6CidrsText = draft.ipv6Cidrs
+                        homeDnsServersText = draft.dnsServers
+                    }
                     settingsLoaded = true
                 }
                 authoritativeSettings = loaded
@@ -300,7 +317,19 @@ internal fun SettingsPage(
             destination()
             return
         }
-        val next = settings.copy(socksPort = socksPort)
+        val routePlan = runRecoverableCatching {
+            if (splitTunnelSelected) {
+                parseSplitTunnelRoutePlan(homeIpv4CidrsText, homeIpv6CidrsText, homeDnsServersText)
+            } else {
+                AndroidVpnRoutePlan.FullTunnel
+            }
+        }.getOrElse { error ->
+            settingsScope.launch {
+                settingsSnackbarHostState.showDismissibleSnackbar(failureDescription(error))
+            }
+            return
+        }
+        val next = settings.copy(socksPort = socksPort, vpnRoutePlan = routePlan)
         val expected = authoritativeSettings ?: return
         savingSettings = true
         settingsScope.launch {
@@ -318,6 +347,12 @@ internal fun SettingsPage(
                 authoritativeSettings = persisted
                 settings = persisted.settings
                 socksPortText = persisted.settings.socksPort.toString()
+                splitTunnelSelected = persisted.settings.vpnRoutePlan is AndroidVpnRoutePlan.SplitTunnel
+                androidVpnRouteDraft(persisted.settings.vpnRoutePlan).let { draft ->
+                    homeIpv4CidrsText = draft.ipv4Cidrs
+                    homeIpv6CidrsText = draft.ipv6Cidrs
+                    homeDnsServersText = draft.dnsServers
+                }
                 settingsDirty = false
                 destination()
             } catch (cancelled: CancellationException) {
@@ -473,6 +508,104 @@ internal fun SettingsPage(
                             stringResource(R.string.runtime_settings_note),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            item {
+                SettingsCard {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        SectionTitle(
+                            icon = Icons.Rounded.Lan,
+                            title = stringResource(R.string.home_network_settings),
+                        )
+                        ChoiceRow(
+                            stringResource(R.string.vpn_route_mode),
+                            if (splitTunnelSelected) {
+                                stringResource(R.string.home_network_split_tunnel)
+                            } else {
+                                stringResource(R.string.full_tunnel)
+                            },
+                            listOf(
+                                stringResource(R.string.full_tunnel),
+                                stringResource(R.string.home_network_split_tunnel),
+                            ),
+                            enabled = !savingSettings,
+                        ) { selected ->
+                            splitTunnelSelected = selected == context.getString(R.string.home_network_split_tunnel)
+                            settingsDirty = true
+                        }
+                        if (splitTunnelSelected) {
+                            OutlinedTextField(
+                                value = homeIpv4CidrsText,
+                                onValueChange = { value ->
+                                    homeIpv4CidrsText = value.take(8_192)
+                                    settingsDirty = true
+                                },
+                                label = { FieldChromeText(stringResource(R.string.home_ipv4_cidrs)) },
+                                supportingText = { FieldChromeText(stringResource(R.string.cidr_list_hint)) },
+                                enabled = !savingSettings,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedTextField(
+                                value = homeIpv6CidrsText,
+                                onValueChange = { value ->
+                                    homeIpv6CidrsText = value.take(8_192)
+                                    settingsDirty = true
+                                },
+                                label = { FieldChromeText(stringResource(R.string.home_ipv6_cidrs)) },
+                                supportingText = { FieldChromeText(stringResource(R.string.cidr_list_hint)) },
+                                enabled = !savingSettings,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedTextField(
+                                value = homeDnsServersText,
+                                onValueChange = { value ->
+                                    homeDnsServersText = value.take(2_048)
+                                    settingsDirty = true
+                                },
+                                label = { FieldChromeText(stringResource(R.string.home_dns_servers)) },
+                                supportingText = { FieldChromeText(stringResource(R.string.home_dns_route_note)) },
+                                enabled = !savingSettings,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        DiagnosticsLine(
+                            stringResource(R.string.current_edge_profile),
+                            featureSummary.profileName.ifBlank { stringResource(R.string.none) },
+                        )
+                        DiagnosticsLine(
+                            stringResource(R.string.p2p_status),
+                            if (featureSummary.p2pEnabled) stringResource(R.string.enabled) else stringResource(R.string.disabled),
+                        )
+                        DiagnosticsLine(
+                            stringResource(R.string.relay_fallback),
+                            stringResource(R.string.core_managed),
+                        )
+                        DiagnosticsLine(
+                            stringResource(R.string.host_candidates),
+                            if (featureSummary.hostCandidatesEnabled) stringResource(R.string.enabled) else stringResource(R.string.disabled),
+                        )
+                        DiagnosticsLine(
+                            stringResource(R.string.stun_servers),
+                            featureSummary.stunServerCount.toString(),
+                        )
+                        DiagnosticsLine(
+                            stringResource(R.string.diag_core_version),
+                            coreIdentity.version.ifBlank { stringResource(R.string.none) },
+                        )
+                        Text(
+                            stringResource(R.string.reverse_subnet_full_json_note),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            stringResource(R.string.host_candidates_privacy_note),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
                         )
                     }
                 }
