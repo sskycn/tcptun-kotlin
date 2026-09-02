@@ -33,7 +33,7 @@ data class RuntimeSettings(
     /** Empty selects the dynamic pool; __direct__ selects direct; any other value is a profile ID. */
     val defaultOutbound: String = DefaultOutboundDynamicPool,
     val flowAnalysisApp: String = "",
-    /** Android-only platform routes; never serialized into tcptun FileConfig or profile wires. */
+    /** Compatibility-only internal value. Android platform routing is always Full Tunnel. */
     val vpnRoutePlan: AndroidVpnRoutePlan = AndroidVpnRoutePlan.FullTunnel,
 )
 
@@ -76,7 +76,7 @@ internal data class AppliedRuntimeSettings(
             routeLocalProxyTraffic = settings.routeLocalProxyTraffic,
             defaultOutbound = settings.defaultOutbound,
             flowAnalysisApp = settings.flowAnalysisApp,
-            vpnRoutePlan = settings.vpnRoutePlan,
+            vpnRoutePlan = AndroidVpnRoutePlan.FullTunnel,
         )
     }
 }
@@ -213,6 +213,7 @@ internal object RuntimeSettingsStorageKeys {
     const val RouteLocalProxyTraffic = "runtimeRouteLocalProxyTraffic"
     const val DefaultOutbound = "runtimeDefaultOutbound"
     const val FlowAnalysisApp = "runtimeFlowAnalysisApp"
+    /** Legacy key retained only so an upgrade can detect and delete it. */
     const val VpnRoutePlan = "runtimeVpnRoutePlan"
     const val StorageVersion = "runtimeStorageVersion"
     const val SecretsId = "runtimeSecretsId"
@@ -311,7 +312,7 @@ private class SharedPreferencesRuntimeSettingsPreferences(
         .putBoolean(RuntimeSettingsStorageKeys.RouteLocalProxyTraffic, settings.routeLocalProxyTraffic)
         .putString(RuntimeSettingsStorageKeys.DefaultOutbound, settings.defaultOutbound)
         .putString(RuntimeSettingsStorageKeys.FlowAnalysisApp, settings.flowAnalysisApp)
-        .putString(RuntimeSettingsStorageKeys.VpnRoutePlan, encodeAndroidVpnRoutePlan(settings.vpnRoutePlan))
+        .remove(RuntimeSettingsStorageKeys.VpnRoutePlan)
         .commit()
 }
 
@@ -434,13 +435,16 @@ internal class RuntimeSettingsRepositoryEngine(
             flowAnalysisApp = normalizeFlowAnalysisApp(
                 preferences.getString(RuntimeSettingsStorageKeys.FlowAnalysisApp, "").orEmpty(),
             ),
-            vpnRoutePlan = decodeAndroidVpnRoutePlan(
-                preferences.getString(RuntimeSettingsStorageKeys.VpnRoutePlan, null),
-            ),
+            vpnRoutePlan = AndroidVpnRoutePlan.FullTunnel,
         )
         if (encrypted) {
             val secured = secureRuntimeSettings(stored)
             if (secured != stored) return write(secured)
+            if (preferences.contains(RuntimeSettingsStorageKeys.VpnRoutePlan)) {
+                check(preferences.publish(stored, requireNotNull(secretsId))) {
+                    "legacy VPN route settings could not be retired"
+                }
+            }
             return RuntimeSettingsRead.Success(
                 stored,
                 RuntimeSettingsSource.Stored,
@@ -475,7 +479,7 @@ internal class RuntimeSettingsRepositoryEngine(
             defaultOutbound = normalizeDefaultOutboundSelection(settings.defaultOutbound),
             flowAnalysisApp = normalizeFlowAnalysisApp(settings.flowAnalysisApp),
             localProxyUsers = settings.localProxyUsers.toList(),
-            vpnRoutePlan = normalizeAndroidVpnRoutePlan(settings.vpnRoutePlan),
+            vpnRoutePlan = AndroidVpnRoutePlan.FullTunnel,
         )
     }
 
