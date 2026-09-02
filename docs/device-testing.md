@@ -21,27 +21,21 @@ logs/diagnostics:
 4. Start a known direct profile and verify the foreground notification.
 5. Confirm Diagnostics reports `Running`, a session ID, MTU, network, and core identity.
 
-## Full and split route plans
+## Full Tunnel route plan
 
-Run the existing Full Tunnel first and confirm Diagnostics reports `full`, one IPv4 default
-route, one IPv6 default route, and the VPN DNS server. Existing installations with no route-plan
-metadata must report Full Tunnel after upgrade.
+Android has one platform route plan: Full Tunnel. Confirm Diagnostics reports `full`, one IPv4
+default route, one IPv6 default route, the VPN DNS server, and zero Android fake-IP supplement
+routes. Both ordinary Internet traffic and home-CIDR traffic must enter the same TUN; Go Core and
+Edge compiled routing decide the final outbound, including `reverse_subnet` for authorized home
+networks.
 
-For Split Tunnel, open Settings → Home network / Reverse Subnet and configure:
+Upgrade an installation that previously stored Home-network Split Tunnel metadata and confirm it
+still reports Full Tunnel. The old route-plan preference must not restore a split route or prevent
+startup. With fake-IP enabled in Full JSON, application connections to both fake pools must return
+to the TUN through the default routes; Android must not install separate fake-IP platform routes.
 
-```text
-IPv4: 192.168.50.0/24
-IPv6: fd12:3456:789a::/64
-DNS:  192.168.50.1, fd12:3456:789a::53
-```
-
-Verify the two home prefixes enter the VPN while ordinary IPv4 and IPv6 Internet traffic uses
-the physical network. Test DNS over both UDP 53 and TCP 53. Every configured DNS address must be
-inside a home prefix. With fake-IP enabled in Full JSON, Diagnostics must show the additional
-fake-IP routes and application connections to both fake pools must return to the TUN.
-
-Do not infer success from the route-plan JVM tests: record the device/emulator, the actual routes,
-and packet/connectivity observations. If no Android target is available, report `NOT RUN`.
+Do not infer success from the route-plan JVM tests: record the device/emulator, the actual default
+routes, and packet/connectivity observations. If no Android target is available, report `NOT RUN`.
 
 ## Start/stop and recreation
 
@@ -323,7 +317,7 @@ Every command transition asserts:
 | 17 | AppOps authorization-mode diagnostic (not revoke proof) | system-event opt-in; default appops mode |
 | 18 | Real VPN permission revoke while Running | system-event opt-in + `RUNTIME_STRESS_REVOKE_MODE=system`; manual Settings action |
 | 19 | Real VPN permission revoke during Recovery | network + system-event opt-ins + system revoke mode; manual Settings action |
-| 20 | Full → Split A → Split B → Full structural route rebuild | default stress test; asserts one TUN/Bridge/lease owner and final cleanup |
+| 20 | Service recreation preserves Full Tunnel route diagnostics | default stress test; asserts one IPv4/IPv6 default route before and after recreation |
 
 Recovery tests require the real device to enter the coordinator's Recovering phase after all
 underlying networks are disabled. A device/core combination that does not enter that phase is
