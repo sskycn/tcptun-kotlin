@@ -111,30 +111,6 @@ internal class VpnRuntimeStressHarness : AutoCloseable {
         context.startService(TcptunVpnService.applyRuntimeSettingsIntent(context))
     }
 
-    fun applyRoutePlanAndWait(
-        routePlan: AndroidVpnRoutePlan,
-        timeoutMillis: Long = 45_000,
-    ): RuntimeOwnershipDebugSnapshot {
-        val before = activeOwnershipSnapshot()
-        val current = TcptunVpnService.readRuntimeSettings(context)
-        TcptunVpnService.writeRuntimeSettings(context, current.copy(vpnRoutePlan = routePlan))
-        context.startService(TcptunVpnService.applyRuntimeSettingsIntent(context))
-        val expectedMode = if (routePlan is AndroidVpnRoutePlan.SplitTunnel) "split" else "full"
-        waitUntil("$expectedMode VPN route plan rebuild", timeoutMillis) {
-            val active = TcptunVpnService.runtimeOwnershipDebugSnapshots()
-                .singleOrNull { it.activeServiceOwner && !it.destroyed }
-            active != null &&
-                (active.serviceInstanceId != before.serviceInstanceId || active.bridgeEpoch != before.bridgeEpoch) &&
-                TcptunState.status == VpnStatus.Running &&
-                TcptunState.state.value.connectionsReady &&
-                TcptunState.diagnostics.vpnRouteMode == expectedMode &&
-                TcptunState.diagnostics.bridgeStatus == "Running" &&
-                localProxyListenersReady()
-        }
-        assertLocalProxyReady()
-        return activeOwnershipSnapshot()
-    }
-
     fun updateFlowAnalysis() {
         val current = TcptunVpnService.readRuntimeSettings(context)
         val next = if (current.flowAnalysisApp.isBlank()) "com.android.settings" else ""
@@ -192,8 +168,14 @@ internal class VpnRuntimeStressHarness : AutoCloseable {
             Socket().use { socket ->
                 socket.connect(InetSocketAddress("127.0.0.1", settings.socksPort), 2_000)
                 socket.soTimeout = 2_000
-                Socks5Client.connect(socket, "127.0.0.1", origin.localPort,
-                    user?.username.orEmpty(), user?.password.orEmpty(), user != null)
+                Socks5Client.connect(
+                    socket,
+                    "127.0.0.1",
+                    origin.localPort,
+                    user?.username.orEmpty(),
+                    user?.password.orEmpty(),
+                    user != null,
+                )
                 socket.getOutputStream().write(payload)
                 val response = ByteArray(payload.size)
                 DataInputStream(socket.getInputStream()).readFully(response)
@@ -203,16 +185,10 @@ internal class VpnRuntimeStressHarness : AutoCloseable {
             worker.join(3_000)
         }
         assertEquals("Running", TcptunState.diagnostics.bridgeStatus)
-        println("LOCAL_PROXY_RUNNING_ASSERTION protocol=${settings.localProxyProtocol} targets=$targets epoch=${activeOwnershipSnapshot().bridgeEpoch}")
-    }
-
-    private fun localProxyListenersReady(): Boolean {
-        val settings = TcptunVpnService.readRuntimeSettings(context)
-        val user = settings.localProxyUsers.firstOrNull()
-        val targets = listOf("127.0.0.1") + if (settings.socksListenAll) localProxyInterfaceAddresses() else emptyList()
-        return targets.all { target ->
-            LocalProxyHealthProbe().listener(settings.socksPort, user, target).healthy
-        }
+        println(
+            "LOCAL_PROXY_RUNNING_ASSERTION protocol=${settings.localProxyProtocol} " +
+                "targets=$targets epoch=${activeOwnershipSnapshot().bridgeEpoch}",
+        )
     }
 
     fun waitForStopped(timeoutMillis: Long = 15_000) = waitUntil("VPN Stopped", timeoutMillis) {
@@ -263,7 +239,11 @@ internal class VpnRuntimeStressHarness : AutoCloseable {
         val leaseOwners = snapshots.map { it.leaseOwner }.filter { it != 0L }.distinct()
         assertTrue("multiple runtime lease owners: $snapshots", leaseOwners.size <= 1)
         snapshots.filter { it.tunOwned || it.bridgeResourcePhase.ownsResources }.forEach { owner ->
-            assertEquals("resource owner must hold runtime lease: $snapshots", owner.serviceInstanceId, owner.leaseOwner)
+            assertEquals(
+                "resource owner must hold runtime lease: $snapshots",
+                owner.serviceInstanceId,
+                owner.leaseOwner,
+            )
         }
         if (TcptunState.state.value.connectionsReady) {
             val active = snapshots.singleOrNull { it.activeServiceOwner && !it.destroyed }
