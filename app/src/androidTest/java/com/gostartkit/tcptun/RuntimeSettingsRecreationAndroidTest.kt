@@ -10,6 +10,32 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class RuntimeSettingsRecreationAndroidTest {
     @Test
+    fun splitRoutePlanPersistsAndOldSavedStateDefaultsToFullTunnel() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val original = RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()
+        val split = AndroidVpnRoutePlan.SplitTunnel(
+            routes = listOf(
+                IpPrefix.parse("192.168.50.99/24"),
+                IpPrefix.parse("fd12:3456:789a::1/64"),
+            ),
+            dnsServers = listOf("192.168.50.1", "fd12:3456:789a::53"),
+        )
+        try {
+            RuntimeSettingsRepository.write(context, original.copy(vpnRoutePlan = split))
+            val reloaded = RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()
+            assertEquals(normalizeAndroidVpnRoutePlan(split), reloaded.vpnRoutePlan)
+
+            val legacySavedState = """{"mtu":1400,"logLevel":"info"}"""
+            assertEquals(
+                AndroidVpnRoutePlan.FullTunnel,
+                requireNotNull(decodeRuntimeSettingsSavedState(legacySavedState)).vpnRoutePlan,
+            )
+        } finally {
+            RuntimeSettingsRepository.write(context, original)
+        }
+    }
+
+    @Test
     fun restoredDraftRehydratesCredentialsBeforeUnrelatedPersistence() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val original = RuntimeSettingsRepository.read(context).requireAuthoritativeSettings()

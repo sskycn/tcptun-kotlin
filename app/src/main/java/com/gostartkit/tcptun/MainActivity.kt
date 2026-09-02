@@ -228,6 +228,7 @@ internal fun encodeRuntimeSettingsSavedState(settings: RuntimeSettings): String 
     .put("routeLocalProxyTraffic", settings.routeLocalProxyTraffic)
     .put("defaultOutbound", settings.defaultOutbound)
     .put("flowAnalysisApp", settings.flowAnalysisApp)
+    .put("vpnRoutePlan", encodeAndroidVpnRoutePlan(settings.vpnRoutePlan))
     .toString()
 
 internal fun decodeRuntimeSettingsSavedState(encoded: String): RuntimeSettings? = runRecoverableCatching {
@@ -243,6 +244,7 @@ internal fun decodeRuntimeSettingsSavedState(encoded: String): RuntimeSettings? 
         routeLocalProxyTraffic = json.optBoolean("routeLocalProxyTraffic", false),
         defaultOutbound = json.optString("defaultOutbound", DefaultOutboundDynamicPool),
         flowAnalysisApp = json.optString("flowAnalysisApp"),
+        vpnRoutePlan = decodeAndroidVpnRoutePlan(json.optString("vpnRoutePlan")),
     )
 }.getOrNull()
 internal val ManagedRouteRuleSaver = Saver<ManagedRouteRule?, String>(

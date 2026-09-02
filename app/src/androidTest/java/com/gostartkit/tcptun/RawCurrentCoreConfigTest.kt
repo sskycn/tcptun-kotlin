@@ -9,6 +9,58 @@ import org.junit.Test
 
 class RawCurrentCoreConfigTest {
     @Test
+    fun fullAndSplitPlansCompileWithDnsCoverageAndFakeIpRoutes() {
+        val full = compileAndroidVpnRoutePlan(AndroidVpnRoutePlan.FullTunnel, p2pRemoteConfig)
+        assertEquals("full", full.mode)
+        assertEquals(2, full.routes.size)
+        assertEquals(0, full.routes[0].prefixLength)
+        assertEquals(0, full.routes[1].prefixLength)
+        assertTrue(full.routes[0].isIpv4)
+        assertFalse(full.routes[1].isIpv4)
+        assertEquals(listOf(AndroidVpnDnsAddress), full.dnsServers)
+
+        val splitConfig = JSONObject(p2pRemoteConfig)
+            .put(
+                "dns",
+                JSONObject().put(
+                    "fake_ip",
+                    JSONObject()
+                        .put("enabled", true)
+                        .put("ipv4_range", "198.18.1.1/15")
+                        .put("ipv6_range", "fc00::1234/18"),
+                ),
+            )
+            .toString()
+        val split = compileAndroidVpnRoutePlan(
+            AndroidVpnRoutePlan.SplitTunnel(
+                routes = listOf(
+                    IpPrefix.parse("192.168.50.99/24"),
+                    IpPrefix.parse("fd12:3456:789a::1/64"),
+                ),
+                dnsServers = listOf("192.168.50.1", "fd12:3456:789a::53"),
+            ),
+            splitConfig,
+        )
+
+        assertEquals("split", split.mode)
+        assertEquals(4, split.routes.size)
+        assertEquals(2, split.fakeIpRoutes.size)
+        assertTrue(split.routes.any { it.toString() == "198.18.0.0/15" })
+        assertTrue(split.routes.any { !it.isIpv4 && it.prefixLength == 18 })
+        assertTrue(
+            runCatching {
+                compileAndroidVpnRoutePlan(
+                    AndroidVpnRoutePlan.SplitTunnel(
+                        routes = listOf(IpPrefix.parse("192.168.50.0/24")),
+                        dnsServers = listOf("192.168.60.1"),
+                    ),
+                    p2pRemoteConfig,
+                )
+            }.isFailure,
+        )
+    }
+
+    @Test
     fun reverseSubnetTopologySurvivesPersistenceAndAndroidPreparation() {
         val profile = AppConfig(name = "reverse subnet", rawConfigJson = reverseSubnetConfig)
 

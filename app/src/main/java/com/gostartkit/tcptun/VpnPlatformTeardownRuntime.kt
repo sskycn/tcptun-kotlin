@@ -65,6 +65,12 @@ internal fun releasedVpnDiagnostics(current: TcptunDiagnostics): TcptunDiagnosti
     healthCheckEventDriven = true,
     healthCheckIntervalSeconds = 0,
     socketProtectEnabled = false,
+    vpnIpv4RouteCount = 0,
+    vpnIpv6RouteCount = 0,
+    vpnDnsServerCount = 0,
+    vpnFakeIpRouteCount = 0,
+    p2pConfigured = false,
+    p2pHostCandidatesConfigured = false,
 )
 
 internal val DefaultVpnPlatformTeardownRetryDelaysMillis =

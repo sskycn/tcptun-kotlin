@@ -716,7 +716,7 @@ class TcptunVpnService : VpnService() {
                 if (!startingPublished) return
                 claimBridgeRuntimeLease(commandOwner)
                 check(commandOwner()) { "tcptun start was superseded" }
-                val vpnTun = buildTun(runtimeSettings.mtu)
+                val vpnTun = buildTun(runtimeSettings.mtu, runtimeSettings.vpnRoutePlan, json)
                 ownTun(vpnTun)
                 if (!commandOwner()) {
                     releaseSupersededRuntime()
@@ -1231,27 +1231,43 @@ class TcptunVpnService : VpnService() {
         port = getIntExtra(EXTRA_TCPING_PORT, 0),
     )
 
-    private fun buildTun(mtu: Int): android.os.ParcelFileDescriptor {
-        return Builder()
+    private fun buildTun(
+        mtu: Int,
+        routePlan: AndroidVpnRoutePlan,
+        coreConfigJson: String,
+    ): android.os.ParcelFileDescriptor {
+        val compiled = compileAndroidVpnRoutePlan(routePlan, coreConfigJson)
+        val p2p = coreP2pConfigState(coreConfigJson)
+        val builder = Builder()
             .setSession(getString(R.string.vpn_notification_title))
             .setMtu(mtu)
             .addAddress("10.77.0.2", 32)
             .addAddress("fd00:7777::2", 128)
-            .addDnsServer(VPN_DNS_ADDRESS)
-            .addRoute("0.0.0.0", 0)
-            .addRoute("::", 0)
             // Some Android builds do not reliably route raw Go sockets around the VPN
             // with protect(fd) alone. Excluding our process keeps bridge upstream sockets
             // on the selected underlying network; protect(fd) remains a second safeguard.
             .addDisallowedApplication(packageName)
             .apply {
+                compiled.dnsServers.forEach(::addDnsServer)
+                compiled.routes.forEach { route -> addRoute(route.address, route.prefixLength) }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     setMetered(connectivity.isActiveNetworkMetered)
                 }
                 allowFamily(android.system.OsConstants.AF_INET)
                 allowFamily(android.system.OsConstants.AF_INET6)
             }
-            .establish() ?: throw IllegalStateException("VpnService establish() returned null")
+        TcptunState.updateDiagnostics {
+            it.copy(
+                vpnRouteMode = compiled.mode,
+                vpnIpv4RouteCount = compiled.routes.count { route -> route.isIpv4 },
+                vpnIpv6RouteCount = compiled.routes.count { route -> !route.isIpv4 },
+                vpnDnsServerCount = compiled.dnsServers.size,
+                vpnFakeIpRouteCount = compiled.fakeIpRoutes.size,
+                p2pConfigured = p2p.enabled,
+                p2pHostCandidatesConfigured = p2p.hostCandidatesEnabled,
+            )
+        }
+        return builder.establish() ?: throw IllegalStateException("VpnService establish() returned null")
     }
 
     private fun ownsRuntime(ownership: VpnRuntimeOwnership): Boolean =
@@ -1897,7 +1913,11 @@ class TcptunVpnService : VpnService() {
         check(commandOwner()) { "tcptun restart continuation was superseded" }
         claimBridgeRuntimeLease(commandOwner)
         check(commandOwner()) { "tcptun restart continuation was superseded" }
-        val replacementTun = buildTun(preparation.settings.mtu)
+        val replacementTun = buildTun(
+            preparation.settings.mtu,
+            preparation.settings.vpnRoutePlan,
+            preparation.configJson,
+        )
         ownTun(replacementTun)
         startBridge(
             preparation.configJson,
@@ -2439,7 +2459,6 @@ class TcptunVpnService : VpnService() {
         const val LOCAL_SOCKS_HOST = RuntimeSettingsDefaults.LocalSocksHost
         const val DEFAULT_SOCKS_PORT = RuntimeSettingsDefaults.SocksPort
         const val DEFAULT_VPN_MTU = RuntimeSettingsDefaults.VpnMtu
-        private const val VPN_DNS_ADDRESS = "10.77.0.1"
         private const val BRIDGE_RESTART_DELAY_MS = 300L
         private const val BRIDGE_RESTART_MIN_INTERVAL_MS = 30_000L
         private const val BRIDGE_READY_TIMEOUT_MS = 15_000L

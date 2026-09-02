@@ -33,6 +33,8 @@ data class RuntimeSettings(
     /** Empty selects the dynamic pool; __direct__ selects direct; any other value is a profile ID. */
     val defaultOutbound: String = DefaultOutboundDynamicPool,
     val flowAnalysisApp: String = "",
+    /** Android-only platform routes; never serialized into tcptun FileConfig or profile wires. */
+    val vpnRoutePlan: AndroidVpnRoutePlan = AndroidVpnRoutePlan.FullTunnel,
 )
 
 /** One atomically published view of every setting applied to the current runtime. */
@@ -47,6 +49,7 @@ internal data class AppliedRuntimeSettings(
     val routeLocalProxyTraffic: Boolean = false,
     val defaultOutbound: String = DefaultOutboundDynamicPool,
     val flowAnalysisApp: String = "",
+    val vpnRoutePlan: AndroidVpnRoutePlan = AndroidVpnRoutePlan.FullTunnel,
 ) {
     fun structuralSettings(): RuntimeSettings = RuntimeSettings(
         mtu = mtu,
@@ -58,6 +61,7 @@ internal data class AppliedRuntimeSettings(
         localProxyUsers = localProxyUsers.toList(),
         routeLocalProxyTraffic = routeLocalProxyTraffic,
         defaultOutbound = defaultOutbound,
+        vpnRoutePlan = vpnRoutePlan,
     )
 
     companion object {
@@ -72,6 +76,7 @@ internal data class AppliedRuntimeSettings(
             routeLocalProxyTraffic = settings.routeLocalProxyTraffic,
             defaultOutbound = settings.defaultOutbound,
             flowAnalysisApp = settings.flowAnalysisApp,
+            vpnRoutePlan = settings.vpnRoutePlan,
         )
     }
 }
@@ -124,6 +129,7 @@ internal fun requireSafeRuntimeSettings(settings: RuntimeSettings): RuntimeSetti
     require(!it.socksListenAll || it.localProxyUsers.isNotEmpty() && it.localProxyUsers.all { user -> user.password.isNotEmpty() }) {
         "Every LAN proxy account requires a password when listening on all interfaces"
     }
+    normalizeAndroidVpnRoutePlan(it.vpnRoutePlan)
 }
 
 internal fun requireSafeAppliedRuntimeSettings(settings: AppliedRuntimeSettings): AppliedRuntimeSettings =
@@ -132,6 +138,7 @@ internal fun requireSafeAppliedRuntimeSettings(settings: AppliedRuntimeSettings)
         require(!it.socksListenAll || it.localProxyUsers.isNotEmpty() && it.localProxyUsers.all { user -> user.password.isNotEmpty() }) {
             "Every LAN proxy account requires a password when listening on all interfaces"
         }
+        normalizeAndroidVpnRoutePlan(it.vpnRoutePlan)
     }
 
 /** Preserves a restored non-secret draft while hydrating credentials from encrypted storage. */
@@ -206,6 +213,7 @@ internal object RuntimeSettingsStorageKeys {
     const val RouteLocalProxyTraffic = "runtimeRouteLocalProxyTraffic"
     const val DefaultOutbound = "runtimeDefaultOutbound"
     const val FlowAnalysisApp = "runtimeFlowAnalysisApp"
+    const val VpnRoutePlan = "runtimeVpnRoutePlan"
     const val StorageVersion = "runtimeStorageVersion"
     const val SecretsId = "runtimeSecretsId"
     const val EncryptedSecretsVersion = 3
@@ -223,6 +231,7 @@ internal object RuntimeSettingsStorageKeys {
         RouteLocalProxyTraffic,
         DefaultOutbound,
         FlowAnalysisApp,
+        VpnRoutePlan,
         StorageVersion,
         SecretsId,
     )
@@ -302,6 +311,7 @@ private class SharedPreferencesRuntimeSettingsPreferences(
         .putBoolean(RuntimeSettingsStorageKeys.RouteLocalProxyTraffic, settings.routeLocalProxyTraffic)
         .putString(RuntimeSettingsStorageKeys.DefaultOutbound, settings.defaultOutbound)
         .putString(RuntimeSettingsStorageKeys.FlowAnalysisApp, settings.flowAnalysisApp)
+        .putString(RuntimeSettingsStorageKeys.VpnRoutePlan, encodeAndroidVpnRoutePlan(settings.vpnRoutePlan))
         .commit()
 }
 
@@ -424,6 +434,9 @@ internal class RuntimeSettingsRepositoryEngine(
             flowAnalysisApp = normalizeFlowAnalysisApp(
                 preferences.getString(RuntimeSettingsStorageKeys.FlowAnalysisApp, "").orEmpty(),
             ),
+            vpnRoutePlan = decodeAndroidVpnRoutePlan(
+                preferences.getString(RuntimeSettingsStorageKeys.VpnRoutePlan, null),
+            ),
         )
         if (encrypted) {
             val secured = secureRuntimeSettings(stored)
@@ -462,6 +475,7 @@ internal class RuntimeSettingsRepositoryEngine(
             defaultOutbound = normalizeDefaultOutboundSelection(settings.defaultOutbound),
             flowAnalysisApp = normalizeFlowAnalysisApp(settings.flowAnalysisApp),
             localProxyUsers = settings.localProxyUsers.toList(),
+            vpnRoutePlan = normalizeAndroidVpnRoutePlan(settings.vpnRoutePlan),
         )
     }
 

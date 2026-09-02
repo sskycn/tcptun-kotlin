@@ -89,6 +89,7 @@ class RuntimeSettingsAuthoritativeReadTest {
         assertEquals(true, result.settings.powerSavingMode)
         assertEquals(DefaultLocalProxyProtocol, result.settings.localProxyProtocol)
         assertEquals("", result.settings.flowAnalysisApp)
+        assertEquals(AndroidVpnRoutePlan.FullTunnel, result.settings.vpnRoutePlan)
         assertEquals(listOf(LocalProxyUser("real-user", "real-secret")), result.settings.localProxyUsers)
     }
 

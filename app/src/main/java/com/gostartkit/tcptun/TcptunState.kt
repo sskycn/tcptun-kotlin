@@ -40,6 +40,13 @@ data class TcptunDiagnostics(
     val healthCheckEventDriven: Boolean = true,
     val healthCheckIntervalSeconds: Long = 0,
     val socketProtectEnabled: Boolean = false,
+    val vpnRouteMode: String = "full",
+    val vpnIpv4RouteCount: Int = 0,
+    val vpnIpv6RouteCount: Int = 0,
+    val vpnDnsServerCount: Int = 0,
+    val vpnFakeIpRouteCount: Int = 0,
+    val p2pConfigured: Boolean = false,
+    val p2pHostCandidatesConfigured: Boolean = false,
 )
 
 data class TcptunRuntimeState(
