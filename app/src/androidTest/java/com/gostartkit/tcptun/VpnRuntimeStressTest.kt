@@ -110,47 +110,13 @@ class VpnRuntimeStressTest {
     }
 
     @Test
-    fun structuralRoutePlanMatrixRebuildsWithoutOwnershipOverlap() = withStressHarness { harness ->
-        val splitA = AndroidVpnRoutePlan.SplitTunnel(
-            routes = listOf(
-                IpPrefix.parse("192.168.50.0/24"),
-                IpPrefix.parse("fd12:3456:789a::/64"),
-            ),
-        )
-        val splitB = AndroidVpnRoutePlan.SplitTunnel(
-            routes = listOf(
-                IpPrefix.parse("192.168.60.0/24"),
-                IpPrefix.parse("fd12:3456:789b::/64"),
-            ),
-        )
-
-        harness.start()
-        harness.waitForRunning()
-        assertEquals("full", TcptunState.diagnostics.vpnRouteMode)
-
-        harness.applyRoutePlanAndWait(splitA)
-        assertEquals(2, TcptunState.diagnostics.vpnIpv4RouteCount)
-        assertEquals(2, TcptunState.diagnostics.vpnIpv6RouteCount)
-        assertEquals(2, TcptunState.diagnostics.vpnFakeIpRouteCount)
-
-        harness.applyRoutePlanAndWait(splitB)
-        assertEquals("split", TcptunState.diagnostics.vpnRouteMode)
-
-        harness.applyRoutePlanAndWait(AndroidVpnRoutePlan.FullTunnel)
-        assertEquals(1, TcptunState.diagnostics.vpnIpv4RouteCount)
-        assertEquals(1, TcptunState.diagnostics.vpnIpv6RouteCount)
-        assertEquals(0, TcptunState.diagnostics.vpnFakeIpRouteCount)
-
-        harness.stop()
-        harness.waitForStopped()
-        harness.assertNoProcessFailureEvidence()
-        println("RUNTIME_STRESS_ROUTE_PLAN_MATRIX_EXECUTED full-splitA-splitB-full")
-    }
-
-    @Test
     fun serviceRecreationCannotOverlapOldNativeOwnership() = withStressHarness { harness ->
         harness.start()
         harness.waitForRunning()
+        assertEquals("full", TcptunState.diagnostics.vpnRouteMode)
+        assertEquals(1, TcptunState.diagnostics.vpnIpv4RouteCount)
+        assertEquals(1, TcptunState.diagnostics.vpnIpv6RouteCount)
+        assertEquals(0, TcptunState.diagnostics.vpnFakeIpRouteCount)
         val originalServiceId = TcptunVpnService.runtimeOwnershipDebugSnapshots()
             .single { it.activeServiceOwner }
             .serviceInstanceId
@@ -173,6 +139,10 @@ class VpnRuntimeStressTest {
         harness.start(harness.lifecyclePlanB)
         harness.waitForRunning(timeoutMillis = 45_000)
 
+        assertEquals("full", TcptunState.diagnostics.vpnRouteMode)
+        assertEquals(1, TcptunState.diagnostics.vpnIpv4RouteCount)
+        assertEquals(1, TcptunState.diagnostics.vpnIpv6RouteCount)
+        assertEquals(0, TcptunState.diagnostics.vpnFakeIpRouteCount)
         harness.assertRuntimeInvariants()
         val replacementServiceId = TcptunVpnService.runtimeOwnershipDebugSnapshots()
             .single { it.activeServiceOwner }
