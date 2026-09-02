@@ -23,8 +23,8 @@ it does not mean that Kotlin implements the feature.
 | multiple outbound addresses | Yes | Raw; structured single address | Preserve arrays | Go example fixtures |
 | failover / carrier fallback | Yes | Core-owned | No Kotlin selection logic | AAR/core tests |
 | inbound/outbound network capability | Yes | TCP/UDP arrays | Raw preparation preserves endpoint capability | Keep Core validation authoritative | raw preservation tests |
-| TCP / UDP | Yes | Both | Split platform routes needed | route-plan tests + device test |
-| IPv4 / IPv6 | Yes | Full-tunnel dual stack | Split platform routes needed | route-plan tests + device test |
+| TCP / UDP | Yes | Both | Captured by Full Tunnel; Core routes each logical flow | route-plan tests + device test |
+| IPv4 / IPv6 | Yes | Full-tunnel dual stack | Always install dual-stack default routes | route-plan tests + device test |
 | raw / WebSocket / H2 / H3 transport | Yes | Structured and raw | Keep Go validation authoritative | profile + raw tests |
 | none / TLS / REALITY | Yes | Structured and raw | Keep crypto in Go | profile/AAR tests |
 | ECH ClientHello | Yes | Structured and raw | No regression | codec/config tests |
@@ -44,19 +44,19 @@ it does not mean that Kotlin implements the feature.
 | route principal matcher | Yes, mainly server topology | Missing on old Core; raw parser permissive | Upgrade Core and preserve | reverse fixture tests |
 | route network matcher | Yes | Raw + managed | Preserve | route tests |
 | domain/regex/suffix matcher | Yes | Raw; subset managed | Preserve full JSON | route tests |
-| IP/CIDR/range matcher | Yes | Raw; subset managed | Preserve; do not infer arbitrary VPN routes | route + plan tests |
+| IP/CIDR/range matcher | Yes | Raw; subset managed | Preserve; Android platform route table remains Full Tunnel | route + plan tests |
 | app IDs/prefix/platform/attributes | Android app IDs are relevant | Managed subset + raw | Preserve attributes | app-routing tests |
-| DNS servers / strategy / outbound | Yes | Raw; structured defaults | Split route/DNS coverage validation needed | route-plan tests |
+| DNS servers / strategy / outbound | Yes | Raw; structured defaults | Keep DNS policy Core-owned; Android installs fixed VPN DNS | route-plan tests |
 | DNS TCP / UDP | Yes | Go-owned | Keep Core-owned | AAR/device tests |
-| fake-IP IPv4/IPv6, TTL, capacity | Yes | Go-owned raw/default | Add fake-IP prefixes to split TUN routes | plan tests |
+| fake-IP IPv4/IPv6, TTL, capacity | Yes | Go-owned raw/default | No Android-specific platform routes needed under Full Tunnel | plan tests |
 | fake-IP domain restore | Yes | Core-owned | No Kotlin implementation | Go tests/AAR validation |
 | publish / expose reverse services | Yes for full topology | Raw | Preserve | raw fixture tests |
 | reverse carrier/service | Yes | Raw | Preserve | AAR validation |
-| Reverse Subnet IPv4/IPv6 TCP/UDP | Android Remote: yes | Old AAR cannot compile new schema | Upgrade AAR; explicit platform split plan | AAR + device/E2E |
+| Reverse Subnet IPv4/IPv6 TCP/UDP | Android Remote: yes | Old AAR cannot compile new schema | Upgrade AAR; use Full Tunnel plus Core/Edge routing | AAR + device/E2E |
 | Edge ACL / Home export ACL | Server/Home; Android must obey | Core-owned | Never copy ACL to Kotlin | Go tests + E2E deny cases |
 | CIDR/network/port policies | Yes through Core | Raw | Preserve `subnets`, `export_subnets`, `ports` | fixture/AAR tests |
 | principals / connector principals | Server/Home | Raw | Preserve; never log/derive | fixture/security tests |
-| native `route_mode=rules` | Yes | Raw | Preserve | fixture round trip |
+| native `route_mode=rules` | Yes | Raw | Preserve; independent of Android platform routing | fixture round trip |
 | multiple sites / overlap + principal routing | Yes through Core | Raw | Preserve; Core compiles | Go tests + AAR fixture |
 | special-address rejection / ACL intersection | Yes, security critical | Core-owned | No Kotlin policy copy | Go/E2E deny tests |
 | relay mode | Yes | Core-owned | Default remains relay-only | AAR/E2E |
@@ -70,15 +70,15 @@ it does not mean that Kotlin implements the feature.
 | relay fallback | Yes | Core-owned | Do not restart VPN or bypass auth | E2E |
 | network handover | Yes | Underlying network coordinator exists | New flows re-gather/fallback; no migration promise | stress test |
 | P2P resource cleanup | Yes | Bridge lifecycle exists | Verify stop/handover | lifecycle/device tests |
-| Android TUN IPv4/IPv6 | Yes | Fixed addresses, default routes | Precompile explicit immutable route plan | JVM/device tests |
+| Android TUN IPv4/IPv6 | Yes | Fixed addresses, default routes | Keep immutable Full Tunnel route plan | JVM/device tests |
 | VpnService lifecycle / TUN ownership | Yes | Implemented | Preserve actor/single-writer ownership | lifecycle tests |
 | SocketProtector | Yes | Implemented | Keep installed before start | AAR/device tests |
 | AppIdentityProvider / app routing | Yes | Implemented | No regression | JVM/instrumentation |
 | flow analysis | Yes | Implemented | No regression | instrumentation |
-| full tunnel | Yes | Only mode | Remains migration/default behavior | route-plan test |
-| split tunnel | Yes | Missing | Add Android-only persisted plan | JVM/device tests |
-| DNS/fake-IP platform routes | Yes | Fixed DNS/default routes | Compile plan and validate coverage | JVM/device tests |
-| process recreation / foreground service | Yes | Implemented | Persist route plan and restore | recreation tests |
+| full tunnel | Yes | Only platform mode | Always install IPv4/IPv6 default routes | route-plan test |
+| split tunnel | No | Previously Android-only | Removed; routing policy belongs to Core/Edge | migration + route-plan tests |
+| DNS/fake-IP platform routes | Fixed VPN DNS only | Fixed DNS/default routes | Default routes already capture fake-IP ranges | JVM/device tests |
+| process recreation / foreground service | Yes | Implemented | No route-plan state to restore; rebuild Full Tunnel | recreation tests |
 | Native URI / T2 / T3 / QR | Yes | Implemented | Do not change wire | codec/AAR tests |
 | A1 local account | Yes | Implemented | Do not change wire | codec/AAR tests |
 | App Link | Yes | Implemented | No regression | URI tests |
@@ -94,8 +94,8 @@ it does not mean that Kotlin implements the feature.
 
 ## Implementation boundary
 
-Android owns `VpnService`, route/DNS installation, encrypted persistence,
-lifecycle, UI, and diagnostics. Go remains the only implementation of protocol,
-crypto, authentication, MUX, routing compilation, DNS fake-IP, reverse services,
-Reverse Subnet ACL, P2P candidate gathering/STUN/control/permits/direct QUIC, and
-relay fallback.
+Android owns `VpnService`, fixed Full Tunnel route/DNS installation, encrypted
+persistence, lifecycle, UI, and diagnostics. Go remains the only implementation
+of protocol, crypto, authentication, MUX, routing compilation, DNS fake-IP,
+reverse services, Reverse Subnet ACL, P2P candidate gathering/STUN/control/
+permits/direct QUIC, and relay fallback.
