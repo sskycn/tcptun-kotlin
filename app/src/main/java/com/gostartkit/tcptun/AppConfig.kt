@@ -471,7 +471,6 @@ data class AppConfig(
         for (index in 0 until outbounds.length()) {
             outbounds.optJSONObject(index)?.let { outbound ->
                 migrateOutboundToCurrentSchema(outbound)
-                ensureAndroidTunOutboundNetworks(outbound)
             }
         }
         migrateRemovedDirectFirstOutbounds(route, outbounds)
@@ -598,17 +597,6 @@ data class AppConfig(
         outbound.remove("port")
         migrateCarrierAndMux(outbound)
         migrateTransportSecurity(outbound)
-    }
-
-    private fun ensureAndroidTunOutboundNetworks(outbound: JSONObject) {
-        val configured = outbound.optJSONArray("network") ?: return
-        val networks = buildSet {
-            for (index in 0 until configured.length()) {
-                configured.optString(index).trim().lowercase().takeIf(String::isNotBlank)?.let(::add)
-            }
-        }
-        if (AndroidTunNetworks.all(networks::contains)) return
-        outbound.put("network", JSONArray().apply { AndroidTunNetworks.forEach(::put) })
     }
 
     private fun findOrAddManagedDirectOutbound(outbounds: JSONArray): String {
@@ -853,18 +841,6 @@ data class AppConfig(
                 }
                 if (endpoint.optJSONObject("security")?.has("fingerprint") == true) {
                     return "$section[$index].security.fingerprint was removed in tcptun-go v0.4.0"
-                }
-                val carrier = endpoint.optJSONObject("carrier") ?: continue
-                val preference = carrier.optString("prefer").trim().lowercase()
-                if (preference.isBlank()) continue
-                if (section == "inbounds") {
-                    return "$section[$index].carrier.prefer is outbound-only"
-                }
-                if (preference !in CarrierPreferences) {
-                    return "$section[$index].carrier.prefer has unsupported value: $preference"
-                }
-                if (!carrier.optString("mode").trim().equals("auto", ignoreCase = true)) {
-                    return "$section[$index].carrier.prefer requires carrier.mode=auto"
                 }
             }
         }

@@ -286,7 +286,12 @@ class AndroidBridgeContractTest {
                 "route":{"default_outbound":"direct"}
             }""".trimIndent(),
         )
-        assertTrue(inboundPreference.validate().orEmpty().contains("outbound-only"))
+        assertNull(inboundPreference.validate())
+        assertTrue(
+            runCatching {
+                Androidbridge.validateConfig(inboundPreference.toBridgeJson("127.0.0.1:1081"))
+            }.isFailure,
+        )
 
         val singleCarrierPreference = valid.copy(
             rawConfigJson = valid.rawConfigJson.replace(
@@ -294,12 +299,97 @@ class AndroidBridgeContractTest {
                 "\"mode\":\"tcp\",\"prefer\":\"tcp\"",
             ),
         )
-        assertTrue(singleCarrierPreference.validate().orEmpty().contains("requires carrier.mode=auto"))
+        assertNull(singleCarrierPreference.validate())
+        assertTrue(
+            runCatching {
+                Androidbridge.validateConfig(singleCarrierPreference.toBridgeJson("127.0.0.1:1082"))
+            }.isFailure,
+        )
 
         val unknownPreference = valid.copy(
             rawConfigJson = valid.rawConfigJson.replace("\"prefer\":\"quic\"", "\"prefer\":\"fastest\""),
         )
-        assertTrue(unknownPreference.validate().orEmpty().contains("unsupported value"))
+        assertNull(unknownPreference.validate())
+        assertTrue(
+            runCatching {
+                Androidbridge.validateConfig(unknownPreference.toBridgeJson("127.0.0.1:1083"))
+            }.isFailure,
+        )
+    }
+
+    @Test
+    fun currentBridgeAcceptsReverseSubnetPrincipalAndDualStackConfig() {
+        val raw = """
+            {
+              "inbounds": [{
+                "tag": "remote-access", "type": "native", "address": ["127.0.0.1:19444"],
+                "users": [{"principal": "alice", "id": "REMOTE_TOKEN"}],
+                "transport": {"type": "raw"}, "mux": {"enabled": true}, "route_mode": "rules",
+                "subnets": [{"name": "home", "principals": ["alice"],
+                  "cidrs": ["192.168.50.0/24", "fd12:3456:789a::/64"],
+                  "network": ["tcp", "udp"], "ports": {"tcp": ["22", "53", "80-81"], "udp": ["53"]}}]
+              }],
+              "outbounds": [
+                {"tag": "deny", "type": "blackhole"},
+                {"tag": "home-lan", "type": "reverse_subnet",
+                 "reverse_subnet": {"inbound": "remote-access", "site": "home"}}
+              ],
+              "route": {"default_outbound": "deny", "rules": [{
+                "inbound": ["remote-access"], "principals": ["alice"],
+                "network": ["tcp", "udp"],
+                "ip_cidrs": ["192.168.50.0/24", "fd12:3456:789a::/64"], "outbound": "home-lan"
+              }]}
+            }
+        """.trimIndent()
+        val prepared = AppConfig(name = "reverse subnet", rawConfigJson = raw)
+            .toBridgeJson("127.0.0.1:18084")
+
+        Androidbridge.validateConfig(prepared)
+        val root = JSONObject(prepared)
+        assertEquals(
+            "alice",
+            root.getJSONObject("route").getJSONArray("rules").getJSONObject(0)
+                .getJSONArray("principals").getString(0),
+        )
+        assertEquals(
+            "fd12:3456:789a::/64",
+            root.getJSONArray("inbounds").getJSONObject(1)
+                .getJSONArray("subnets").getJSONObject(0).getJSONArray("cidrs").getString(1),
+        )
+    }
+
+    @Test
+    fun currentBridgeAcceptsP2pRemoteConfigAndPreservesCandidateSettings() {
+        val raw = """
+            {
+              "inbounds": [],
+              "outbounds": [
+                {"tag": "direct", "type": "direct"},
+                {"tag": "remote-edge", "type": "native", "address": ["edge.example.com:9444"],
+                 "token": "REMOTE_TOKEN", "network": ["tcp", "udp"],
+                 "transport": {"type": "raw"},
+                 "security": {"type": "tls", "server_name": "edge.example.com"},
+                 "mux": {"enabled": true},
+                 "p2p": {"enabled": true,
+                   "rendezvous": ["203.0.113.10:9555", "[2001:db8::10]:9555"],
+                   "host_candidates": false, "stun": ["stun.example.com:3478"]}}
+              ],
+              "route": {"default_outbound": "direct", "rules": [{
+                "network": ["tcp", "udp"],
+                "ip_cidrs": ["192.168.50.0/24", "fd12:3456:789a::/64"],
+                "outbound": "remote-edge"
+              }]}
+            }
+        """.trimIndent()
+        val prepared = AppConfig(name = "p2p remote", rawConfigJson = raw)
+            .toBridgeJson("127.0.0.1:18085")
+
+        Androidbridge.validateConfig(prepared)
+        val p2p = JSONObject(prepared).getJSONArray("outbounds").getJSONObject(1).getJSONObject("p2p")
+        assertTrue(p2p.getBoolean("enabled"))
+        assertFalse(p2p.getBoolean("host_candidates"))
+        assertEquals("[2001:db8::10]:9555", p2p.getJSONArray("rendezvous").getString(1))
+        assertEquals("stun.example.com:3478", p2p.getJSONArray("stun").getString(0))
     }
 
     @Test
