@@ -23,9 +23,10 @@ and IPv6 rendezvous arrays, optional STUN, `host_candidates`, and the v0.5.0
 `strategy: balanced|aggressive` field. Go `ValidateConfig` and the Go compiler are authoritative
 after Android size/nesting/deprecation safety checks.
 
-## Platform route modes
+## Platform routing
 
-Full Tunnel is the default for clean installs and every upgrade without Android route metadata:
+Android always runs Full Tunnel and installs the dual-stack default routes when the VPN is
+established:
 
 ```text
 0.0.0.0/0
@@ -33,14 +34,22 @@ Full Tunnel is the default for clean installs and every upgrade without Android 
 DNS 10.77.0.1
 ```
 
-Home-network Split Tunnel is explicit Android-only metadata. CIDRs are parsed as numeric prefixes,
-canonicalized, deduplicated, bounded, and prohibited from containing an implicit `/0`. Only those
-routes enter the VPN. Optional unicast home DNS addresses must be numeric and covered by one of the
-configured prefixes.
+There is no Android platform split-tunnel mode and no user-configurable home CIDR/DNS route plan.
+Internet proxy/VPN traffic and Reverse Subnet traffic enter the same TUN. Go compiled routing and
+the Edge topology decide whether each flow uses the normal Internet outbound, another configured
+outbound, or a `reverse_subnet` outbound.
 
-The app reads enabled `dns.fake_ip.ipv4_range` and `ipv6_range` from the already prepared Core
-config once during VPN establishment and adds those prefixes to a Split Tunnel. It does not
-implement a DNS or fake-IP server. DNS handling and domain restoration remain in Go.
+The tcptun-go Native `route_mode` field is independent of Android platform routing and remains
+preserved in Full JSON. In particular, `route_mode=rules` may be required for an Edge Native
+inbound to evaluate the compiled route rules for each flow.
+
+Older Android releases could persist a Home-network Split Tunnel plan. New releases do not restore
+that behavior: legacy route metadata collapses to Full Tunnel and is retired from runtime-settings
+storage during migration.
+
+DNS handling and fake-IP domain restoration remain in Go. Android no longer derives or installs
+additional platform routes from `dns.fake_ip.ipv4_range` or `ipv6_range`; the default routes already
+capture those destinations.
 
 ## P2P and privacy
 
