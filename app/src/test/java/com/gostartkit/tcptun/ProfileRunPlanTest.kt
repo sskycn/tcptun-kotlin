@@ -69,6 +69,18 @@ class ProfileRunPlanTest {
         }
     }
 
+    @Test
+    fun normalizationRejectsAnyRemoteProfileWithoutConfidentiality() {
+        val encrypted = validProfile("encrypted", "192.0.2.10")
+        val none = validProfile("none", "192.0.2.20").copy(tls = false)
+
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            ProfileRunPlan(listOf(encrypted, none), setOf(encrypted.id)).normalized()
+        }
+
+        assertEquals("none: $VpnTunnelConfidentialityError", error.message)
+    }
+
     private fun validProfile(id: String, host: String) = AppConfig(
         id = id,
         name = id,

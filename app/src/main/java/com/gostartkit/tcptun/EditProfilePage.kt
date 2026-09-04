@@ -135,7 +135,6 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.pluralStringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
@@ -162,7 +161,6 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import org.json.JSONObject
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.text.DateFormat
@@ -181,9 +179,6 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
     var config by rememberSaveable(initial.id, stateSaver = AppConfigSaver) {
         mutableStateOf(initial.boundedForEditor())
     }
-    var useFullConfig by rememberSaveable(initial.id) {
-        mutableStateOf(initial.rawConfigJson.isNotBlank())
-    }
     var formError by rememberSaveable(initial.id) { mutableStateOf("") }
     var validating by remember(initial.id) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -195,7 +190,7 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             EditTopBar(
-                title = if (initial.serverHost.isBlank() && initial.rawConfigJson.isBlank()) {
+                title = if (initial.serverHost.isBlank()) {
                     stringResource(R.string.add_profile)
                 } else {
                     stringResource(R.string.edit_profile)
@@ -262,74 +257,10 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
-                        ToggleRow(
-                            label = stringResource(R.string.full_config_mode),
-                            checked = useFullConfig,
-                            enabled = !validating,
-                        ) { enabled ->
-                            if (!enabled) {
-                                useFullConfig = false
-                                config = config.copy(rawConfigJson = "")
-                                formError = ""
-                            } else {
-                                validating = true
-                                scope.launch {
-                                    try {
-                                        var candidate = config
-                                        while (true) {
-                                            val generatedConfig = withContext(Dispatchers.Default) {
-                                                val generated = candidate.toBridgeJson(
-                                                    localListenAddr = "127.0.0.1:1080",
-                                                )
-                                                requireSafeJsonNesting(generated)
-                                                candidate.copy(
-                                                    rawConfigJson = JSONObject(generated).toString(2),
-                                                )
-                                            }
-                                            val latest = config
-                                            if (latest == candidate) {
-                                                config = generatedConfig
-                                                useFullConfig = true
-                                                formError = ""
-                                                break
-                                            }
-                                            candidate = latest
-                                        }
-                                    } catch (cancelled: CancellationException) {
-                                        throw cancelled
-                                    } catch (failure: Exception) {
-                                        val message = safeUiErrorMessage(
-                                            failure.message.orEmpty(),
-                                            invalidProfileMessage,
-                                        )
-                                        useFullConfig = false
-                                        formError = message
-                                        reportUiError(message)
-                                    } finally {
-                                        validating = false
-                                    }
-                                }
-                            }
-                        }
-                        if (useFullConfig) {
-                            Text(
-                                stringResource(R.string.full_config_note),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            OutlinedTextField(
-                                value = config.rawConfigJson,
-                                onValueChange = { config = config.copy(rawConfigJson = it.take(MaxProfileImportLength)) },
-                                label = { FieldChromeText(stringResource(R.string.full_config_json)) },
-                                textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                                minLines = 18,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        } else {
                             val selectedSecurity = when {
                                 config.tunnelSecurity.equals("reality", ignoreCase = true) -> "reality"
                                 config.tls -> "tls"
-                                else -> "none"
+                                else -> ""
                             }
                             val isReality = selectedSecurity == "reality"
                             val carrierOptions = when {
@@ -384,7 +315,7 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                             ) {
                                 config = config.copy(transport = it)
                                 if (it != "raw") {
-                                    config = config.withoutResumableMux().withoutEch().copy(
+                                    config = config.withoutResumableMux().copy(
                                         carrierMode = "tcp",
                                         carrierPrefer = "",
                                         carrierUdpMode = "",
@@ -437,7 +368,7 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                         carrierUdpMode = config.carrierUdpMode.takeIf {
                                             config.carrierMode in setOf("auto", "quic")
                                         }.orEmpty(),
-                                    ).withoutResumableMux().withoutEch()
+                                    ).withoutResumableMux()
                                     "reality" -> config.copy(
                                         transport = "raw",
                                         tunnelSecurity = "reality",
@@ -452,19 +383,8 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                         carrierPrefer = config.carrierPrefer.takeIf {
                                             config.carrierMode == "auto"
                                         }.orEmpty(),
-                                    ).withoutEch()
-                                    else -> config.copy(
-                                        tunnelSecurity = "",
-                                        tls = false,
-                                        tlsInsecure = false,
-                                        carrierMode = "tcp",
-                                        carrierPrefer = "",
-                                        carrierUdpMode = "",
-                                        carrierInitialStreamReceiveWindow = 0,
-                                        carrierMaxStreamReceiveWindow = 0,
-                                        carrierInitialConnectionReceiveWindow = 0,
-                                        carrierMaxConnectionReceiveWindow = 0,
-                                    ).withoutResumableMux()
+                                    )
+                                    else -> config
                                 }
                             }
                             OutlinedTextField(
@@ -514,87 +434,6 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                     config = config.copy(tlsInsecure = it)
                                 }
                             }
-                            val canEnableEch =
-                                config.protocol == "native" &&
-                                    config.transport == "raw" &&
-                                    selectedSecurity == "none" &&
-                                    config.carrierMode.ifBlank { "tcp" } == "tcp" &&
-                                    !config.muxResume
-                            ToggleRow(
-                                stringResource(R.string.field_ech_client_hello),
-                                config.echEnabled,
-                                enabled = canEnableEch || config.echEnabled,
-                            ) { enabled ->
-                                config = if (enabled) {
-                                    config.withoutResumableMux().copy(
-                                        protocol = "native",
-                                        transport = "raw",
-                                        tunnelSecurity = "",
-                                        tls = false,
-                                        tlsInsecure = false,
-                                        carrierMode = "tcp",
-                                        carrierPrefer = "",
-                                        carrierUdpMode = "",
-                                        echEnabled = true,
-                                        echPorts = config.echPorts.ifBlank { DefaultEchPorts },
-                                    )
-                                } else {
-                                    config.withoutEch()
-                                }
-                            }
-                            if (config.echEnabled) {
-                                Text(
-                                    stringResource(R.string.ech_client_hello_note),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                OutlinedTextField(
-                                    value = config.echPublicName,
-                                    onValueChange = {
-                                        config = config.copy(
-                                            echPublicName = it.take(MaxProfileHostInputLength),
-                                        )
-                                    },
-                                    label = {
-                                        FieldChromeText(stringResource(R.string.field_ech_public_name))
-                                    },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                                OutlinedTextField(
-                                    value = config.echPublicKey,
-                                    onValueChange = {
-                                        config = config.copy(
-                                            echPublicKey = it.take(MaxEchKeyInputLength),
-                                        )
-                                    },
-                                    label = {
-                                        FieldChromeText(stringResource(R.string.field_ech_public_key))
-                                    },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                                OutlinedTextField(
-                                    value = config.echPorts,
-                                    onValueChange = {
-                                        config = config.copy(
-                                            echPorts = it
-                                                .filter { char ->
-                                                    char.isDigit() || char == ',' || char.isWhitespace()
-                                                }
-                                                .take(MaxProfileChoiceInputLength),
-                                        )
-                                    },
-                                    label = {
-                                        FieldChromeText(stringResource(R.string.field_ech_ports))
-                                    },
-                                    supportingText = {
-                                        FieldChromeText(stringResource(R.string.field_ech_ports_hint))
-                                    },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                            }
                             ToggleRow(
                                 stringResource(R.string.field_mux),
                                 config.mux,
@@ -629,7 +468,7 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                         tlsInsecure = config.tlsInsecure.takeIf { !isReality } ?: false,
                                         mux = true,
                                         carrierMode = "auto",
-                                    ).withoutEch()
+                                    )
                                     "quic" -> config.copy(
                                         protocol = "native",
                                         transport = "raw",
@@ -638,7 +477,7 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                         carrierMode = "quic",
                                         carrierPrefer = "",
                                         carrierUdpMode = config.carrierUdpMode.ifBlank { "auto" },
-                                    ).withoutResumableMux().withoutEch()
+                                    ).withoutResumableMux()
                                     else -> config.copy(
                                         carrierMode = "tcp",
                                         carrierPrefer = "",
@@ -795,7 +634,7 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                         mux = true,
                                         carrierMode = "auto",
                                         muxResume = true,
-                                    ).withoutEch()
+                                    )
                                 } else {
                                     config.withoutResumableMux()
                                 }
@@ -864,7 +703,6 @@ internal fun EditProfilePage(initial: AppConfig, onBack: () -> Unit, onSave: (Ap
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.primary,
                             )
-                        }
                 }
             }
         }

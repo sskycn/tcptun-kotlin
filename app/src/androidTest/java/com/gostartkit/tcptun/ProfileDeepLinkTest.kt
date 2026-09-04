@@ -91,6 +91,56 @@ class ProfileDeepLinkTest {
     }
 
     @Test
+    fun uriAndDeepLinkRejectMissingOrNoneSecurityBeforeImport() {
+        val invalidUris = listOf(
+            "native://secret@edge.example.com:443?v=1&type=raw&security=none#none",
+            "native://secret@edge.example.com:443?v=1&type=raw#missing",
+        )
+
+        invalidUris.forEach { uri ->
+            val direct = ProfileUriCodec.decode(uri)
+            assertTrue(uri, direct.isFailure)
+            assertTrue(direct.exceptionOrNull()?.message.orEmpty().contains(VpnTunnelConfidentialityError))
+
+            val deepLink = ProfileUriCodec.decode(ProfileDeepLinkCodec.encode(uri))
+            assertTrue(uri, deepLink.isFailure)
+            assertTrue(deepLink.exceptionOrNull()?.message.orEmpty().contains(VpnTunnelConfidentialityError))
+        }
+    }
+
+    @Test
+    fun tlsAndRealityUriImportsRemainSupported() {
+        val tls = ProfileUriCodec.decode(
+            "native://secret@edge.example.com:443?v=1&type=raw&security=tls#tls",
+        ).getOrThrow()
+        val reality = ProfileUriCodec.decode(
+            "native://secret@edge.example.com:443?v=1&type=raw&security=reality" +
+                "&sni=edge.example.com&pbk=BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY" +
+                "&sid=a65f93c1#reality",
+        ).getOrThrow()
+
+        assertTrue(tls.tls)
+        assertEquals("reality", reality.tunnelSecurity)
+        assertNull(tls.validate())
+        assertNull(reality.validate())
+    }
+
+    @Test
+    fun qrEncoderRefusesProfilesWithoutConfidentiality() {
+        val none = AppConfig(
+            name = "none",
+            serverHost = "edge.example.com",
+            serverPort = "443",
+            token = "secret",
+            tls = false,
+        )
+
+        assertNull(ProfileUriCodec.encode(none))
+        assertNull(ProfileUriCodec.encodeForQr(none))
+        assertNull(ProfileUriCodec.encodeQrCode(none))
+    }
+
+    @Test
     fun removedProtocolUrisFailWithoutConvertingCredentialsToNative() {
         RemovedTunnelProtocols.forEach { protocol ->
             val result = ProfileUriCodec.decode("$protocol://legacy-credential@example.com:443")
@@ -364,6 +414,7 @@ class ProfileDeepLinkTest {
                 protocol = protocol,
                 transport = "raw",
                 token = "00000000-0000-4000-8000-000000000000",
+                tls = false,
                 tunnelSecurity = "reality",
                 sni = "example.com",
                 realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
@@ -425,6 +476,7 @@ class ProfileDeepLinkTest {
             protocol = "native",
             transport = "raw",
             token = "00000000-0000-4000-8000-000000000000",
+            tls = false,
             tunnelSecurity = "reality",
             sni = "www.microsoft.com",
             flow = "xtls-rprx-vision",
@@ -530,6 +582,7 @@ class ProfileDeepLinkTest {
             transport = "raw",
             token = "secret",
             path = "/",
+            tls = false,
             tunnelSecurity = "reality",
             sni = "example.com",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
@@ -561,6 +614,7 @@ class ProfileDeepLinkTest {
             transport = "raw",
             token = "secret",
             path = "/proxy",
+            tls = false,
             tunnelSecurity = "reality",
             sni = "example.com",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
@@ -632,30 +686,4 @@ class ProfileDeepLinkTest {
         assertFalse(profileConnectionIdentity(first) == profileConnectionIdentity(differentPool))
     }
 
-    @Test
-    fun fullJsonConnectionIdentityIsCanonicalAndNonNull() {
-        val first = AppConfig(
-            id = "one",
-            name = "first",
-            rawConfigJson = """
-                {
-                  "outbounds": [{"tag": "native", "type": "native", "token": "secret"}],
-                  "route": {"default_outbound": "native", "rules": []}
-                }
-            """.trimIndent(),
-        )
-        val reformattedAndRenamed = first.copy(
-            id = "two",
-            name = "renamed",
-            rawConfigJson = """{"route":{"rules":[],"default_outbound":"native"},"outbounds":[{"token":"secret","type":"native","tag":"native"}]}""",
-        )
-        val different = first.copy(
-            id = "three",
-            rawConfigJson = first.rawConfigJson.replace("secret", "other-secret"),
-        )
-
-        assertNotNull(profileConnectionIdentity(first))
-        assertEquals(profileConnectionIdentity(first), profileConnectionIdentity(reformattedAndRenamed))
-        assertFalse(profileConnectionIdentity(first) == profileConnectionIdentity(different))
-    }
 }

@@ -1,9 +1,17 @@
 package com.tcptun.client
 
+internal const val VpnTunnelConfidentialityError = "VPN tunnel requires TLS or REALITY encryption."
+
+internal fun AppConfig.providesVpnTunnelConfidentiality(): Boolean =
+    tunnelSecurity.trim().equals("reality", ignoreCase = true) ||
+        (tunnelSecurity.isBlank() && tls)
+
+internal fun AppConfig.validateAndroidVpnConfidentiality(): String? =
+    if (providesVpnTunnelConfidentiality()) null else VpnTunnelConfidentialityError
+
 internal fun AppConfig.validationError(): String? {
     if (!hasSafeStorageSize()) return "profile data is too large"
     if (name.isBlank()) return "profile name is required"
-    if (rawConfigJson.isNotBlank()) return validateRawConfig(rawConfigJson)
     if (serverHost.isBlank()) return "server address is required"
     val port = serverPort.toIntOrNull() ?: return "server port must be a number"
     if (port !in 1..65535) return "server port must be between 1 and 65535"
@@ -18,6 +26,7 @@ internal fun AppConfig.validationError(): String? {
     if (upstreamProtocol !in AppConfig.UpstreamProtocols) return "unsupported upstream protocol: $upstreamProtocol"
     if (token.isBlank()) return "native token is required"
     val normalizedSecurity = tunnelSecurity.trim().lowercase()
+    validateAndroidVpnConfidentiality()?.let { return it }
     if (normalizedSecurity !in AppConfig.TunnelSecurityTypes) return "unsupported security: $tunnelSecurity"
     if (normalizedSecurity.isNotBlank() && tls) return "TLS cannot be combined with tunnel security"
     if (normalizedSecurity == "reality" && transport != "raw") {
@@ -26,11 +35,6 @@ internal fun AppConfig.validationError(): String? {
     if (normalizedSecurity == "reality") {
         if (sni.isBlank()) return "$normalizedSecurity requires SNI"
         if (realityPublicKey.isBlank()) return "$normalizedSecurity requires a public key"
-    }
-    val echFieldsConfigured =
-        echPublicName.isNotBlank() || echPublicKey.isNotBlank() || echPorts.isNotBlank()
-    if (!echEnabled && echFieldsConfigured) {
-        return "ECH must be enabled when ClientHello protection fields are configured"
     }
     val normalizedCarrierMode = carrierMode.trim().lowercase()
     if (normalizedCarrierMode !in AppConfig.CarrierModes) return "unsupported carrier mode: $carrierMode"
@@ -77,20 +81,6 @@ internal fun AppConfig.validationError(): String? {
         if (normalizedCarrierMode != "auto") {
             return "mux resume requires automatic carrier mode"
         }
-    }
-    if (echEnabled) {
-        if (protocol != "native") return "ECH requires native protocol"
-        if (transport != "raw") return "ECH requires raw transport"
-        if (tls || normalizedSecurity.isNotBlank()) return "ECH requires security none"
-        if (normalizedCarrierMode !in setOf("", "tcp")) return "ECH requires TCP carrier mode"
-        if (muxResume) return "ECH does not support resumable mux"
-        if (!isValidEchPublicName(echPublicName)) {
-            return "ECH public name must be a valid DNS name"
-        }
-        if (echPublicKey.isBlank()) return "ECH public key is required"
-        runRecoverableCatching { parseEchPorts(echPorts) }
-            .exceptionOrNull()
-            ?.let { return it.message ?: "invalid ECH ports" }
     }
     if (muxResumeTimeoutMillis !in 0..300_000) {
         return "mux resume timeout must be between 100 and 300000 milliseconds when set"

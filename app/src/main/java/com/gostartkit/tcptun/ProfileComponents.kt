@@ -494,7 +494,7 @@ internal fun rememberProfilePresentation(profile: AppConfig): ProfilePresentatio
     val initial = remember(profile) {
         ProfilePresentation(
             label = profile.label(),
-            maskedAddress = if (profile.rawConfigJson.isBlank()) profile.maskedAddress() else "",
+            maskedAddress = profile.maskedAddress(),
             shareUri = null,
             validationError = profile.validate(),
         )

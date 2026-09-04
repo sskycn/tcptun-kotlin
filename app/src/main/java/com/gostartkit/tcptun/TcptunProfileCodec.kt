@@ -5,11 +5,9 @@ import org.json.JSONObject
 /** Uses tcptun-go as the single source of truth for versioned share-profile payloads. */
 internal object TcptunProfileCodec {
     fun encode(profile: AppConfig): String {
+        profile.validate()?.let { throw IllegalArgumentException(it) }
         require(!profile.muxResume && profile.muxResumeTimeoutMillis == 0 && profile.muxResumeBufferSize == 0) {
             "T3 cannot represent resumable mux settings"
-        }
-        require(!profile.hasEchClientHelloSettings()) {
-            "T3 cannot represent ECH ClientHello protection"
         }
         val encoded = invoke("encodeProfile", profile.toBridgeProfileJson().toString())
             .takeIf(String::isNotBlank)
@@ -30,6 +28,7 @@ internal object TcptunProfileCodec {
         moduleSize: Int = 0,
         compact: Boolean = false,
     ): ByteArray {
+        profile.validate()?.let { throw IllegalArgumentException(it) }
         require(moduleSize >= 0) { "QR module size must not be negative" }
         val png = invokeQrCode(
             profile.toBridgeProfileJson().toString(),
@@ -45,7 +44,9 @@ internal object TcptunProfileCodec {
         val profileJson = invoke("decodeProfile", value)
         require(profileJson.length <= MaxProfileImportLength) { "decoded profile is too large" }
         requireSafeJsonNesting(profileJson)
-        return AppConfig.fromJson(JSONObject(profileJson))
+        return AppConfig.fromJson(JSONObject(profileJson)).also { profile ->
+            profile.validate()?.let { throw IllegalArgumentException(it) }
+        }
     }
 
     private fun invoke(methodName: String, value: String): String {
@@ -122,5 +123,4 @@ private fun AppConfig.toBridgeProfileJson(): JSONObject {
         .put("carrierInitialConnectionReceiveWindow", carrierInitialConnectionReceiveWindow)
         .put("carrierMaxConnectionReceiveWindow", carrierMaxConnectionReceiveWindow)
         .put("upstreamProtocol", upstreamProtocol)
-        .put("rawConfigJson", rawConfigJson)
 }

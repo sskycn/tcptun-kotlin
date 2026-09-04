@@ -55,6 +55,7 @@ class AppConfigCompatibilityTest {
             transport = "raw",
             token = "secret",
             sni = "example.com",
+            tls = false,
             tunnelSecurity = "reality",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
             realityShortId = "a65f93c1",
@@ -77,6 +78,7 @@ class AppConfigCompatibilityTest {
             transport = "raw",
             token = "secret",
             sni = "example.com",
+            tls = false,
             tunnelSecurity = "reality",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
             mux = true,
@@ -125,7 +127,7 @@ class AppConfigCompatibilityTest {
             profile.copy(carrierPrefer = "fastest").validate(),
         )
         assertEquals(
-            "automatic carrier requires TLS or reality security",
+            VpnTunnelConfidentialityError,
             profile.copy(tls = false).validate(),
         )
     }
@@ -184,7 +186,7 @@ class AppConfigCompatibilityTest {
             profile.copy(protocol = "vless").validate(),
         )
         assertEquals(
-            "mux resume requires reality automatic TCP/QUIC security",
+            VpnTunnelConfidentialityError,
             profile.copy(tunnelSecurity = "").validate(),
         )
         assertEquals(
@@ -206,39 +208,17 @@ class AppConfigCompatibilityTest {
     }
 
     @Test
-    fun validatesNativeEchClientHelloProtection() {
-        val profile = AppConfig(
-            name = "ech",
-            serverHost = "edge.example.com",
-            serverPort = "9443",
-            protocol = "native",
-            transport = "raw",
-            token = "secret",
-            echEnabled = true,
-            echPublicName = "public.example",
-            echPublicKey = "gzFwIcNk5Ez3GIzKErsb8_BLzAvzRyxZlmno-tkYeSY",
-            echPorts = "443, 8443",
-            mux = true,
-            carrierMode = "tcp",
-        )
+    fun androidProfilesRequireTlsOrRealityConfidentiality() {
+        val defaultProfile = AppConfig(serverHost = "edge.example.com", token = "secret")
+        assertTrue(defaultProfile.tls)
+        assertTrue(defaultProfile.providesVpnTunnelConfidentiality())
+        assertNull(defaultProfile.validate())
+        assertEquals(listOf("tls", "reality"), AppConfig.SecurityOptions)
 
-        assertNull(profile.validate())
-        assertEquals(listOf(443, 8443), parseEchPorts(profile.echPorts))
+        assertEquals(VpnTunnelConfidentialityError, defaultProfile.copy(tls = false).validate())
         assertEquals(
-            "tcptun-go v0.5.0 no longer supports vless",
-            profile.copy(protocol = "vless").validate(),
-        )
-        assertEquals(
-            "ECH requires security none",
-            profile.copy(tls = true).validate(),
-        )
-        assertEquals(
-            "ECH requires TCP carrier mode",
-            profile.copy(carrierMode = "quic").validate(),
-        )
-        assertEquals(
-            "ECH ports must not contain duplicates",
-            profile.copy(echPorts = "443,443").validate(),
+            VpnTunnelConfidentialityError,
+            defaultProfile.copy(tls = false, tunnelSecurity = "none").validate(),
         )
     }
 
@@ -250,6 +230,7 @@ class AppConfigCompatibilityTest {
         transport = "raw",
         token = "secret",
         sni = "example.com",
+        tls = false,
         tunnelSecurity = "reality",
         realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
         realityShortId = "a65f93c1",

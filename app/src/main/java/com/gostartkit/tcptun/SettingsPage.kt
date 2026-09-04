@@ -202,12 +202,6 @@ internal fun SettingsPage(
         initialValue = TcptunState.settingsRuntimeUi,
     )
     val coreIdentity = remember { tcptunCoreIdentity() }
-    val featureSummary by produceState(initialValue = AndroidCoreFeatureSummary(), appContext) {
-        value = withContext(Dispatchers.IO) {
-            val state = ProfileStore.load(appContext)
-            androidCoreFeatureSummary(state.activeProfiles.firstOrNull() ?: state.profiles.firstOrNull())
-        }
-    }
     val mtuOptions = listOf("1280", "1360", "1400", "1500")
     val defaultPoolLabel = stringResource(R.string.route_outbound_proxy)
     val defaultDirectLabel = stringResource(R.string.route_outbound_direct)
@@ -495,38 +489,8 @@ internal fun SettingsPage(
                             title = stringResource(R.string.home_network_settings),
                         )
                         DiagnosticsLine(
-                            stringResource(R.string.current_edge_profile),
-                            featureSummary.profileName.ifBlank { stringResource(R.string.none) },
-                        )
-                        DiagnosticsLine(
-                            stringResource(R.string.p2p_status),
-                            if (featureSummary.p2pEnabled) stringResource(R.string.enabled) else stringResource(R.string.disabled),
-                        )
-                        DiagnosticsLine(
-                            stringResource(R.string.relay_fallback),
-                            stringResource(R.string.core_managed),
-                        )
-                        DiagnosticsLine(
-                            stringResource(R.string.host_candidates),
-                            if (featureSummary.hostCandidatesEnabled) stringResource(R.string.enabled) else stringResource(R.string.disabled),
-                        )
-                        DiagnosticsLine(
-                            stringResource(R.string.stun_servers),
-                            featureSummary.stunServerCount.toString(),
-                        )
-                        DiagnosticsLine(
                             stringResource(R.string.diag_core_version),
                             coreIdentity.version.ifBlank { stringResource(R.string.none) },
-                        )
-                        Text(
-                            stringResource(R.string.reverse_subnet_full_json_note),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            stringResource(R.string.host_candidates_privacy_note),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
                         )
                     }
                 }
@@ -610,18 +574,11 @@ internal suspend fun mutateManagedRouteRules(
                 if (authoritativeProfiles.activeIds.isNotEmpty()) {
                     add(authoritativeProfiles.runPlan())
                 }
-                authoritativeProfiles.profiles
-                    .firstOrNull { it.rawConfigJson.isBlank() }
-                    ?.let { profile ->
-                        // A structured run plan contains every structured
-                        // profile so future hot membership updates remain possible.
-                        add(authoritativeProfiles.copy(activeIds = setOf(profile.id)).runPlan())
-                    }
-                authoritativeProfiles.profiles
-                    .filter { it.rawConfigJson.isNotBlank() }
-                    .forEach { profile ->
-                        add(authoritativeProfiles.copy(activeIds = setOf(profile.id)).runPlan())
-                    }
+                authoritativeProfiles.profiles.firstOrNull()?.let { profile ->
+                    // A structured run plan contains every profile so future
+                    // hot membership updates remain possible.
+                    add(authoritativeProfiles.copy(activeIds = setOf(profile.id)).runPlan())
+                }
             }.distinct()
             val currentRouteSize = estimatedEnabledRouteRuntimePayloadLength(currentRules)
             val nextRouteSize = estimatedEnabledRouteRuntimePayloadLength(next)

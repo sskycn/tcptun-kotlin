@@ -57,13 +57,6 @@ internal fun normalizeAndroidVpnRoutePlan(plan: AndroidVpnRoutePlan): AndroidVpn
     AndroidVpnRoutePlan.FullTunnel -> AndroidVpnRoutePlan.FullTunnel
 }
 
-data class AndroidCoreFeatureSummary(
-    val profileName: String = "",
-    val p2pEnabled: Boolean = false,
-    val hostCandidatesEnabled: Boolean = false,
-    val stunServerCount: Int = 0,
-)
-
 data class CoreP2pConfigState(
     val enabled: Boolean = false,
     val hostCandidatesEnabled: Boolean = false,
@@ -86,21 +79,6 @@ internal fun coreP2pConfigState(configJson: String): CoreP2pConfigState = runRec
     }
     CoreP2pConfigState(enabled, hostCandidates, stunCount.coerceAtMost(MaxDisplayedStunServers))
 }.getOrDefault(CoreP2pConfigState())
-
-internal fun androidCoreFeatureSummary(profile: AppConfig?): AndroidCoreFeatureSummary {
-    if (profile == null) return AndroidCoreFeatureSummary()
-    if (profile.rawConfigJson.isBlank()) return AndroidCoreFeatureSummary(profileName = profile.name)
-    return runRecoverableCatching {
-        requireSafeJsonNesting(profile.rawConfigJson)
-        val p2p = coreP2pConfigState(profile.rawConfigJson)
-        AndroidCoreFeatureSummary(
-            profileName = profile.name,
-            p2pEnabled = p2p.enabled,
-            hostCandidatesEnabled = p2p.hostCandidatesEnabled,
-            stunServerCount = p2p.stunServerCount,
-        )
-    }.getOrDefault(AndroidCoreFeatureSummary(profileName = profile.name))
-}
 
 @Suppress("UNUSED_PARAMETER")
 internal fun compileAndroidVpnRoutePlan(
@@ -128,11 +106,14 @@ internal fun encodeAndroidVpnRoutePlan(plan: AndroidVpnRoutePlan): String {
 internal fun decodeAndroidVpnRoutePlan(encoded: String?): AndroidVpnRoutePlan {
     if (encoded.isNullOrBlank()) return AndroidVpnRoutePlan.FullTunnel
     requireSafeJsonNesting(encoded)
-    return when (JSONObject(encoded).optString("mode").trim().lowercase()) {
+    return decodeAndroidVpnRouteMode(JSONObject(encoded).optString("mode"))
+}
+
+internal fun decodeAndroidVpnRouteMode(mode: String?): AndroidVpnRoutePlan =
+    when (mode.orEmpty().trim().lowercase()) {
         "", "full", "split" -> AndroidVpnRoutePlan.FullTunnel
         else -> throw IllegalArgumentException("unsupported Android VPN route mode")
     }
-}
 
 private fun parseNumericAddress(value: String): InetAddress {
     val normalized = value.trim().removeSurrounding("[", "]")

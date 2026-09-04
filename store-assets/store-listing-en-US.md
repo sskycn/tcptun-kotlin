@@ -25,8 +25,8 @@ Features:
 • Manage multiple profiles with manual editing and individual start/stop control
 • Import profiles from the clipboard, QR codes, system links, or manual forms
 • Generate and share profile QR codes for easy transfer to another device
-• Support native tcptun-go, VLESS, VMess, and Trojan profiles
-• Advanced transport options including TLS, REALITY, ECH, Mux, and full JSON configuration
+• Structured native tcptun-go profiles with TLS or REALITY tunnel encryption
+• Advanced raw, WebSocket, H2, and H3 transport options with Mux
 • TCP/UDP VPN traffic with IPv4/IPv6, DNS interception, and fake-IP support
 • Ordered routing by domain, IP, CIDR, IP range, or Android app
 • Default outbound, dynamic connection pool, runtime outbound switching, and smart rule merging
@@ -46,7 +46,7 @@ While running, the app may use the current outbound connection for lightweight c
 Initial release of TcpTun:
 
 • Manage profiles with manual, clipboard, QR, and system-link import, plus QR sharing
-• Support native tcptun-go, VLESS, VMess, and Trojan profiles
+• Structured native tcptun-go profiles with TLS or REALITY encryption
 • Android VPN transparent proxy for TCP/UDP, IPv4/IPv6, DNS, and fake-IP
 • Local SOCKS5/mixed proxy and routing by domains, IPs, CIDR, ranges, and apps
 • Dynamic outbounds, runtime switching, traffic analysis, rule generation, TCPing, health diagnostics, logs, recovery, and Chinese/English UI

@@ -1,8 +1,6 @@
 package com.tcptun.client
 
 import android.net.Uri
-import org.json.JSONArray
-import org.json.JSONObject
 import java.math.BigDecimal
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -18,8 +16,8 @@ object ProfileUriCodec {
             if (!looksLikeJson && trimmed.length > MaxProfileUriLength) {
                 error("profile URI is too large")
             }
-            if (looksLikeJson) requireSafeJsonNesting(trimmed)
-            when {
+            if (looksLikeJson) error("JSON profile import is no longer supported")
+            val config = when {
                 ProfileDeepLinkCodec.isSupportedLink(trimmed) -> {
                     val profileUri = ProfileDeepLinkCodec.decode(trimmed).getOrThrow()
                     decode(profileUri).getOrThrow()
@@ -29,16 +27,15 @@ object ProfileUriCodec {
                     error(unsupportedTunnelProtocolMessage(protocol))
                 }
                 trimmed.startsWith("native://", ignoreCase = true) -> decodeAuthorityProfile(trimmed)
-                trimmed.contains("{") && trimmed.contains("}") -> decodeJsonProfile(trimmed)
                 else -> TcptunProfileCodec.decode(trimmed)
             }
+            config.validate()?.let { error(it) }
+            config
         }
     }
 
     fun encode(config: AppConfig): String? {
         return runRecoverableCatching {
-            if (config.rawConfigJson.isNotBlank()) return@runRecoverableCatching null
-            if (config.hasEchClientHelloSettings()) return@runRecoverableCatching null
             val validationConfig = if (config.name.isBlank()) config.copy(name = "profile") else config
             if (validationConfig.validate() != null) return@runRecoverableCatching null
             val encoded = config.takeIf { it.protocol == "native" }
@@ -58,32 +55,28 @@ object ProfileUriCodec {
      * field. Returns null when T3 cannot represent the profile.
      */
     fun encodeForQr(config: AppConfig): String? {
-        if (
-            config.rawConfigJson.isNotBlank() ||
-            config.hasResumableMuxSettings() ||
-            config.hasEchClientHelloSettings()
-        ) {
+        if (config.hasResumableMuxSettings()) {
             return null
         }
         return runRecoverableCatching {
             // Normalize first so re-showing QR for legacy T2-imported profiles
             // with polluted raw paths (path="/") does not throw from the Go codec.
-            TcptunProfileCodec.encode(normalizeForCompactQr(config))
+            val normalized = normalizeForCompactQr(config)
+            normalized.validate()?.let { error(it) }
+            TcptunProfileCodec.encode(normalized)
         }.getOrNull()
     }
 
     /** Renders a profile QR code through tcptun-go and returns its PNG bytes. */
     fun encodeQrCode(config: AppConfig): ByteArray? {
-        if (
-            config.rawConfigJson.isNotBlank() ||
-            config.hasResumableMuxSettings() ||
-            config.hasEchClientHelloSettings()
-        ) {
+        if (config.hasResumableMuxSettings()) {
             return null
         }
         return runRecoverableCatching {
+            val normalized = normalizeForCompactQr(config)
+            normalized.validate()?.let { error(it) }
             TcptunProfileCodec.encodeQrCode(
-                profile = normalizeForCompactQr(config),
+                profile = normalized,
                 recoveryLevel = "",
                 moduleSize = 0,
                 compact = false,
@@ -122,7 +115,8 @@ object ProfileUriCodec {
             .ifBlank { uri.getQueryParameter("transport").orEmpty() }
             .lowercase()
         val security = uri.getQueryParameter("security").orEmpty().lowercase()
-        if (security !in setOf("", "none", "tls", "reality", "reality-tcp", "reality-quic")) {
+        if (security.isBlank() || security == "none") error(VpnTunnelConfidentialityError)
+        if (security !in setOf("tls", "reality", "reality-tcp", "reality-quic")) {
             error("unsupported security: $security")
         }
         val mux = uri.getBooleanParameterCompat("mux", false)
@@ -211,110 +205,6 @@ object ProfileUriCodec {
         return "native://$auth:$port?$query#$name"
     }
 
-    private fun decodeJsonProfile(raw: String): AppConfig {
-        val extracted = extractJsonObject(raw)
-        requireSafeJsonNesting(extracted)
-        val obj = JSONObject(extracted)
-        if (obj.has("serverHost") || obj.has("serverPort")) {
-            return AppConfig.fromJson(obj).copy(id = UUID.randomUUID().toString())
-        }
-        if (obj.has("inbounds") && obj.has("outbounds")) {
-            val route = obj.optJSONObject("route")?.let { JSONObject(it.toString()) } ?: JSONObject()
-            route.optJSONArray("rules")?.let { rules ->
-                for (ruleIndex in 0 until rules.length()) {
-                    val rule = rules.optJSONObject(ruleIndex) ?: continue
-                    val inboundTags = rule.optJSONArray("inbound") ?: continue
-                    if (inboundTags.length() > 0) {
-                        rule.put("inbound", JSONArray().put(AndroidTunInboundTag))
-                    }
-                }
-            }
-            val imported = JSONObject()
-                .put("outbounds", obj.getJSONArray("outbounds"))
-                .put("route", route)
-            obj.optJSONObject("dns")?.let { dns ->
-                imported.put("dns", JSONObject(dns.toString()))
-            }
-            return AppConfig(
-                id = UUID.randomUUID().toString(),
-                name = "tcptun-json",
-                rawConfigJson = imported.toString(2),
-            )
-        }
-        if (!obj.has("server_addr") && !obj.has("tunnel_protocol")) {
-            error("unsupported profile JSON")
-        }
-        return decodeTcptunClientJson(obj)
-    }
-
-    private fun decodeTcptunClientJson(obj: JSONObject): AppConfig {
-        val serverAddr = obj.optString("server_addr").trim()
-        if (serverAddr.isBlank()) error("missing client server_addr")
-        val (host, port) = splitHostPort(serverAddr)
-        val protocol = obj.optString("tunnel_protocol", "native").trim().lowercase().ifBlank { "native" }
-        if (protocol != "native") {
-            if (protocol in RemovedTunnelProtocols) error(unsupportedTunnelProtocolMessage(protocol))
-            error("unsupported tunnel_protocol: $protocol")
-        }
-        val tunnelSecurity = obj.optString("tunnel_security").trim().lowercase()
-        val normalizedSecurity = when (tunnelSecurity) {
-            "", "none", "tls" -> ""
-            else -> tunnelSecurity
-        }
-        val mux = obj.optBoolean("tunnel_mux", true)
-        val currentCarrierMode = obj.optString("tunnel_carrier_mode")
-        val currentCarrierPrefer = obj.optString("tunnel_carrier_prefer")
-        requireSupportedCarrierPreference(currentCarrierPrefer)
-        val currentCarrierUdpMode = obj.optString("tunnel_carrier_udp_mode")
-        val legacyCarrierMode = obj.optString("tunnel_mux_mode")
-        val legacyCarrierUdpMode = obj.optString("tunnel_mux_udp_mode")
-        val migrated = migratedCarrierFields(
-            tunnelSecurity = normalizedSecurity,
-            protocol = protocol,
-            mux = mux,
-            carrierMode = currentCarrierMode.ifBlank { legacyCarrierMode },
-            carrierUdpMode = currentCarrierUdpMode.ifBlank { legacyCarrierUdpMode },
-            legacyMuxSchema =
-                currentCarrierMode.isBlank() &&
-                    currentCarrierUdpMode.isBlank() &&
-                    (legacyCarrierMode.isNotBlank() || legacyCarrierUdpMode.isNotBlank()),
-        )
-        val sni = obj.optString("tunnel_tls_server_name").ifBlank {
-            obj.optString("reality_server_name")
-        }
-        return AppConfig(
-            id = UUID.randomUUID().toString(),
-            name = obj.optString("name").ifBlank { host },
-            serverHost = host,
-            serverPort = port,
-            protocol = protocol,
-            transport = transportFromType(obj.optString("tunnel_transport", "raw")),
-            token = obj.optString("token"),
-            sni = sni,
-            path = obj.optString("tunnel_path", "/proxy").ifBlank { "/proxy" },
-            tls = obj.optBoolean("tunnel_tls", false) || tunnelSecurity == "tls",
-            tlsInsecure = obj.optBoolean("tunnel_tls_insecure", false),
-            tunnelSecurity = migrated.tunnelSecurity,
-            flow = obj.optString("tunnel_flow"),
-            realityPublicKey = obj.optString("reality_public_key"),
-            realityShortId = obj.optString("reality_short_id").ifBlank {
-                obj.optFirstString("reality_short_ids")
-            },
-            realitySpiderX = obj.optString("reality_spider_x"),
-            mux = mux,
-            carrierMode = migrated.carrierMode,
-            carrierPrefer = currentCarrierPrefer.trim().lowercase(),
-            carrierUdpMode = migrated.carrierUdpMode,
-            muxResume = obj.optBoolean("tunnel_mux_resume", false),
-            muxResumeTimeoutMillis = obj.optDurationMillis("tunnel_mux_resume_timeout"),
-            muxResumeBufferSize = obj.optInt("tunnel_mux_resume_buffer_size", 0),
-            muxMaxSessions = obj.optInt("tunnel_mux_max_sessions", 0),
-            muxMaxStreamsPerSession = obj.optInt("tunnel_mux_max_streams_per_session", 0),
-            muxWarmSpare = obj.optInt("tunnel_mux_warm_spares", 0),
-            upstreamProtocol = obj.optString("upstream_protocol", "socks5").ifBlank { "socks5" },
-        )
-    }
-
     private fun commonParams(config: AppConfig): LinkedHashMap<String, String> {
         val params = linkedMapOf<String, String>()
         params["v"] = TcptunUriVersion
@@ -322,7 +212,7 @@ object ProfileUriCodec {
         val security = when {
             tunnelSecurity in AppConfig.RealitySecurityTypes -> tunnelSecurity
             config.tls -> "tls"
-            else -> "none"
+            else -> error(VpnTunnelConfidentialityError)
         }
         params["security"] = security
         if (security in AppConfig.RealitySecurityTypes) {
@@ -353,38 +243,6 @@ object ProfileUriCodec {
         }
         if (config.muxWarmSpare > 0) params["mux_warm_spares"] = config.muxWarmSpare.toString()
         return params
-    }
-
-    private fun extractJsonObject(raw: String): String {
-        val start = raw.indexOf('{')
-        val end = raw.lastIndexOf('}')
-        if (start < 0 || end <= start) error("unsupported profile JSON")
-        return raw.substring(start, end + 1)
-    }
-
-    private fun splitHostPort(value: String): Pair<String, String> {
-        val trimmed = value.trim()
-        if (trimmed.startsWith("[")) {
-            val hostEnd = trimmed.indexOf(']')
-            if (hostEnd <= 1 || hostEnd + 1 >= trimmed.length || trimmed[hostEnd + 1] != ':') {
-                error("server_addr must be host:port")
-            }
-            val host = trimmed.substring(1, hostEnd)
-            val port = trimmed.substring(hostEnd + 2)
-            validatePort(port)
-            return host to port
-        }
-        val portStart = trimmed.lastIndexOf(':')
-        if (portStart <= 0 || portStart == trimmed.lastIndex) error("server_addr must be host:port")
-        val host = trimmed.substring(0, portStart)
-        val port = trimmed.substring(portStart + 1)
-        validatePort(port)
-        return host to port
-    }
-
-    private fun validatePort(port: String) {
-        val portNumber = port.toIntOrNull()
-        if (portNumber == null || portNumber !in 1..65535) error("missing or invalid server_addr port")
     }
 
     private fun transportFromType(type: String): String {
@@ -445,13 +303,6 @@ object ProfileUriCodec {
         return if (value.isBlank()) 0 else parseGoDurationMillis(value, name)
     }
 
-    private fun JSONObject.optDurationMillis(primaryName: String, fallbackName: String = ""): Int {
-        val value = optString(primaryName).ifBlank {
-            fallbackName.takeIf(String::isNotBlank)?.let(::optString).orEmpty()
-        }
-        return if (value.isBlank()) 0 else parseGoDurationMillis(value, primaryName)
-    }
-
     private fun parseGoDurationMillis(value: String, fieldName: String): Int {
         val text = value.trim()
         if (text == "0" || text == "+0" || text == "-0") return 0
@@ -495,11 +346,6 @@ object ProfileUriCodec {
 
     private fun putIfNotBlank(params: MutableMap<String, String>, key: String, value: String) {
         if (value.isNotBlank()) params[key] = value
-    }
-
-    private fun JSONObject.optFirstString(name: String): String {
-        val arr = optJSONArray(name) ?: return ""
-        return if (arr.length() > 0) arr.optString(0) else ""
     }
 
     private const val TcptunUriVersion = "1"

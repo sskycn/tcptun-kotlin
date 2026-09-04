@@ -13,17 +13,14 @@ Local clients -> SOCKS5/mixed listener ------------------------> selected outbou
 ## Features
 
 - Foreground `VpnService` with IPv4/IPv6 Full Tunnel routes and event-driven recovery.
-- One Android platform route mode: dual-stack Full Tunnel; Core/Edge routing selects Internet, direct, and Reverse Subnet outbounds per flow.
-- Reverse Subnet Remote support through encrypted Full JSON, including Core-owned relay and optional P2P direct QUIC.
+- One Android platform route mode: dual-stack Full Tunnel; structured rules select encrypted Native or Direct outbounds per flow.
 - Multiple structured profiles in one dynamic, session-affine outbound pool.
-- Complete strict tcptun-go JSON profiles without changing their schema.
-- Native URI import/export and compact `T2:`/`T3:` profile QR support.
+- Native TLS/REALITY URI import/export and compact `T2:`/`T3:` profile QR support.
 - Per-account `A1:` QR, copy, share, preview, and conflict-safe import for local proxy credentials.
 - Versioned HTTPS App Links at `https://x.tcptun.com/v1#p=...`.
 - Optional Android 10+ App routing and single-app traffic analysis.
 - Up to 256 accounts on one authenticated local SOCKS5 or mixed SOCKS5/HTTP/HTTPS CONNECT/UDP listener.
-- Latest tcptun-go SOCKS5 secure authentication v2, with HKDF-derived proofs and explicit
-  `secure`, `standard`, or `auto` outbound authentication policies in full JSON profiles.
+- Latest tcptun-go SOCKS5 secure authentication v2, with HKDF-derived proofs in the Go core.
 - Material 3 UI, runtime diagnostics, redacted in-app logs, and TCPing tools.
 
 ## Build
@@ -54,8 +51,6 @@ See [docs/device-testing.md](docs/device-testing.md) for repeatable device valid
 - [VPN lifecycle and ownership](docs/vpn-lifecycle.md)
 - [Bridge/AAR integration](docs/bridge-integration.md)
 - [Profiles and persistence](docs/profiles.md)
-- [Reverse Subnet on Android](docs/reverse-subnet-android.md)
-- [Reverse Subnet device lab](docs/reverse-subnet-lab.md)
 - [URI and QR import](docs/uri-qr-import.md)
 - [App routing](docs/app-routing.md)
 - [Traffic analysis](docs/traffic-analysis.md)
@@ -73,7 +68,7 @@ See [docs/device-testing.md](docs/device-testing.md) for repeatable device valid
 ## tcptun-go authentication
 
 The Android bridge is generated from tcptun-go v0.5.0 commit
-`c4959ca9edf4ecfcdd6370eb058615c8ad7c7ab6` (Bridge API 3). Secure authentication uses the
+`b454f9892a0d978c6ed5d2f6e05ab5989e995c26` (Bridge API 3). Secure authentication uses the
 tcptun-go v2 protocol: HKDF-SHA256 derives the authentication key and the Go core performs all
 challenge/response processing. It is intended for high-entropy shared secrets and is not
 transport encryption.
@@ -81,21 +76,23 @@ transport encryption.
 Credentialed `socks5` and `mixed` outbounds default to `auth_mode: "secure"`, which offers only
 private method `0x80` and prevents downgrade to RFC1929. `standard` explicitly selects RFC1929;
 `auto` offers secure auth and RFC1929 for compatibility and is intentionally downgradeable.
-Android preserves these fields in full JSON profiles; it does not implement the authentication
-protocol itself.
+Android does not implement the authentication protocol itself.
 
 Android-created local proxy inbounds use `users[]`; all configured accounts protect the same
 listener and mixed-protocol surfaces. Existing encrypted single-account settings migrate
-automatically. Full JSON profiles preserve multi-user `mixed`, `socks5`, and `native` inbounds,
-including per-user Native flow. Outbounds remain one client identity. Passwords remain in
-encrypted secret storage and listen-all cannot run without an account.
+automatically. Passwords remain in encrypted secret storage and listen-all cannot run without an
+account.
 
 tcptun-go v0.4.0 is Native-only for tunnel endpoints. Stored VLESS, VMess, and Trojan structured
 profiles remain readable but are marked unsupported and cannot start or export; they are never
 silently converted to Native. Legacy REALITY fingerprint values are ignored on read and are not
-written to storage, profile payloads, or runtime JSON. Incompatible full JSON remains fail-closed.
+written to storage, profile payloads, or runtime JSON. Arbitrary JSON profile import is rejected.
 
-Native `raw` profiles with mux enabled can use `carrier.mode=auto` with either TLS or REALITY.
+Android profiles are structured and Native-only. Every remote `VpnService` tunnel must use TLS or
+REALITY; `security=none`, Android ECH profiles, and legacy full Core JSON profiles are rejected or
+removed during migration. This Android policy does not change tcptun-go's CLI/server capabilities.
+
+Structured Native profiles with mux enabled can use `carrier.mode=auto` with either TLS or REALITY.
 The Core maintains TCP and QUIC carriers and owns health/load selection, fallback, backoff, QUIC
 DATAGRAM requirements, and path probes. Structured outbound profiles expose
 `carrier.prefer=adaptive|quic|tcp`: adaptive is the dynamic policy, while QUIC/TCP preferences

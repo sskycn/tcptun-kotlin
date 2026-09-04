@@ -1,84 +1,56 @@
 # Profiles and persistence
 
-Profiles are saved locally through the existing `ProfileStore`. Structured profiles are
-editable Android models; complete strict tcptun-go JSON profiles are preserved as raw JSON.
-The app validates both the Android model and a non-listening core runtime construction before
-persisting an imported profile.
+Android stores and runs structured Native profiles only. A profile describes one controlled
+remote endpoint (server, port, transport, token, TLS or REALITY, Mux/carrier options) and cannot
+contain an arbitrary tcptun-go FileConfig.
 
 ## Running profiles
 
-Active structured profiles become tagged native outbounds in one runtime plan. The plan also
-contains a dynamic balance pool and a direct outbound. Row actions hot-start or hot-stop one
-outbound without rebuilding the Android VPN interface.
+Configured profiles become tagged Native outbounds in one runtime plan. The plan also contains a
+dynamic balance pool and a direct outbound. Active membership can change without rebuilding the
+Android VPN interface. Managed route rules retain stable profile references.
 
-Managed route rules retain their stable profile references. A stopped profile remains a valid
-rule target and becomes usable again when that profile is started.
+Every configured remote outbound must prove tunnel confidentiality. TLS and REALITY are accepted;
+missing security, explicit/effective `none`, and Android ECH profiles are invalid. The run-plan
+validator, `VpnService` preflight, and Go Android TUN boundary independently enforce this rule.
+Direct is local routing behavior and is not required to have tunnel security.
 
-## Persistence rules
+## Persistence and migration
 
-- Profile IDs and active IDs are persisted by the existing store.
-- Storage version 3 keeps public profile JSON separate from encrypted secret payloads. Tokens,
-  raw core JSON, and Reality/ECH secret-like values never appear in public preferences.
-- Legacy plaintext is replaced only after the new AES-GCM payload is written and read back.
-  A failed migration leaves the old authoritative data intact for retry.
-- Mutation revisions protect concurrent UI/service updates.
-- Import and delete operations are bounded and recoverable.
-- Credentials are not included in diagnostics or ordinary logs.
-- Existing supported migrations remain unchanged. Removed v0.4.0 fields are handled explicitly.
-- Android VPN route mode/CIDRs/DNS are non-secret runtime metadata, separate from FileConfig and
-  T2/T3/A1. Missing metadata always migrates to Full Tunnel.
+- Storage version 3 separates public profile fields from AES-GCM encrypted tokens and REALITY
+  key material.
+- Profile IDs and active IDs are preserved for supported structured profiles.
+- Historical arbitrary Core JSON, ECH, and unencrypted structured profiles are removed during
+  migration. They are never executed and are never guessed or silently converted to TLS.
+- Supported legacy TLS and REALITY profiles keep their original semantics.
+- Mutation revisions protect concurrent UI/service updates; malformed storage fails closed.
+- Credentials are excluded from diagnostics, ordinary logs, SavedState, and public preferences.
+
+## Import and sharing
+
+The app accepts Native URI, versioned App Link, and T2/T3 QR/profile payloads that decode to
+structured fields. JSON clipboard/file import and Full Config editing/export do not exist.
+Encoders emit only TLS or REALITY, and decoders reject missing or `none` security before saving.
 
 ## Local proxy accounts
 
-Runtime settings keep one canonical list of local proxy accounts, limited to 256 entries. The
-encrypted schema stores the complete list; the previous encrypted `{username,password}` payload
-and older preference fields are read as zero or one account and upgraded only after a verified
-encrypted write. Passwords are excluded from ordinary preferences and saved UI state.
+Runtime settings keep one canonical local SOCKS5/mixed account list, limited to 256 entries and
+stored in encrypted settings. Android-created inbounds emit `users[]`; an empty list preserves
+loopback no-auth behavior, while listen-all requires an account.
 
-Android-created `socks5` and `mixed` inbounds emit `users[]`, never legacy top-level credentials.
-An empty list omits `users` and preserves loopback no-auth behavior. Listen-all still requires an
-account and generates a 192-bit password when enabled from an empty list. Duplicate usernames and
-the Go 255-byte SOCKS credential limit are checked before save; tcptun-go remains authoritative.
-
-Full JSON preserves `users[]` for mixed, socks5, and native inbounds unless the inbound is the
-reserved Android listener being replaced. Tunnel users are never imported into local settings,
-and outbounds remain a single client identity.
-
-Structured storage intentionally keeps a removed protocol string so an existing VLESS, VMess, or
-Trojan profile can be displayed, edited, or deleted without changing the credential's meaning.
-Validation marks it unsupported and excludes it from runtime and sharing. Choosing “Reconfigure
-as Native” is explicit and clears the old credential. A legacy `realityFingerprint` property is
-accepted by the reader and discarded; all new storage omits it. Full JSON using removed endpoint
-types, outbound `uuid`, or `security.fingerprint` is rejected rather than rewritten.
-
-Structured Native profiles persist `carrierPrefer` exactly as `adaptive`, `quic`, or `tcp`.
-Missing values remain empty and mean the Core adaptive policy, so upgrading does not change an
-existing auto profile's network behavior. A preference requires mux plus `carrierMode=auto`; TLS
-and REALITY are both supported. Switching to the TCP or QUIC single-carrier mode clears the
-preference, and disabling mux clears all dependent carrier settings. Raw JSON preserves
-`carrier.prefer` without maintaining a second Kotlin schema; tcptun-go `ValidateConfig` is
-authoritative for placement, mode dependencies, and current/future values.
-
-Full JSON is the advanced topology boundary for Reverse Subnet, principal rules, subnet and
-port policy, resource budgets, and P2P. It remains encrypted as one secret document. Android
-preparation injects the platform listener/TUN boundary and managed rules but preserves supported
-`route_mode`, `principals`, `subnets`, `export_subnets`, `reverse_subnet`, `p2p`, rendezvous,
-STUN, host-candidate, IPv6, DNS, and resource fields. Endpoint `network` capability is never
-widened by Kotlin.
-
-Each local proxy account has independent A1 QR/copy/share actions. One `A1:` payload contains one
-username/password pair only; there is no multi-account bundle. Scanning A1 opens a password-masked
-preview. A new username is appended, an identical account is reused, and a conflicting username
-requires explicit confirmation before its password is updated. Import reuses the same encrypted
-runtime-settings CAS write and apply path; A1 text, QR bytes, and credentials are not placed in
-SavedState, navigation arguments, logs, or diagnostics. A1 is Base45-encoded, not encrypted.
+Each account has independent A1 QR/copy/share actions. A1 carries one username/password pair and
+is separate from tunnel profiles. It is a bearer secret: the UI masks it, marks clipboard content
+sensitive where supported, warns before sharing, and never places it in logs or navigation state.
 
 ## Validation
 
-Use the existing validators before save:
-
 ```text
-Android profile validation -> bridge JSON construction -> tcptun-go validation
+structured decode/editor validation
+  -> run-plan confidentiality validation
+  -> VpnService preflight
+  -> generated internal Core JSON
+  -> androidbridge Android-TUN confidentiality validation
 ```
 
-Profile persistence coverage lives in JVM store/codec tests and Android contract/UI tests.
+Coverage lives in JVM validators plus Android bridge, migration, URI/deep-link, QR, storage, and
+lifecycle contract tests.

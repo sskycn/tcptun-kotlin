@@ -13,15 +13,7 @@ data class ProfilesState(
     val activeProfiles: List<AppConfig>
         get() = profiles.filter { it.id in activeIds }
 
-    fun runPlan(): ProfileRunPlan {
-        val activeRawProfile = activeProfiles.firstOrNull { it.rawConfigJson.isNotBlank() }
-        val configuredProfiles = if (activeRawProfile != null) {
-            listOf(activeRawProfile)
-        } else {
-            profiles.filter { it.rawConfigJson.isBlank() }
-        }
-        return ProfileRunPlan(configuredProfiles, activeIds).normalized()
-    }
+    fun runPlan(): ProfileRunPlan = ProfileRunPlan(profiles, activeIds).normalized()
 }
 
 internal data class ProfileStoreSnapshot(
@@ -179,12 +171,14 @@ object ProfileStore {
                     } else {
                         null
                     }
+                    if (isUnsupportedLegacyAndroidProfile(json, secrets)) {
+                        repaired = true
+                        continue
+                    }
                     val decoded = runRecoverableCatching {
                         AppConfig.fromJson(json).withStorageSecrets(secrets)
                     }.getOrNull()
-                    if (decoded == null || !decoded.hasSafeStorageSize() ||
-                        (decoded.serverHost.isBlank() && decoded.rawConfigJson.isBlank())
-                    ) {
+                    if (decoded == null || !decoded.hasSafeStorageSize() || decoded.serverHost.isBlank()) {
                         repaired = true
                         continue
                     }
@@ -306,6 +300,11 @@ object ProfileStore {
                     .remove("path")
                     .remove("tls")
                     .remove("mux")
+                    .remove("rawConfig" + "Json")
+                    .remove("echEnabled")
+                    .remove("echPublicName")
+                    .remove("echPublicKey")
+                    .remove("echPorts")
                     .commit()
             },
         )
@@ -458,6 +457,11 @@ object ProfileStore {
         if (oldHost.isBlank()) {
             return ProfilesState(emptyList())
         }
+        val legacyEch = prefs.getBoolean("echEnabled", false) ||
+            listOf("echPublicName", "echPublicKey", "echPorts").any { key ->
+                prefs.getString(key, "").orEmpty().isNotBlank()
+            }
+        if (legacyEch) return ProfilesState(emptyList())
         val profile = AppConfig(
             name = if (oldHost.isBlank()) "proxy" else "proxy",
             serverHost = oldHost,
@@ -470,7 +474,11 @@ object ProfileStore {
             tls = prefs.getBoolean("tls", false),
             mux = prefs.getBoolean("mux", true),
         )
-        return ProfilesState(listOf(profile))
+        return if (profile.providesVpnTunnelConfidentiality()) {
+            ProfilesState(listOf(profile))
+        } else {
+            ProfilesState(emptyList())
+        }
     }
 
     private fun generateUniqueProfileId(seenIds: MutableSet<String>): String {
@@ -479,5 +487,19 @@ object ProfileStore {
             id = UUID.randomUUID().toString()
         } while (!seenIds.add(id))
         return id
+    }
+
+    private fun isUnsupportedLegacyAndroidProfile(public: JSONObject, secrets: JSONObject?): Boolean {
+        val legacyRawField = "rawConfig" + "Json"
+        if (public.optString(legacyRawField).isNotBlank() || secrets?.optString(legacyRawField).orEmpty().isNotBlank()) {
+            return true
+        }
+        val legacySecurity = public.optString("tunnelSecurity").trim().lowercase()
+        val lacksConfidentiality = !public.optBoolean("tls", false) &&
+            legacySecurity !in setOf("reality", "reality-tcp", "reality-quic")
+        return lacksConfidentiality || public.optBoolean("echEnabled", false) ||
+            listOf("echPublicName", "echPublicKey", "echPorts").any { key ->
+                public.optString(key).isNotBlank() || secrets?.optString(key).orEmpty().isNotBlank()
+            }
     }
 }

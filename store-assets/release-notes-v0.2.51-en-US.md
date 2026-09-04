@@ -1,7 +1,7 @@
 # TcpTun v0.2.51 Initial release
 
 - Profile management with manual editing, clipboard/QR/system-link import, and profile QR generation and sharing.
-- Support for native tcptun-go, VLESS, VMess, and Trojan profiles, including TLS, REALITY, ECH, and Mux options.
+- Support for structured native tcptun-go profiles with TLS or REALITY encryption and Mux options.
 - Android VpnService-based TCP/UDP transparent proxy with IPv4/IPv6, DNS interception, and fake-IP support.
 - Local SOCKS5/mixed proxy with optional access for the device, LAN, or hotspot clients.
 - Routing by domain, IP/CIDR, IP range, and Android app, with default outbound, dynamic connection pool, runtime outbound switching, and rule merging.

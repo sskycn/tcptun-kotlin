@@ -64,7 +64,7 @@ class ProxyAccountA1BridgeTest {
         assertTrue(t3.startsWith("T3:"))
         assertTrue(decodeScannedPayload(t3) is ScannedPayload.Profile)
 
-        val t2 = "T2:+1REESK007MO4UU1V2TDWL%53+UKDNS6ONP18VCRZCB\$CBECP9EXYC/:52%E1/DXTDJPC -DB\$CBECP9ERZCUPCAZDA8GLB0  C93D:"
+        val t2 = "T2:*FMG:K-50KFEOEDQX5%3E1\$CTB0  C93D.%5\$9FQ\$DTVD\$J1\$9FQ\$DTVD+%5+3E400I1LN*4*M93RR\$ZJE627A9UBW7DH2K4-GGTLEFQLFM604JG 4L1LPUIBZRH/QZM0OK2IEC/EDDZCZKEAEC-ED3EFKFEOED:"
         assertTrue(decodeScannedPayload(t2) is ScannedPayload.Profile)
     }
 

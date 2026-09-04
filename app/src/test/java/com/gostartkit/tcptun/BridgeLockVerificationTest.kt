@@ -21,7 +21,7 @@ class BridgeLockVerificationTest {
         val lock = loadLock(root)
         val sha = requireNotNull(lock.getProperty("coreCommit"))
         val api = requireNotNull(lock.getProperty("bridgeApiVersion"))
-        assertEquals("c4959ca9edf4ecfcdd6370eb058615c8ad7c7ab6", sha)
+        assertEquals("b454f9892a0d978c6ed5d2f6e05ab5989e995c26", sha)
         assertEquals("3", api)
         assertTrue(sha.matches(Regex("[0-9a-f]{40}")))
         assertTrue(api.matches(Regex("[1-9][0-9]*")))

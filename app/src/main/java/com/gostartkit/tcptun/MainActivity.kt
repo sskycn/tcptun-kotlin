@@ -199,7 +199,6 @@ internal const val MaxProfileNameInputLength = 512
 internal const val MaxProfileHostInputLength = 2_048
 internal const val MaxProfileChoiceInputLength = 256
 internal const val MaxRealityKeyInputLength = 4_096
-internal const val MaxEchKeyInputLength = 4_096
 
 internal val PendingRunPlanSaver = Saver<ProfileRunPlan?, String>(
     save = { plan -> encodePendingRunPlan(plan) },
@@ -315,27 +314,16 @@ internal fun AppConfig.boundedForEditor(): AppConfig = copy(
     realityPublicKey = realityPublicKey.take(MaxRealityKeyInputLength),
     realityShortId = realityShortId.take(MaxProfileChoiceInputLength),
     realitySpiderX = realitySpiderX.take(MaxProfileUriLength),
-    echPublicName = echPublicName.take(MaxProfileHostInputLength),
-    echPublicKey = echPublicKey.take(MaxEchKeyInputLength),
-    echPorts = echPorts.take(MaxProfileChoiceInputLength),
     carrierMode = carrierMode.take(MaxProfileChoiceInputLength),
     carrierPrefer = carrierPrefer.take(MaxProfileChoiceInputLength),
     carrierUdpMode = carrierUdpMode.take(MaxProfileChoiceInputLength),
     upstreamProtocol = upstreamProtocol.take(MaxProfileChoiceInputLength),
-    rawConfigJson = rawConfigJson.take(MaxProfileImportLength),
 )
 
 internal fun AppConfig.withoutResumableMux(): AppConfig = copy(
     muxResume = false,
     muxResumeTimeoutMillis = 0,
     muxResumeBufferSize = 0,
-)
-
-internal fun AppConfig.withoutEch(): AppConfig = copy(
-    echEnabled = false,
-    echPublicName = "",
-    echPublicKey = "",
-    echPorts = "",
 )
 
 internal fun reportUiError(message: String) {

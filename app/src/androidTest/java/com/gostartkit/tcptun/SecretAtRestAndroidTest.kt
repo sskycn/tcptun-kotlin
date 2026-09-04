@@ -16,9 +16,7 @@ class SecretAtRestAndroidTest {
         val originalDesired = DesiredRunningPlanStore.read(context)
         val markers = listOf(
             "GLOBAL_TOKEN_3a30c1",
-            "GLOBAL_RAW_CONFIG_98ebd2",
             "GLOBAL_REALITY_4dd810",
-            "GLOBAL_ECH_a1418f",
             "GLOBAL_SOCKS_USER_25cf74",
             "GLOBAL_SOCKS_PASSWORD_c0b4ee",
         )
@@ -26,14 +24,10 @@ class SecretAtRestAndroidTest {
             id = "global-secret-at-rest-test",
             serverHost = "global-secret-test.example.com",
             token = markers[0],
-            rawConfigJson = "{\"credential\":\"${markers[1]}\"}",
-            realityPublicKey = markers[2],
-            echPublicKey = markers[3],
+            realityPublicKey = markers[1],
         )
         val runningProfile = profile.copy(
-            rawConfigJson = "",
             realityPublicKey = "",
-            echPublicKey = "",
         )
         val plan = ProfileRunPlan(listOf(runningProfile), setOf(runningProfile.id)).normalized()
 
@@ -43,7 +37,7 @@ class SecretAtRestAndroidTest {
                 context,
                 originalRuntime.copy(
                     socksListenAll = false,
-                    localProxyUsers = listOf(LocalProxyUser(markers[4], markers[5])),
+                    localProxyUsers = listOf(LocalProxyUser(markers[2], markers[3])),
                 ),
             )
             DesiredRunningPlanStore.publish(context, DesiredRunningPlanStore.encode(plan))

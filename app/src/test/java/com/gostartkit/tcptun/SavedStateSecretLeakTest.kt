@@ -14,15 +14,14 @@ class SavedStateSecretLeakTest {
             serverPort = "443",
             protocol = "native",
             token = "saved-state-token",
-            rawConfigJson = "{\"password\":\"saved-state-raw-password\"}",
         )
-        val planProfile = profile.copy(rawConfigJson = "")
+        val planProfile = profile
         val plan = ProfileRunPlan(listOf(planProfile), setOf(planProfile.id))
 
         val profileState = requireNotNull(encodePendingProfile(profile))
         val planState = requireNotNull(encodePendingRunPlan(plan))
 
-        listOf(profile.token, profile.serverHost, profile.rawConfigJson, "password").forEach { marker ->
+        listOf(profile.token, profile.serverHost).forEach { marker ->
             assertFalse(profileState.contains(marker))
         }
         listOf(planProfile.token, planProfile.serverHost).forEach { marker ->

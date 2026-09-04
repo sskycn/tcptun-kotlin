@@ -1,7 +1,7 @@
 # TcpTun v0.2.51 首次发布
 
 - 多配置管理：支持手动编辑、剪切板/二维码/系统链接导入，以及配置二维码生成与分享。
-- 支持 native tcptun-go、VLESS、VMess 和 Trojan 配置，并提供 TLS、REALITY、ECH、Mux 等参数。
+- 支持使用 TLS 或 REALITY 加密的结构化 native tcptun-go 配置及 Mux 参数。
 - 基于 Android VPNService 的 TCP/UDP 透明代理，支持 IPv4/IPv6、DNS 接管和 fake-IP。
 - 提供 SOCKS5/mixed 本地代理，可按需开放给本机、局域网或热点客户端。
 - 提供域名、IP/CIDR、IP 范围和 Android 应用分流，支持默认出口、动态连接池、运行时出口切换和智能合并规则。

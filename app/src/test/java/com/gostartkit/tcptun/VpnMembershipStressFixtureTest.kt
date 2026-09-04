@@ -2,7 +2,6 @@ package com.tcptun.client
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VpnMembershipStressFixtureTest {
@@ -21,19 +20,6 @@ class VpnMembershipStressFixtureTest {
         assertEquals(setOf(profileB.id), fixture.planB.activeIds)
         assertEquals(setOf(profileA.id, profileB.id), fixture.planAB.activeIds)
         assertNotEquals(fixture.planA.activeIds, fixture.planB.activeIds)
-        assertTrue(fixture.configuredProfiles.all { it.rawConfigJson.isBlank() })
-    }
-
-    @Test(expected = IllegalArgumentException::class)
-    fun fixtureRejectsRawProfilesBeforeBuildingMultiProfilePlan() {
-        validatedMembershipStressFixture(
-            profileA = AppConfig(
-                id = "raw-a",
-                name = "raw A",
-                rawConfigJson = """{"outbounds":[{"tag":"direct","type":"direct"}]}""",
-            ),
-            profileB = structuredProfile("membership-b", 29443),
-        )
     }
 
     private fun structuredProfile(id: String, port: Int) = AppConfig(

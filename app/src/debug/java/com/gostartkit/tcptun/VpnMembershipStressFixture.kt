@@ -12,9 +12,6 @@ internal fun validatedMembershipStressFixture(
     profileA: AppConfig,
     profileB: AppConfig,
 ): VpnMembershipStressFixture {
-    require(profileA.rawConfigJson.isBlank() && profileB.rawConfigJson.isBlank()) {
-        "membership stress requires structured profiles"
-    }
     require(profileA.id != profileB.id) { "membership stress profile IDs must be distinct" }
 
     val configuredProfiles = listOf(profileA, profileB)

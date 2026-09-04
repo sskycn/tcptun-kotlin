@@ -55,28 +55,26 @@ fake native artifact. Bridge and managed-device CI build the real AAR in a separ
 
 - Do not modify the tcptun-go ABI from this Android project.
 - Keep `bridge.lock` pinned to tcptun-go v0.5.0 commit
-  `c4959ca9edf4ecfcdd6370eb058615c8ad7c7ab6`. This includes bounded P2P traversal
+  `b454f9892a0d978c6ed5d2f6e05ab5989e995c26`. This includes Android TUN confidentiality checks,
+  bounded P2P traversal
   retry/prediction, background readiness, aggregate safe diagnostics, and the
   `balanced|aggressive` strategy field. The exported gomobile contract is unchanged
   and remains Bridge API 3.
 - Pass local `socks5`/`mixed` accounts as `users[]` (maximum 256); omit the field for no-auth.
-  Preserve legacy top-level credentials only when they already belong to a non-reserved raw
-  inbound. The public mobile Bridge API includes the A1 account codec and is version 3.
-- Preserve `auth_mode` on raw JSON `socks5`/`mixed` outbounds. Go defaults credentialed outbounds
-  to `secure`; explicit `standard` and `auto` policies remain Go-owned and are not reimplemented
-  in Kotlin.
+  The public mobile Bridge API includes the A1 account codec and is version 3.
 - Keep Android's health-probe `Socks5Client` as an RFC 1928/1929 client. Private method `0x80`,
   HKDF/HMAC negotiation, HTTP 407/Basic handling, and header stripping remain Go-owned.
-- Do not change profile JSON fields or T2/T3/A1 URI/QR formats here. Kotlin must not implement
-  A1 binary or Base45 encoding.
+- The JSON passed to `Engine.Configure` is an internal App-to-Core representation generated only
+  from structured profiles. It is not a user-importable Full Config surface.
+- T2/T3 profile encoders and decoders accept only TLS or REALITY. Kotlin must not implement A1
+  binary or Base45 encoding.
 - Keep callback proxies strongly reachable until native cleanup completes.
 - Keep reflection error messages actionable: missing AAR, missing Engine method, and
   validation failure are distinct user-visible failure classes.
-- Preserve every supported authenticated inbound `users[]` record in full JSON, including
-  per-user Native flow. Never add `users` to an outbound or implement credential matching/crypto
-  in Kotlin.
 - Structured profile DTOs and runtime JSON are Native-only. Do not emit outbound `uuid`, map a
   removed protocol credential to `token`, or emit REALITY `fingerprint`.
+- `ValidateConfig` and the final attached-TUN start boundary reject every Native outbound whose
+  security is not TLS or REALITY. Direct outbounds remain valid.
 - The profile DTO fields `carrierMode`, `carrierPrefer`, and `carrierUdpMode` map to outbound
   `carrier.mode`, `carrier.prefer`, and `carrier.udp_mode`. Preference is outbound-only and valid
   only with `carrier.mode=auto`; Kotlin configures it but never implements carrier selection.

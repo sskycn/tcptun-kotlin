@@ -36,7 +36,7 @@ class AndroidBridgeContractTest {
     @Test
     fun currentBridgeReportsVersionedCoreIdentity() {
         assertEquals("v0.5.0", Androidbridge.coreVersion())
-        assertEquals("c4959ca9edf4", Androidbridge.coreBuildID())
+        assertEquals("b454f9892a0d", Androidbridge.coreBuildID())
     }
 
     @Test
@@ -176,24 +176,6 @@ class AndroidBridgeContractTest {
     }
 
     @Test
-    fun rawProfilesRejectRemovedTunnelProtocolsAndRealityFingerprint() {
-        RemovedTunnelProtocols.forEach { protocol ->
-            val profile = AppConfig(
-                name = "legacy $protocol",
-                rawConfigJson = """{"outbounds":[{"tag":"proxy","type":"$protocol"}]}""",
-            )
-            assertTrue(profile.validate().orEmpty().contains("no longer supports $protocol"))
-            assertTrue(runCatching { profile.toBridgeJson("127.0.0.1:1080") }.isFailure)
-        }
-        val fingerprint = AppConfig(
-            name = "legacy fingerprint",
-            rawConfigJson = """{"outbounds":[{"tag":"proxy","type":"native","token":"secret","security":{"fingerprint":"chrome"}}]}""",
-        )
-        assertTrue(fingerprint.validate().orEmpty().contains("security.fingerprint was removed"))
-        assertTrue(runCatching { fingerprint.toBridgeJson("127.0.0.1:1080") }.isFailure)
-    }
-
-    @Test
     fun structuredResumableProfileRoundTripsAndValidatesInCurrentBridge() {
         val profile = AppConfig(
             name = "resumable",
@@ -203,6 +185,7 @@ class AndroidBridgeContractTest {
             transport = "raw",
             token = "secret",
             sni = "example.com",
+            tls = false,
             tunnelSecurity = "reality",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
             realityShortId = "a65f93c1",
@@ -256,226 +239,6 @@ class AndroidBridgeContractTest {
         assertEquals("auto", decoded.carrierMode)
         assertEquals("tcp", decoded.carrierPrefer)
         assertEquals("auto", decoded.carrierUdpMode)
-    }
-
-    @Test
-    fun rawJsonPreservesValidOutboundPreferenceAndRejectsInvalidPlacement() {
-        val valid = AppConfig(
-            name = "raw auto",
-            rawConfigJson = """{
-                "inbounds":[],
-                "outbounds":[{
-                    "tag":"proxy","type":"native","address":["edge.example.com:443"],
-                    "token":"secret","network":["tcp","udp"],"transport":{"type":"raw"},
-                    "security":{"type":"tls","server_name":"edge.example.com"},
-                    "carrier":{"mode":"auto","prefer":"quic"},"mux":{"enabled":true}
-                }],
-                "route":{"default_outbound":"proxy","rules":[]}
-            }""".trimIndent(),
-        )
-        val prepared = JSONObject(valid.toBridgeJson("127.0.0.1:1080"))
-        val carrier = prepared.getJSONArray("outbounds").getJSONObject(0).getJSONObject("carrier")
-        assertEquals("auto", carrier.getString("mode"))
-        assertEquals("quic", carrier.getString("prefer"))
-        Androidbridge.validateConfig(prepared.toString())
-
-        val inboundPreference = valid.copy(
-            rawConfigJson = """{
-                "inbounds":[{"tag":"server","type":"native","carrier":{"mode":"auto","prefer":"tcp"}}],
-                "outbounds":[{"tag":"direct","type":"direct"}],
-                "route":{"default_outbound":"direct"}
-            }""".trimIndent(),
-        )
-        assertNull(inboundPreference.validate())
-        assertTrue(
-            runCatching {
-                Androidbridge.validateConfig(inboundPreference.toBridgeJson("127.0.0.1:1081"))
-            }.isFailure,
-        )
-
-        val singleCarrierPreference = valid.copy(
-            rawConfigJson = valid.rawConfigJson.replace(
-                "\"mode\":\"auto\",\"prefer\":\"quic\"",
-                "\"mode\":\"tcp\",\"prefer\":\"tcp\"",
-            ),
-        )
-        assertNull(singleCarrierPreference.validate())
-        assertTrue(
-            runCatching {
-                Androidbridge.validateConfig(singleCarrierPreference.toBridgeJson("127.0.0.1:1082"))
-            }.isFailure,
-        )
-
-        val unknownPreference = valid.copy(
-            rawConfigJson = valid.rawConfigJson.replace("\"prefer\":\"quic\"", "\"prefer\":\"fastest\""),
-        )
-        assertNull(unknownPreference.validate())
-        assertTrue(
-            runCatching {
-                Androidbridge.validateConfig(unknownPreference.toBridgeJson("127.0.0.1:1083"))
-            }.isFailure,
-        )
-    }
-
-    @Test
-    fun currentBridgeAcceptsReverseSubnetPrincipalAndDualStackConfig() {
-        val raw = """
-            {
-              "inbounds": [{
-                "tag": "remote-access", "type": "native", "address": ["127.0.0.1:19444"],
-                "users": [{"principal": "alice", "id": "REMOTE_TOKEN"}],
-                "transport": {"type": "raw"}, "mux": {"enabled": true}, "route_mode": "rules",
-                "subnets": [{"name": "home", "principals": ["alice"],
-                  "cidrs": ["192.168.50.0/24", "fd12:3456:789a::/64"],
-                  "network": ["tcp", "udp"], "ports": {"tcp": ["22", "53", "80-81"], "udp": ["53"]}}]
-              }],
-              "outbounds": [
-                {"tag": "deny", "type": "blackhole"},
-                {"tag": "home-lan", "type": "reverse_subnet",
-                 "reverse_subnet": {"inbound": "remote-access", "site": "home"}}
-              ],
-              "route": {"default_outbound": "deny", "rules": [{
-                "inbound": ["remote-access"], "principals": ["alice"],
-                "network": ["tcp", "udp"],
-                "ip_cidrs": ["192.168.50.0/24", "fd12:3456:789a::/64"], "outbound": "home-lan"
-              }]}
-            }
-        """.trimIndent()
-        val prepared = AppConfig(name = "reverse subnet", rawConfigJson = raw)
-            .toBridgeJson("127.0.0.1:18084")
-
-        Androidbridge.validateConfig(prepared)
-        val root = JSONObject(prepared)
-        assertEquals(
-            "alice",
-            root.getJSONObject("route").getJSONArray("rules").getJSONObject(0)
-                .getJSONArray("principals").getString(0),
-        )
-        assertEquals(
-            "fd12:3456:789a::/64",
-            root.getJSONArray("inbounds").getJSONObject(1)
-                .getJSONArray("subnets").getJSONObject(0).getJSONArray("cidrs").getString(1),
-        )
-    }
-
-    @Test
-    fun currentBridgeAcceptsP2pRemoteConfigAndPreservesCandidateSettings() {
-        val raw = """
-            {
-              "inbounds": [],
-              "outbounds": [
-                {"tag": "direct", "type": "direct"},
-                {"tag": "remote-edge", "type": "native", "address": ["edge.example.com:9444"],
-                 "token": "REMOTE_TOKEN", "network": ["tcp", "udp"],
-                 "transport": {"type": "raw"},
-                 "security": {"type": "tls", "server_name": "edge.example.com"},
-                 "mux": {"enabled": true},
-                 "p2p": {"enabled": true,
-                   "rendezvous": ["203.0.113.10:9555", "[2001:db8::10]:9555"],
-                   "host_candidates": false, "stun": ["stun.example.com:3478"],
-                   "strategy": "aggressive"}}
-              ],
-              "route": {"default_outbound": "direct", "rules": [{
-                "network": ["tcp", "udp"],
-                "ip_cidrs": ["192.168.50.0/24", "fd12:3456:789a::/64"],
-                "outbound": "remote-edge"
-              }]}
-            }
-        """.trimIndent()
-        val prepared = AppConfig(name = "p2p remote", rawConfigJson = raw)
-            .toBridgeJson("127.0.0.1:18085")
-
-        Androidbridge.validateConfig(prepared)
-        val p2p = JSONObject(prepared).getJSONArray("outbounds").getJSONObject(1).getJSONObject("p2p")
-        assertTrue(p2p.getBoolean("enabled"))
-        assertFalse(p2p.getBoolean("host_candidates"))
-        assertEquals("[2001:db8::10]:9555", p2p.getJSONArray("rendezvous").getString(1))
-        assertEquals("stun.example.com:3478", p2p.getJSONArray("stun").getString(0))
-        assertEquals("aggressive", p2p.getString("strategy"))
-
-        val invalid = JSONObject(prepared)
-        invalid.getJSONArray("outbounds").getJSONObject(1).getJSONObject("p2p")
-            .put("strategy", "unbounded")
-        assertTrue(runCatching { Androidbridge.validateConfig(invalid.toString()) }.isFailure)
-    }
-
-    @Test
-    fun structuredEchProfileEmitsCurrentClientHelloSchema() {
-        val profile = AppConfig(
-            name = "ech",
-            serverHost = "edge.example.com",
-            serverPort = "9443",
-            protocol = "native",
-            transport = "raw",
-            token = "secret",
-            echEnabled = true,
-            echPublicName = "public.example",
-            echPublicKey = "gzFwIcNk5Ez3GIzKErsb8_BLzAvzRyxZlmno-tkYeSY",
-            echPorts = "443, 8443",
-            mux = true,
-            carrierMode = "tcp",
-        )
-
-        assertNull(profile.validate())
-        val restored = AppConfig.fromJson(profile.toJson())
-        val config = JSONObject(restored.toBridgeJson("127.0.0.1:1080"))
-        val proxy = config.getJSONArray("outbounds").getJSONObject(0)
-        val clientHello = proxy.getJSONObject("client_hello")
-
-        assertEquals("ech", clientHello.getString("type"))
-        assertEquals("public.example", clientHello.getString("public_name"))
-        assertEquals(profile.echPublicKey, clientHello.getString("public_key"))
-        assertEquals(443, clientHello.getJSONArray("ports").getInt(0))
-        assertEquals(8443, clientHello.getJSONArray("ports").getInt(1))
-        assertEquals("none", proxy.getJSONObject("security").getString("type"))
-        assertNull(ProfileUriCodec.encode(restored))
-        assertNull(ProfileUriCodec.encodeForQr(restored))
-        assertTrue(profileConnectionIdentity(restored) != null)
-        Androidbridge.validateConfig(config.toString())
-    }
-
-    @Test
-    fun fullJsonPreservesServerOnlyTlsPassthroughFallback() {
-        val raw = """
-            {
-              "inbounds": [{
-                "tag": "server",
-                "type": "native",
-                "address": ["127.0.0.1:19443"],
-                "network": ["tcp", "udp"],
-                "users": [{"id": "secret"}],
-                "transport": {"type": "raw"},
-                "security": {"type": "none"},
-                "carrier": {"mode": "tcp"},
-                "mux": {"enabled": true},
-                "fallback": {
-                  "type": "tls_passthrough",
-                  "dest": "127.0.0.1:20443",
-                  "server_names": ["www.example.com"],
-                  "handshake_timeout": "3s"
-                }
-              }],
-              "outbounds": [{"tag": "direct", "type": "direct"}],
-              "route": {"default_outbound": "direct", "rules": []},
-              "dns": {}
-            }
-        """.trimIndent()
-
-        val prepared = JSONObject(
-            AppConfig(name = "fallback", rawConfigJson = raw)
-                .toBridgeJson(localListenAddr = "127.0.0.1:1080"),
-        )
-        val inbounds = prepared.getJSONArray("inbounds")
-        val server = (0 until inbounds.length())
-            .map(inbounds::getJSONObject)
-            .first { it.getString("tag") == "server" }
-        val fallback = server.getJSONObject("fallback")
-
-        assertEquals("tls_passthrough", fallback.getString("type"))
-        assertEquals("127.0.0.1:20443", fallback.getString("dest"))
-        assertEquals("www.example.com", fallback.getJSONArray("server_names").getString(0))
-        assertEquals("3s", fallback.getString("handshake_timeout"))
-        Androidbridge.validateConfig(prepared.toString())
     }
 
     @Test
@@ -889,189 +652,6 @@ class AndroidBridgeContractTest {
     }
 
     @Test
-    fun runtimeLocalProxyProtocolControlsStructuredAndRawAndroidInbounds() {
-        val structured = AppConfig(
-            serverHost = "192.0.2.1",
-            serverPort = "443",
-            token = "local-protocol-test",
-            protocol = "native",
-            upstreamProtocol = "socks5",
-        )
-        val raw = AppConfig(
-            rawConfigJson = """{
-                "outbounds":[
-                    {"tag":"default","type":"direct","network":["tcp","udp"]},
-                    {"tag":"direct-tcp","type":"direct","network":["tcp"]}
-                ],
-                "route":{"default_outbound":"default","rules":[
-                    {"network":["tcp"],"outbound":"direct-tcp"}
-                ]}
-            }""".trimIndent(),
-        )
-
-        val preparedRaw = JSONObject(raw.toBridgeJson(localListenAddr = "127.0.0.1:1080"))
-        assertEquals("default", preparedRaw.getJSONObject("dns").getString("outbound"))
-        assertEquals(2, preparedRaw.getJSONArray("outbounds").getJSONObject(0).getJSONArray("network").length())
-        assertEquals(1, preparedRaw.getJSONArray("outbounds").getJSONObject(1).getJSONArray("network").length())
-        assertEngineStarts(preparedRaw.toString())
-
-        listOf(structured, raw).forEach { profile ->
-            LocalProxyProtocols.forEach { protocol ->
-                val noAuthInbound = JSONObject(
-                    profile.toBridgeJson(
-                        localListenAddr = "127.0.0.1:1080",
-                        localProxyProtocol = protocol,
-                    ),
-                ).getJSONArray("inbounds").getJSONObject(0)
-                assertFalse(noAuthInbound.has("users"))
-                assertFalse(noAuthInbound.has("username"))
-                assertFalse(noAuthInbound.has("password"))
-                val config = JSONObject(
-                    profile.toBridgeJson(
-                        localListenAddr = "127.0.0.1:1080",
-                        localProxyProtocol = protocol,
-                        localProxyUsers = listOf(
-                            LocalProxyUser("android-user", "android-password"),
-                            LocalProxyUser("second-user", "second-password"),
-                        ),
-                    ),
-                )
-                val inbound = config.getJSONArray("inbounds").getJSONObject(0)
-                assertEquals(
-                    protocol,
-                    inbound.getString("type"),
-                )
-                assertFalse(inbound.has("username"))
-                assertFalse(inbound.has("password"))
-                val users = inbound.getJSONArray("users")
-                assertEquals("android-user", users.getJSONObject(0).getString("username"))
-                assertEquals("android-password", users.getJSONObject(0).getString("password"))
-                assertEquals("second-user", users.getJSONObject(1).getString("username"))
-                assertEquals("second-password", users.getJSONObject(1).getString("password"))
-                assertEngineStarts(config.toString())
-            }
-        }
-    }
-
-    @Test
-    fun rawAndroidRewritePreservesMixedAndSocksProxyCredentials() {
-        val raw = """{
-            "inbounds":[{
-                "tag":"preserved-mixed",
-                "type":"mixed",
-                "address":["127.0.0.1:19123"],
-                "network":["tcp"],
-                "username":"raw-inbound-user",
-                "password":"raw-inbound-password"
-            }],
-            "outbounds":[{
-                "tag":"proxy",
-                "type":"socks5",
-                "address":["127.0.0.1:19124"],
-                "network":["tcp","udp"],
-                "username":"raw-outbound-user",
-                "password":"raw-outbound-password",
-                "auth_mode":"secure"
-            }],
-            "route":{"default_outbound":"proxy","rules":[]},
-            "dns":{}
-        }""".trimIndent()
-
-        val prepared = JSONObject(
-            AppConfig(name = "raw-proxy-auth", rawConfigJson = raw).toBridgeJson(
-                localListenAddr = "127.0.0.1:19125",
-                localProxyProtocol = "mixed",
-                localProxyUsers = listOf(LocalProxyUser("android-user", "android-password")),
-            ),
-        )
-        val androidInbound = prepared.getJSONArray("inbounds").getJSONObject(0)
-        val preservedInbound = prepared.getJSONArray("inbounds").getJSONObject(1)
-        val outbound = prepared.getJSONArray("outbounds").getJSONObject(0)
-
-        assertEquals("mixed", androidInbound.getString("type"))
-        assertFalse(androidInbound.has("username"))
-        assertFalse(androidInbound.has("password"))
-        assertEquals("android-user", androidInbound.getJSONArray("users").getJSONObject(0).getString("username"))
-        assertEquals("android-password", androidInbound.getJSONArray("users").getJSONObject(0).getString("password"))
-        assertEquals("raw-inbound-user", preservedInbound.getString("username"))
-        assertEquals("raw-inbound-password", preservedInbound.getString("password"))
-        assertEquals("raw-outbound-user", outbound.getString("username"))
-        assertEquals("raw-outbound-password", outbound.getString("password"))
-        assertEquals("secure", outbound.getString("auth_mode"))
-        Androidbridge.validateConfig(prepared.toString())
-    }
-
-    @Test
-    fun localProxyUsersGenerateNewSchemaAndRawAuthenticatedUsersRemainUntouched() {
-        val raw = """{
-            "inbounds":[
-                {"tag":"native-users","type":"native","address":["127.0.0.1:19201"],"network":["tcp"],"users":[{"id":"native-a"},{"id":"native-b"}],"transport":{"type":"raw"}},
-                {"tag":"mixed-users","type":"mixed","address":["127.0.0.1:19205"],"network":["tcp","udp"],"users":[{"username":"raw-a","password":"a"},{"username":"raw-b","password":"b"}]},
-                {"tag":"socks-users","type":"socks5","address":["127.0.0.1:19206"],"network":["tcp","udp"],"users":[{"username":"raw-c","password":"c"},{"username":"raw-d","password":"d"}]}
-            ],
-            "outbounds":[{"tag":"direct","type":"direct"}],
-            "route":{"default_outbound":"direct","rules":[]}
-        }""".trimIndent()
-        val expectedUsers = JSONObject(raw).getJSONArray("inbounds").let { inbounds ->
-            (0 until inbounds.length()).associate { index ->
-                val inbound = inbounds.getJSONObject(index)
-                inbound.getString("tag") to inbound.getJSONArray("users").toString()
-            }
-        }
-        val prepared = JSONObject(
-            AppConfig(name = "raw-multi-user", rawConfigJson = raw).toBridgeJson(
-                localListenAddr = "127.0.0.1:19200",
-                localProxyProtocol = "mixed",
-                localProxyUsers = listOf(
-                    LocalProxyUser("alice", "secret-a"),
-                    LocalProxyUser("bob", "secret-b"),
-                ),
-            ),
-        )
-
-        val androidInbound = prepared.getJSONArray("inbounds").getJSONObject(0)
-        assertFalse(androidInbound.has("username"))
-        assertFalse(androidInbound.has("password"))
-        assertEquals(2, androidInbound.getJSONArray("users").length())
-        assertEquals("bob", androidInbound.getJSONArray("users").getJSONObject(1).getString("username"))
-        for (index in 1 until prepared.getJSONArray("inbounds").length()) {
-            val inbound = prepared.getJSONArray("inbounds").getJSONObject(index)
-            assertEquals(expectedUsers.getValue(inbound.getString("tag")), inbound.getJSONArray("users").toString())
-        }
-        assertFalse(prepared.getJSONArray("outbounds").getJSONObject(0).has("users"))
-        Androidbridge.validateConfig(prepared.toString())
-    }
-
-    @Test
-    fun startIntentUsesPersistedLocalProxyProtocol() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val originalSettings = TcptunVpnService.readRuntimeSettings(context)
-        val profile = AppConfig(
-            rawConfigJson = """{
-                "outbounds":[{"tag":"direct","type":"direct","network":["tcp"]}],
-                "route":{"default_outbound":"direct"}
-            }""".trimIndent(),
-        )
-
-        try {
-            LocalProxyProtocols.forEach { protocol ->
-                TcptunVpnService.writeRuntimeSettings(
-                    context,
-                    originalSettings.copy(localProxyProtocol = protocol),
-                )
-                val intent = TcptunVpnService.startIntent(context, profile)
-                val config = JSONObject(VpnServiceIntents.parseStartCommand(context, intent).configJson)
-                assertEquals(
-                    protocol,
-                    config.getJSONArray("inbounds").getJSONObject(0).getString("type"),
-                )
-            }
-        } finally {
-            TcptunVpnService.writeRuntimeSettings(context, originalSettings)
-        }
-    }
-
-    @Test
     fun startIntentUsesPersistedPoolOrDirectDefaultOutbound() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val originalSettings = TcptunVpnService.readRuntimeSettings(context)
@@ -1297,29 +877,6 @@ class AndroidBridgeContractTest {
     }
 
     @Test
-    fun fullJsonProfileKeepsItsOwnDefaultOutboundSetting() {
-        val profile = AppConfig(
-            id = "raw-default-outbound",
-            rawConfigJson = """{
-                "outbounds":[
-                    {"tag":"raw-default","type":"blackhole"},
-                    {"tag":"direct","type":"direct"}
-                ],
-                "route":{"default_outbound":"raw-default"}
-            }""".trimIndent(),
-        )
-        val config = JSONObject(
-            ProfileRunPlan(listOf(profile)).toBridgeJson(
-                localListenAddr = "127.0.0.1:18096",
-                defaultOutbound = DefaultOutboundDirect,
-            ),
-        )
-
-        assertEquals("raw-default", config.getJSONObject("route").getString("default_outbound"))
-        Androidbridge.validateConfig(config.toString())
-    }
-
-    @Test
     fun twoProfilesStartAndStopIndependentlyWithoutReplacingSession() {
         val first = AppConfig(
             id = "00000000-0000-4000-8000-000000000021",
@@ -1528,19 +1085,6 @@ class AndroidBridgeContractTest {
     }
 
     @Test
-    fun fullConfigCannotBeShared() {
-        val raw = """
-            {
-              "outbounds": [{"tag": "direct", "type": "direct"}],
-              "route": {"default_outbound": "direct", "rules": []}
-            }
-        """.trimIndent()
-        val profile = AppConfig(name = "json", rawConfigJson = raw)
-        assertEquals(null, ProfileUriCodec.encode(profile))
-        assertTrue(runCatching { createProfileShareIntent(profile) }.isFailure)
-    }
-
-    @Test
     fun generatedConfigStartsCurrentGoBridge() {
         val config = AppConfig(
             serverHost = "192.0.2.1",
@@ -1579,6 +1123,30 @@ class AndroidBridgeContractTest {
     }
 
     @Test
+    fun everyStructuredTransportValidatesWithTls() {
+        AppConfig.Transports.forEach { transport ->
+            val profile = AppConfig(
+                name = "tls-$transport",
+                serverHost = "edge.example.com",
+                serverPort = "443",
+                transport = transport,
+                token = "android-transport-test",
+                sni = "edge.example.com",
+                path = "/tunnel",
+            )
+
+            assertNull(transport, profile.validate())
+            val config = JSONObject(profile.toBridgeJson("127.0.0.1:18080"))
+            assertEquals(
+                "tls",
+                config.getJSONArray("outbounds").getJSONObject(0)
+                    .getJSONObject("security").getString("type"),
+            )
+            Androidbridge.validateConfig(config.toString())
+        }
+    }
+
+    @Test
     fun generatedRealityWithQuicCarrierStartsCurrentGoBridge() {
         val profile = AppConfig(
             name = "reality-quic",
@@ -1588,6 +1156,7 @@ class AndroidBridgeContractTest {
             transport = "raw",
             token = "android-reality-quic-test",
             sni = "example.com",
+            tls = false,
             tunnelSecurity = "reality",
             realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
             realityShortId = "a65f93c1dbc5d54a",
@@ -1650,278 +1219,24 @@ class AndroidBridgeContractTest {
     }
 
     @Test
-    fun fullConfigPreservesTopologyAndInjectsAndroidVpnInbound() {
-        val raw = """
+    fun fullCoreJsonCannotBeImportedAsAndroidProfile() {
+        val fullCoreJson = """
             {
-              "log": {"level": "warn"},
-              "inbounds": [
-                {"tag": "existing", "type": "socks5", "listen": "127.0.0.1", "port": 18091, "outbound": "direct"}
-              ],
-              "outbounds": [
-                {"tag": "direct", "type": "direct"},
-                {"tag": "blocked", "type": "blackhole"}
-              ],
-              "route": {
-                "default_outbound": "direct",
-                "rules": [{"domain_suffixes": ["example.invalid"], "outbound": "blocked"}]
-              },
-              "dns": {"servers": ["1.1.1.1"], "strategy": "prefer_ipv4"},
-              "discovery": {}
-            }
-        """.trimIndent()
-        val config = AppConfig(name = "full", rawConfigJson = raw)
-            .toBridgeJson(
-                localListenAddr = "127.0.0.1:18090",
-                localProxyUsers = listOf(LocalProxyUser("android", "secret")),
-            )
-
-        val root = JSONObject(config)
-        val inbounds = root.getJSONArray("inbounds")
-        assertEquals("android-vpn", inbounds.getJSONObject(0).getString("tag"))
-        assertEquals("127.0.0.1:18090", inbounds.getJSONObject(0).getJSONArray("address").getString(0))
-        assertFalse(inbounds.getJSONObject(0).has("outbound"))
-        assertEquals("existing", inbounds.getJSONObject(1).getString("tag"))
-        assertEquals("127.0.0.1:18091", inbounds.getJSONObject(1).getJSONArray("address").getString(0))
-        assertEquals("blocked", root.getJSONObject("route").getJSONArray("rules").getJSONObject(0).getString("outbound"))
-        assertEquals("prefer_ipv4", root.getJSONObject("dns").getString("strategy"))
-        assertFalse(root.has("discovery"))
-
-        assertEngineStarts(config)
-    }
-
-    @Test
-    fun fullConfigPrependsManagedRulesUsingRawDefaultAndAddsUniqueDirectOutbound() {
-        val raw = """
-            {
-              "outbounds": [
-                {"tag": "raw-default", "type": "blackhole"},
-                {"tag": "android-managed-direct", "type": "blackhole"}
-              ],
-              "route": {
-                "default_outbound": "raw-default",
-                "rules": [
-                  {"domain_suffixes": ["preserved.example"], "outbound": "raw-default"}
-                ]
-              }
-            }
-        """.trimIndent()
-        val config = JSONObject(
-            AppConfig(name = "raw-managed", rawConfigJson = raw).toBridgeJson(
-                localListenAddr = "127.0.0.1:18096",
-                managedRouteRules = listOf(
-                    ManagedRouteRule(
-                        id = "raw-direct",
-                        type = ManagedRouteRuleType.DomainSuffix,
-                        value = "direct.example",
-                        outbound = ManagedRouteOutbound.Direct,
-                    ),
-                    ManagedRouteRule(
-                        id = "raw-proxy",
-                        type = ManagedRouteRuleType.IPCidr,
-                        value = "203.0.113.0/24",
-                        outbound = ManagedRouteOutbound.Proxy,
-                    ),
-                ),
-            ),
-        )
-
-        val outbounds = config.getJSONArray("outbounds")
-        val tags = (0 until outbounds.length()).map { outbounds.getJSONObject(it).getString("tag") }
-        assertEquals(tags.size, tags.toSet().size)
-        val directOutbounds = (0 until outbounds.length())
-            .map(outbounds::getJSONObject)
-            .filter { it.getString("type") == "direct" }
-        assertEquals(1, directOutbounds.size)
-        assertEquals("android-managed-direct-2", directOutbounds.single().getString("tag"))
-
-        val rules = config.getJSONObject("route").getJSONArray("rules")
-        assertEquals(4, rules.length())
-        assertEquals("raw-default", rules.getJSONObject(0).getString("outbound"))
-        assertEquals("android-managed-direct-2", rules.getJSONObject(1).getString("outbound"))
-        assertEquals("direct.example", rules.getJSONObject(1).getJSONArray("domain_suffixes").getString(0))
-        assertEquals("raw-default", rules.getJSONObject(2).getString("outbound"))
-        assertEquals("203.0.113.0/24", rules.getJSONObject(2).getJSONArray("ip_cidrs").getString(0))
-        assertEquals("raw-default", rules.getJSONObject(3).getString("outbound"))
-        assertEquals("preserved.example", rules.getJSONObject(3).getJSONArray("domain_suffixes").getString(0))
-        Androidbridge.validateConfig(config.toString())
-    }
-
-    @Test
-    fun fullConfigManagedRulesRespectCombinedRuntimeRuleLimit() {
-        val existingRules = JSONArray().apply {
-            repeat(2) { index ->
-                put(
-                    JSONObject()
-                        .put("domain_suffixes", JSONArray().put("existing$index.example"))
-                        .put("outbound", "raw-default"),
-                )
-            }
-        }
-        val raw = JSONObject()
-            .put("outbounds", JSONArray().put(JSONObject().put("tag", "raw-default").put("type", "blackhole")))
-            .put("route", JSONObject().put("default_outbound", "raw-default").put("rules", existingRules))
-            .toString()
-        val managed = List(MaxActiveManagedRouteRuleCount) { index ->
-            ManagedRouteRule(id = "managed-$index", value = "managed$index.example")
-        }
-
-        val rejected = runCatching {
-            AppConfig(name = "raw-overflow", rawConfigJson = raw).toBridgeJson(
-                localListenAddr = "127.0.0.1:18097",
-                managedRouteRules = managed,
-            )
-        }
-
-        assertTrue(rejected.isFailure)
-        assertTrue(rejected.exceptionOrNull()?.message.orEmpty().contains("256 total route rules"))
-    }
-
-    @Test
-    fun fullConfigMigratesRemovedDirectFirstToFallback() {
-        val prepared = JSONObject(
-            AppConfig(
-                name = "direct-first",
-                rawConfigJson = """{
-                    "outbounds":[
-                        {"tag":"direct","type":"direct","network":["tcp"]},
-                        {"tag":"proxy","type":"direct","network":["tcp","udp"]},
-                        {"tag":"auto","type":"direct-first","primary":"direct","fallback":"proxy","network":["tcp"]}
-                    ],
-                    "route":{
-                        "default_outbound":"auto",
-                        "rules":[{"domain_suffixes":["example.com"],"network":["tcp"],"outbound":"auto"}]
-                    }
-                }""".trimIndent(),
-            ).toBridgeJson(localListenAddr = "127.0.0.1:18092"),
-        )
-
-        assertEquals("proxy", prepared.getJSONObject("route").getString("default_outbound"))
-        val outbounds = prepared.getJSONArray("outbounds")
-        assertEquals(2, outbounds.length())
-        assertEquals(1, outbounds.getJSONObject(0).getJSONArray("network").length())
-        assertEquals(2, outbounds.getJSONObject(1).getJSONArray("network").length())
-        val rules = prepared.getJSONObject("route").getJSONArray("rules")
-        assertEquals(1, rules.length())
-        assertEquals("proxy", rules.getJSONObject(0).getString("outbound"))
-
-        assertEngineStarts(prepared.toString())
-    }
-
-    @Test
-    fun tcptunGoConfigImportKeepsOutboundsRouteAndDns() {
-        val raw = """
-            {
-              "log": {"level": "info"},
-              "inbounds": [
-                {"tag": "local", "type": "mixed", "listen": "127.0.0.1", "port": 1080,
-                 "network": ["tcp", "udp"], "outbound": "proxy"}
-              ],
-              "outbounds": [
-                {"tag": "proxy", "type": "native", "server": "192.0.2.1", "port": 9443,
-                 "token": "android-import-test",
-                 "transport": {"type": "raw", "tls": true, "server_name": "example.com", "insecure": true},
-                 "mux": {"enabled": true}}
-              ],
-              "route": {
-                "default_outbound": "proxy",
-                "rules": [{"inbound": ["local"], "network": ["tcp"], "outbound": "proxy"}]
-              },
-              "dns": {},
-              "discovery": {}
-            }
-        """.trimIndent()
-
-        val imported = ProfileUriCodec.decode(raw).getOrThrow()
-        assertTrue(imported.rawConfigJson.isNotBlank())
-        assertTrue(profileConnectionIdentity(imported) != null)
-        val stored = JSONObject(imported.rawConfigJson)
-        assertFalse(stored.has("inbounds"))
-        assertFalse(stored.has("log"))
-        assertTrue(stored.has("dns"))
-        assertFalse(stored.has("discovery"))
-        assertTrue(stored.has("outbounds"))
-        assertTrue(stored.has("route"))
-        assertEquals(
-            "tun",
-            stored.getJSONObject("route").getJSONArray("rules")
-                .getJSONObject(0).getJSONArray("inbound").getString(0),
-        )
-        val prepared = JSONObject(imported.toBridgeJson(localListenAddr = "127.0.0.1:1080"))
-        assertTrue(prepared.getJSONObject("dns").getJSONObject("fake_ip").getBoolean("enabled"))
-        val inbounds = prepared.getJSONArray("inbounds")
-        assertEquals(1, inbounds.length())
-        assertEquals("android-vpn", inbounds.getJSONObject(0).getString("tag"))
-        assertEquals("127.0.0.1:1080", inbounds.getJSONObject(0).getJSONArray("address").getString(0))
-        val proxy = prepared.getJSONArray("outbounds").getJSONObject(0)
-        assertEquals("192.0.2.1:9443", proxy.getJSONArray("address").getString(0))
-        assertFalse(proxy.has("server"))
-        assertFalse(proxy.has("port"))
-        assertTrue(proxy.getJSONObject("mux").getBoolean("enabled"))
-        assertEquals("tls", proxy.getJSONObject("security").getString("type"))
-        assertEquals("example.com", proxy.getJSONObject("security").getString("server_name"))
-        assertTrue(proxy.getJSONObject("security").getBoolean("insecure"))
-        assertFalse(proxy.getJSONObject("transport").has("tls"))
-        val ruleInbound = prepared.getJSONObject("route").getJSONArray("rules")
-            .getJSONObject(0).getJSONArray("inbound")
-        assertEquals("tun", ruleInbound.getString(0))
-
-        assertEngineStarts(prepared.toString())
-
-        val preparedWithLocalRouting = JSONObject(
-            imported.toBridgeJson(
-                localListenAddr = "127.0.0.1:1080",
-                routeLocalProxyTraffic = true,
-            ),
-        )
-        val localRuleInbound = preparedWithLocalRouting.getJSONObject("route").getJSONArray("rules")
-            .getJSONObject(0).getJSONArray("inbound")
-        assertEquals(2, localRuleInbound.length())
-        assertEquals(AndroidTunInboundTag, localRuleInbound.getString(0))
-        assertEquals("android-vpn", localRuleInbound.getString(1))
-        assertEngineStarts(preparedWithLocalRouting.toString())
-    }
-
-    @Test
-    fun currentSchemaRealityConfigCanBeImported() {
-        val raw = """
-            {
-              "log": {"level": "info"},
-              "inbounds": [{
-                "tag": "local-mixed",
-                "type": "mixed",
-                "address": ["127.0.0.1:1080"],
-                "network": ["tcp", "udp"]
-              }],
               "outbounds": [{
                 "tag": "native",
                 "type": "native",
                 "address": ["[2001:db8::1]:443"],
                 "token": "android-import-test",
-                "network": ["tcp", "udp"],
                 "transport": {"type": "raw"},
-                "security": {
-                  "type": "reality",
-                  "server_name": "example.com",
-                  "public_key": "3HNAKQ6cNuB2YDXVmwtMRLKpfGhBnykI2rXDmW9CKT4",
-                  "short_id": "00",
-                  "spider_x": "/"
-                },
-                "mux": {"enabled": true}
-              }],
-              "route": {"default_outbound": "native", "rules": []},
-              "dns": {}
+                "security": {"type": "reality"}
+              }]
             }
         """.trimIndent()
 
-        val imported = ProfileUriCodec.decode(raw).getOrThrow()
+        val result = ProfileUriCodec.decode(fullCoreJson)
 
-        validateImportedProfile(imported)
-        assertTrue(profileConnectionIdentity(imported) != null)
-        val prepared = JSONObject(imported.toBridgeJson(localListenAddr = "127.0.0.1:1080"))
-        val outbound = prepared.getJSONArray("outbounds").getJSONObject(0)
-        assertEquals("[2001:db8::1]:443", outbound.getJSONArray("address").getString(0))
-        assertEquals("reality", outbound.getJSONObject("security").getString("type"))
-        assertFalse(outbound.getJSONObject("security").has("fingerprint"))
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("JSON profile import is no longer supported"))
     }
 
     private fun assertEngineStarts(config: String) {

@@ -13,7 +13,7 @@
 | 应用设置 | `RuntimeSettingsRuntimeState.kt:publishFreshRuntime/rebindAppliedOwnership/reconciliationAction` | 已应用设置与物理 bridge epoch 绑定；结构变化 Replace，hot setting 另行 checkpoint |
 | 构造配置 | `VpnServiceIntents.kt:buildStartPayload` | 将 listen、protocol、users、routeLocalProxyTraffic 传给 plan |
 | 多配置 | `ProfileRunPlan.kt:ProfileRunPlan.toBridgeJson` | 调用各 AppConfig，取一个 local inbound，合并 native/direct/balance outbounds |
-| JSON | `AppConfig.kt:toBridgeJson/prepareRawConfigForAndroid` | 生成 `inbounds[{tag:local,type:socks5或mixed,address:[...],network:[tcp,udp],users:[...]}]`；raw 配置替换保留名/冲突监听 |
+| JSON | `AppConfig.kt:toBridgeJson` | 仅从结构化 Profile 生成受控 runtime JSON 和本地 `socks5`/`mixed` inbound |
 | 服务启动 | `TcptunVpnService.kt:startRuntimeNow/startBridge` | runtime lease → 原始 Android TUN FD → Bridge session → applied settings → 发布 Running |
 | JNI 事务 | `BridgeSessionRuntime.kt:startSession/startNativeSession` → `BridgeSessionController.kt:start` | 安装强引用 callbacks；Configure；SetTun；Start；等待 core_ready；记录 exact session ID |
 | 反射 | `TcptunBridge.kt:ReflectionTcptunBridge.configure/setTun/start` | 调用 Engine.configure/setTun/startConfiguredSessionWithDisabledOutbounds |

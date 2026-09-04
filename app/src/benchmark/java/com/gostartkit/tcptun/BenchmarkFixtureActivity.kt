@@ -44,10 +44,8 @@ class BenchmarkFixtureActivity : Activity() {
         val profile = AppConfig(
             id = "benchmark-vpn",
             name = "Benchmark VPN",
-            rawConfigJson = """{
-                "outbounds":[{"tag":"direct","type":"direct","network":["tcp","udp"]}],
-                "route":{"default_outbound":"direct"}
-            }""".trimIndent(),
+            serverHost = "192.0.2.1",
+            token = "benchmark-token",
         )
         ProfileStore.save(this, ProfilesState(listOf(profile))).getOrThrow()
         RuntimeSettingsRepository.write(this, RuntimeSettings(powerSavingMode = true, socksListenAll = false))

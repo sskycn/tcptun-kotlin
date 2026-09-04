@@ -183,7 +183,7 @@ internal fun RouteManagementPage(onBack: () -> Unit) {
     val appContext = context.applicationContext
     val resources = LocalResources.current
     var profileState by remember { mutableStateOf(ProfilesState(emptyList())) }
-    val routeProfiles = profileState.profiles.filter { it.rawConfigJson.isBlank() }
+    val routeProfiles = profileState.profiles
     var installedApps by remember { mutableStateOf<List<InstalledRouteApp>>(emptyList()) }
     var rules by remember { mutableStateOf<List<ManagedRouteRule>>(emptyList()) }
     var routeDataLoaded by remember { mutableStateOf(false) }
@@ -1026,4 +1026,3 @@ private fun routeRuleExample(type: ManagedRouteRuleType): String = stringResourc
         ManagedRouteRuleType.App -> R.string.route_example_app
     },
 )
-

@@ -784,7 +784,9 @@ internal fun TcptunScreen(
 
     fun finishProfileDrag() {
         val original = profilesBeforeDrag
-        val reordered = state.profiles
+        // onDragStopped can run in the same pointer event stream as the final onDelta,
+        // before Compose has recomposed this closure with the updated local state.
+        val reordered = storedState?.profiles ?: state.profiles
         profileReorderScrollJob?.cancel()
         profileReorderScrollJob = null
         draggedProfileId = null

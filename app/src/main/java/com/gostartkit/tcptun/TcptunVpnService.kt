@@ -675,6 +675,7 @@ class TcptunVpnService : VpnService() {
         coordinatorOwner: () -> Boolean,
         commitRunning: (ProfileRunPlan) -> Boolean,
     ) {
+        request.command.plan.validateAndroidVpnConfidentiality()
         val commandOwner = {
             coordinatorOwner() &&
                 !destroyed.get() &&
@@ -1819,6 +1820,7 @@ class TcptunVpnService : VpnService() {
         settings: AppliedRuntimeSettings,
         commandOwner: () -> Boolean,
     ) {
+        plan.validateAndroidVpnConfidentiality()
         requireSafeAppliedRuntimeSettings(settings)
         check(bridgeRuntimeLease.owner == serviceInstanceId) {
             "tcptun service does not own the native runtime lease"

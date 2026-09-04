@@ -22,18 +22,12 @@ class AndroidVpnRoutePlanTest {
 
     @Test
     fun legacySplitPreferenceMigratesToFullTunnel() {
-        val legacy = """{"mode":"split","routes":["192.168.50.0/24"],"dnsServers":["192.168.50.1"]}"""
-
-        assertEquals(AndroidVpnRoutePlan.FullTunnel, decodeAndroidVpnRoutePlan(legacy))
-        assertEquals("full", JSONObjectCompat.mode(encodeAndroidVpnRoutePlan(decodeAndroidVpnRoutePlan(legacy))))
+        assertEquals(AndroidVpnRoutePlan.FullTunnel, decodeAndroidVpnRouteMode("split"))
+        assertEquals(AndroidVpnRoutePlan.FullTunnel, decodeAndroidVpnRouteMode("full"))
     }
 
     @Test
     fun rejectsUnknownPersistedRouteMode() {
-        assertTrue(runCatching { decodeAndroidVpnRoutePlan("""{"mode":"future"}""") }.isFailure)
-    }
-
-    private object JSONObjectCompat {
-        fun mode(json: String): String = org.json.JSONObject(json).getString("mode")
+        assertTrue(runCatching { decodeAndroidVpnRouteMode("future") }.isFailure)
     }
 }

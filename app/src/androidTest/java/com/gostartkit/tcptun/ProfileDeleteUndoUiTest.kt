@@ -1,12 +1,12 @@
 package com.tcptun.client
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
-import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.swipeLeft
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -65,8 +65,18 @@ class ProfileDeleteUndoUiTest {
 
     @Test
     fun dragHandleReordersAndPersistsProfiles() {
-        val first = AppConfig(id = "drag-profile-first", name = "First proxy", serverHost = "192.0.2.1")
-        val second = AppConfig(id = "drag-profile-second", name = "Second proxy", serverHost = "192.0.2.2")
+        val first = AppConfig(
+            id = "drag-profile-first",
+            name = "First proxy",
+            serverHost = "192.0.2.1",
+            token = "first-token",
+        )
+        val second = AppConfig(
+            id = "drag-profile-second",
+            name = "Second proxy",
+            serverHost = "192.0.2.2",
+            token = "second-token",
+        )
         ProfileStore.save(composeRule.activity, ProfilesState(profiles = listOf(first, second)))
         composeRule.activityRule.scenario.recreate()
 
@@ -81,15 +91,12 @@ class ProfileDeleteUndoUiTest {
         val handles = composeRule.onAllNodesWithContentDescription(
             composeRule.activity.getString(R.string.reorder_profile),
         )
-        val firstCenter = handles[0].fetchSemanticsNode().boundsInRoot.center
-        val secondCenter = handles[1].fetchSemanticsNode().boundsInRoot.center
         handles[0].performTouchInput {
-            val rowDistance = secondCenter.y - firstCenter.y
-            swipe(
-                start = center,
-                end = center.copy(y = center.y + rowDistance * 1.5f),
-                durationMillis = 1_000,
-            )
+            down(center)
+            moveBy(Offset(0f, 32f), delayMillis = 100)
+            moveBy(Offset(0f, 64f), delayMillis = 100)
+            moveBy(Offset(0f, 96f), delayMillis = 100)
+            up()
         }
 
         composeRule.waitUntil(timeoutMillis = 10_000) {

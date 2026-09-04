@@ -23,24 +23,15 @@ class VpnServiceLifecycleTest {
         val context = instrumentation.targetContext
         val originalSettings = TcptunVpnService.readRuntimeSettings(context)
         val originalProfiles = ProfileStore.load(context)
+        val originalRules = RouteRuleStore.load(context)
         val socksPort = availablePort()
         val directTarget = "127.0.0.1"
         val profile = AppConfig(
             id = "vpn-service-lifecycle",
             name = "VPN service lifecycle",
-            rawConfigJson = """{
-                "outbounds":[{"tag":"direct","type":"direct","network":["tcp","udp"]}],
-                "route":{
-                    "default_outbound":"direct",
-                    "rules":[{
-                        "app":{
-                            "platforms":["android"],
-                            "attributes":{"packages":["${context.packageName}"]}
-                        },
-                        "outbound":"direct"
-                    }]
-                }
-            }""".trimIndent(),
+            serverHost = "127.0.0.1",
+            serverPort = "1",
+            token = "vpn-service-lifecycle-token",
         )
 
         runShell("appops set ${context.packageName} ACTIVATE_VPN allow")
@@ -52,11 +43,23 @@ class VpnServiceLifecycleTest {
                 socksPort = socksPort,
                 socksListenAll = false,
                 flowAnalysisApp = "",
+                defaultOutbound = DefaultOutboundDirect,
             ),
         )
         ProfileStore.save(
             context,
             ProfilesState(profiles = listOf(profile), activeIds = setOf(profile.id)),
+        ).getOrThrow()
+        RouteRuleStore.save(
+            context,
+            listOf(
+                ManagedRouteRule(
+                    id = "vpn-service-lifecycle-app",
+                    type = ManagedRouteRuleType.App,
+                    value = context.packageName,
+                    outbound = ManagedRouteOutbound.Direct,
+                ),
+            ),
         ).getOrThrow()
         try {
             assertNull(VpnService.prepare(context))
@@ -70,7 +73,7 @@ class VpnServiceLifecycleTest {
                 }
                 assertEquals("", TcptunState.state.value.flowAnalysisApp)
                 if (cycle == 0) {
-                    val sessionId = TcptunState.diagnostics.bridgeSessionId
+                    val sessionId = waitForStableBridgeSession()
                     val runningSettings = TcptunVpnService.readRuntimeSettings(context)
                     TcptunVpnService.writeRuntimeSettings(
                         context,
@@ -136,6 +139,7 @@ class VpnServiceLifecycleTest {
             }
             TcptunVpnService.writeRuntimeSettings(context, originalSettings)
             ProfileStore.save(context, originalProfiles)
+            RouteRuleStore.save(context, originalRules)
             runShell("appops set ${context.packageName} ACTIVATE_VPN default")
         }
     }
@@ -156,6 +160,24 @@ class VpnServiceLifecycleTest {
             }
             Thread.sleep(50)
         }
+    }
+
+    private fun waitForStableBridgeSession(timeoutMillis: Long = 10_000): Long {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        var sessionId = TcptunState.diagnostics.bridgeSessionId
+        var unchangedSince = System.currentTimeMillis()
+        while (System.currentTimeMillis() < deadline) {
+            val current = TcptunState.diagnostics.bridgeSessionId
+            if (current != sessionId) {
+                sessionId = current
+                unchangedSince = System.currentTimeMillis()
+            }
+            if (sessionId > 0 && TcptunState.status == VpnStatus.Running && System.currentTimeMillis() - unchangedSince >= 2_500) {
+                return sessionId
+            }
+            Thread.sleep(50)
+        }
+        throw AssertionError("Timed out waiting for a stable bridge session")
     }
 
     private fun availablePort(): Int = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use {

@@ -320,10 +320,10 @@ internal class VpnRuntimeStressHarness : AutoCloseable {
     private fun directProfile(id: String, name: String) = AppConfig(
         id = id,
         name = name,
-        rawConfigJson = """{
-            "outbounds":[{"tag":"direct","type":"direct","network":["tcp","udp"]}],
-            "route":{"default_outbound":"direct"}
-        }""".trimIndent(),
+        serverHost = "127.0.0.1",
+        serverPort = "1",
+        token = "$id-token",
+        mux = false,
     )
 
     private fun loadMembershipFixture(): VpnMembershipStressFixture? {

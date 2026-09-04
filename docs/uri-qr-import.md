@@ -25,8 +25,9 @@ and codec both restrict the host and path to `/v1`; non-canonical payloads, quer
 unknown paths, oversized inputs, and unsupported schemes are rejected.
 
 Tunnel profile QR export continues to use the tcptun-go Native compact `T2:`/`T3:` codec.
-Profiles whose fields cannot be represented compactly, including resumable mux or ECH settings,
-are not silently lossy-encoded.
+Profiles whose fields cannot be represented compactly, including resumable mux settings, are not
+silently lossy-encoded. Encoders only emit TLS or REALITY; URI, QR/T2/T3, and App Link decoders
+reject missing or explicit `security=none` before persistence.
 
 Local proxy credentials use the independent `A1:<Base45>` format. One A1 always contains exactly
 one username/password pair and never contains a profile, listener address, port, protocol, or
@@ -45,9 +46,10 @@ A1 is not encrypted. Its text and QR image are bearer secrets. The UI hides the 
 default, marks copied A1 text sensitive on supported Android versions, warns before system share,
 and does not put A1/password data in logs, diagnostics, SavedState, or navigation arguments.
 
-Every imported payload passes URI decoding, Android validation, and core non-listening
-validation before persistence. Import never starts the VPN automatically. Existing equivalent
-profiles are reused instead of duplicated.
+Every imported payload passes URI decoding, Android confidentiality validation, and core
+non-listening validation before persistence. Arbitrary JSON/Full Config import is not supported.
+Import never starts the VPN automatically. Existing equivalent profiles are reused instead of
+duplicated.
 
 The production App Link association must be published at:
 

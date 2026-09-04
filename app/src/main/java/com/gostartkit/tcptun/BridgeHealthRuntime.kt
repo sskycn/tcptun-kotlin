@@ -232,7 +232,6 @@ internal class BridgeHealthRuntime(
             val upstreamFailure = upstreamProbeFailure(targets)
             if (!isOwnershipCurrent(ownership)) return null
             log("upstream_probe ${ownership.diagnosticId()} result=${upstreamFailure ?: "ready"}")
-            updateRawProfileHealth(upstreamFailure, ownership)
             upstreamFailure?.let { return HealthFailure(it) }
         }
         return null
@@ -302,7 +301,7 @@ internal class BridgeHealthRuntime(
         monitorEpoch: Int,
         ownership: VpnRuntimeOwnership,
     ) {
-        val candidates = currentPlan()?.activeProfiles.orEmpty().filter { it.rawConfigJson.isBlank() }
+        val candidates = currentPlan()?.activeProfiles.orEmpty()
         val sessionEpoch = ownership.bridgeEpoch
         if (candidates.isEmpty() || targets.isEmpty() || sessionEpoch <= 0L) return
         val worstCaseProfileMs = MemberHealthProbeTimeoutMs.toLong() * targets.size
@@ -394,34 +393,6 @@ internal class BridgeHealthRuntime(
                 requestedDelayMs = BridgeHealthPolicy.MEMBER_HEALTH_STARTUP_DELAY_MS,
             )
         }
-    }
-
-    private fun updateRawProfileHealth(failure: String?, ownership: VpnRuntimeOwnership) {
-        if (!isOwnershipCurrent(ownership)) return
-        val profile = currentPlan()?.activeProfiles
-            ?.singleOrNull { it.rawConfigJson.isNotBlank() }
-            ?: return
-        val previous = TcptunState.state.value.profileHealth[profile.id]
-        val now = System.currentTimeMillis()
-        val health = if (failure == null) {
-            ProfileHealth(
-                status = ProfileHealthStatus.Healthy,
-                failures = 0,
-                lastCheckedAtMs = now,
-                lastSucceededAtMs = now,
-            )
-        } else {
-            ProfileHealth(
-                status = ProfileHealthStatus.Degraded,
-                latencyMs = previous?.latencyMs,
-                failures = (previous?.failures ?: 0) + 1,
-                lastCheckedAtMs = now,
-                lastSucceededAtMs = previous?.lastSucceededAtMs ?: 0,
-                error = failure,
-            )
-        }
-        if (!isOwnershipCurrent(ownership)) return
-        TcptunState.setProfileHealthForBridgeEpoch(ownership.bridgeEpoch, profile.id, health)
     }
 
     private fun refreshProfileHealthFromCore(

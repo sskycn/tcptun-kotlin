@@ -7,8 +7,6 @@ import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.nio.charset.CodingErrorAction
 import java.util.Locale
-import org.json.JSONArray
-import org.json.JSONObject
 
 internal const val MaxProfileUriLength = 64 * 1024
 internal const val MaxProfileImportLength = 512 * 1024
@@ -108,34 +106,8 @@ internal fun profileUriFromIntent(intent: Intent?): String? {
 }
 
 internal fun profileConnectionIdentity(config: AppConfig): String? {
-    if (config.rawConfigJson.isNotBlank()) {
-        return runRecoverableCatching {
-            requireSafeJsonNesting(config.rawConfigJson)
-            "json:" + canonicalJsonValue(JSONObject(config.rawConfigJson))
-        }.getOrNull()
-    }
     val normalized = config.copy(id = "", name = "")
     return ProfileUriCodec.encode(normalized)?.let { "uri:$it" }
-        ?: normalized.takeIf { it.hasEchClientHelloSettings() }
-            ?.toJson()
-            ?.let { "app:" + canonicalJsonValue(it) }
-}
-
-private fun canonicalJsonValue(value: Any?): String {
-    return when (value) {
-        null, JSONObject.NULL -> "null"
-        is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(
-            prefix = "{",
-            postfix = "}",
-        ) { key -> "${JSONObject.quote(key)}:${canonicalJsonValue(value.get(key))}" }
-        is JSONArray -> (0 until value.length()).joinToString(
-            prefix = "[",
-            postfix = "]",
-        ) { index -> canonicalJsonValue(value.get(index)) }
-        is String -> JSONObject.quote(value)
-        is Number, is Boolean -> value.toString()
-        else -> JSONObject.quote(value.toString())
-    }
 }
 
 /**

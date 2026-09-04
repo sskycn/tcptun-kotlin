@@ -1,82 +1,18 @@
-# Reverse Subnet Android E2E lab
+# Reverse Subnet lab scope
 
-This lab records real evidence; it is not replaced by JVM or AAR validation. Use three independently
-reachable nodes and the exact locked Core commit from `bridge.lock`:
+The Android app no longer exposes Full Config import, so the former Android Remote lab is not a
+supported product workflow. Reverse Subnet, P2P, ACL, connector, and relay/direct-fallback
+validation belongs to tcptun-go Core/CLI/server test and lab environments. Use the exact Core
+commit recorded in `bridge.lock` and its example configurations; do not import them into Android.
 
-```text
-Android Remote → Go Edge → Go Home Connector → IPv4/IPv6 LAN targets
-                        ↘ authenticated direct QUIC ↗
-```
+Android device validation should instead cover:
 
-## Preparation
+- structured Native TLS and REALITY profiles;
+- dual-stack Full Tunnel routes and fixed VPN DNS;
+- structured Direct rules;
+- TUN ownership and socket protection;
+- Wi-Fi/cellular handover and lifecycle cleanup; and
+- rejection of `security=none`, ECH, and arbitrary Full Config JSON.
 
-1. Build `tcptun-go` at the locked commit with `make build`, and install the same binary on Edge
-   and Home.
-2. Start from `examples/reverse-subnet-p2p-edge.json`, `-home.json`, and `-remote.json` in that
-   checkout. Replace placeholders through a protected secret mechanism; never commit rendered
-   configs or paste them into the report.
-3. Import the Remote config as Full JSON on Android. Android always runs Full Tunnel, so both
-   ordinary Internet traffic and home-CIDR traffic enter the same TUN; use the Core/Edge compiled
-   route rules to send the home CIDRs to `reverse_subnet`. Keep `host_candidates: false` and omit
-   `strategy` (the v0.5.0 `balanced` default) for the first pass.
-4. Run TCP echo/HTTP and UDP echo targets on both LAN families. Run a DNS server reachable over
-   UDP and TCP 53.
-
-## Relay and ACL matrix
-
-Disable P2P on Remote and Home, then record PASS/FAIL with packet captures on Edge/Home:
-
-| Case | Expected |
-| --- | --- |
-| IPv4 TCP, IPv6 TCP | allowed flows reach the LAN target |
-| IPv4 UDP, IPv6 UDP | allowed fixed-destination flows reach the LAN target |
-| DNS UDP 53, DNS TCP 53 | allowed queries return through relay |
-| wrong principal | denied before target dial |
-| denied CIDR | denied |
-| denied TCP port / UDP port | denied |
-| loopback, multicast, special address, default-route attempt | denied |
-
-Test Edge policy and Home export policy independently, then their intersection. A denial must not
-be converted into a successful relay fallback.
-
-## Direct and fallback matrix
-
-Enable P2P on Remote and Home and configure Edge IPv4/IPv6 rendezvous. Confirm an allowed TCP flow
-and fixed-destination UDP flow use authenticated direct QUIC using Edge/Home evidence, not parsed
-Android log text. Then separately block rendezvous UDP, STUN, and candidate connectivity. Each
-direct failure must retain a working authorized relay path. Authorization, permit, and Home ACL
-failures must remain failures.
-
-After the balanced baseline, explicitly set `strategy: "aggressive"` on Remote and Home and repeat
-Direct, relay fallback, authorization-deny/no-fallback, Stop, and cleanup checks. Strategy changes
-Core-owned bounded traversal timing/prediction only; it must not change ACL or fallback security.
-
-## Handover and cleanup
-
-With a direct session active, perform Wi-Fi → cellular → Wi-Fi and open a new flow after each
-transition. Direct may be re-established or relay may be selected. Record Android Diagnostics,
-service/TUN ownership, Edge/Home connection state, and FD counts. Stop during direct activity and
-during reconnect; verify no stale TUN, native socket, Engine, callback, foreground notification,
-or deferred restart remains.
-
-## Evidence template
-
-```text
-tcptun-go commit:
-Android build/core build ID:
-device/API/ABI:
-Edge/Home/LAN topology:
-relay IPv4 TCP/UDP:
-relay IPv6 TCP/UDP:
-LAN DNS UDP/TCP:
-principal deny:
-CIDR/port/special-address deny:
-P2P direct TCP/fixed UDP:
-relay fallback:
-authorization failure cannot fallback:
-Wi-Fi/cellular handover:
-final resource state:
-```
-
-Use `NOT RUN` for every unexecuted row. Never infer a network PASS from config parsing, AAR
-`ValidateConfig`, or a lifecycle-only direct fixture.
+Record `NOT RUN` for every unexecuted device or network case. Configuration parsing and AAR
+validation do not constitute network evidence.

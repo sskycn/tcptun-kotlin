@@ -80,7 +80,7 @@ internal fun IpInformationPage(onBack: () -> Unit) {
         proxyRunning = runtimeUi.status == VpnStatus.Running,
     )
     val noneLabel = stringResource(R.string.none)
-    val proxyConfigurationLabel = stringResource(R.string.full_config_json)
+    val proxyConfigurationLabel = stringResource(R.string.proxy_configuration_json)
     val proxyConfigurationCopiedMessage = stringResource(R.string.proxy_configuration_copied)
     val proxyConfigurationCopyFailedMessage = stringResource(R.string.proxy_configuration_copy_failed)
     val emptyUsernameLabel = stringResource(R.string.empty_username)

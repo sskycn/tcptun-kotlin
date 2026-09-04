@@ -12,12 +12,11 @@ class PendingUiStateTest {
             id = "pending-profile",
             serverHost = "pending-secret.example",
             token = "pending-secret-token",
-            rawConfigJson = "{\"token\":\"pending-raw-secret\"}",
         )
 
         val operationId = requireNotNull(encodePendingProfile(profile))
 
-        listOf(profile.serverHost, profile.token, profile.rawConfigJson).forEach { marker ->
+        listOf(profile.serverHost, profile.token).forEach { marker ->
             assertFalse(operationId.contains(marker))
         }
         assertEquals(profile, decodePendingProfile(operationId))

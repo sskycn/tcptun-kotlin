@@ -31,8 +31,8 @@ networks.
 
 Upgrade an installation that previously stored Home-network Split Tunnel metadata and confirm it
 still reports Full Tunnel. The old route-plan preference must not restore a split route or prevent
-startup. With fake-IP enabled in Full JSON, application connections to both fake pools must return
-to the TUN through the default routes; Android must not install separate fake-IP platform routes.
+startup. Application connections to Core-managed fake-IP addresses must return to the TUN through
+the default routes; Android must not install separate fake-IP platform routes.
 
 Do not infer success from the route-plan JVM tests: record the device/emulator, the actual default
 routes, and packet/connectivity observations. If no Android target is available, report `NOT RUN`.

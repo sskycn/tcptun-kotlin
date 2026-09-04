@@ -28,13 +28,7 @@ class VpnCommandStoreAndroidTest {
             plan = ProfileRunPlan(listOf(profile), setOf(profile.id)),
             runtimeSettings = RuntimeSettings(
                 localProxyUsers = listOf(LocalProxyUser("", "command-secret-password")),
-                vpnRoutePlan = AndroidVpnRoutePlan.SplitTunnel(
-                    routes = listOf(
-                        IpPrefix.parse("192.168.50.0/24"),
-                        IpPrefix.parse("fd12:3456:789a::/64"),
-                    ),
-                    dnsServers = listOf("192.168.50.53", "fd12:3456:789a::53"),
-                ),
+                vpnRoutePlan = AndroidVpnRoutePlan.FullTunnel,
             ),
         )
 
@@ -55,7 +49,11 @@ class VpnCommandStoreAndroidTest {
         val secrets = CiphertextSecretStorage()
         val metadata = FakeMetadataStorage()
         val store = EncryptedVpnCommandStore(secrets, metadata, nowMillis = { now })
-        val profile = AppConfig(id = "stale-command-profile", serverHost = "127.0.0.1")
+        val profile = AppConfig(
+            id = "stale-command-profile",
+            serverHost = "127.0.0.1",
+            token = "stale-command-token",
+        )
         val commandId = store.publish(
             UpdateOutboundsCommandPayload(ProfileRunPlan(listOf(profile), setOf(profile.id))),
         )

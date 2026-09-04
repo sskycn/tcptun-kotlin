@@ -57,8 +57,6 @@ class ProfileSecretSerializationAndroidTest {
             realityPublicKey = "reality-key",
             realityShortId = "reality-short-id",
             realitySpiderX = "/private-spider",
-            echPublicKey = "ech-key",
-            rawConfigJson = "{\"token\":\"raw-secret\"}",
         )
 
         val public = profile.toPublicStorageJson().toString()
@@ -70,8 +68,6 @@ class ProfileSecretSerializationAndroidTest {
             "reality-key",
             "reality-short-id",
             "/private-spider",
-            "ech-key",
-            "raw-secret",
         ).forEach { secret -> assertFalse(public.contains(secret)) }
         assertEquals(profile, restored)
     }
@@ -104,6 +100,65 @@ class ProfileSecretSerializationAndroidTest {
             assertFalse(preferences.contains("token"))
             assertFalse(encryptedValues.any { it.contains("legacy-profile-token") })
             assertEquals(3, preferences.getInt("profileStateVersion", 0))
+        } finally {
+            preferences.edit().clear().commit()
+            ProfileStore.save(context, original).getOrThrow()
+        }
+    }
+
+    @Test
+    fun legacyConfidentialityMigrationDropsRawAndEchWithoutChangingStructuredProfiles() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val preferences = context.getSharedPreferences("tcptun", 0)
+        val original = ProfileStore.load(context)
+        val tls = AppConfig(
+            id = "legacy-tls",
+            name = "TLS",
+            serverHost = "tls.example.com",
+            token = "tls-token",
+        )
+        val reality = AppConfig(
+            id = "legacy-reality",
+            name = "REALITY",
+            serverHost = "reality.example.com",
+            token = "reality-token",
+            tls = false,
+            tunnelSecurity = "reality",
+            sni = "reality.example.com",
+            realityPublicKey = "BKZcJpZLNtpVnJcQ7kj6_y2IySMqgYlyjKq-M2OW_yY",
+            realityShortId = "a65f93c1",
+        )
+        val none = tls.copy(id = "legacy-none", name = "None", tls = false)
+        val raw = tls.copy(id = "legacy-raw", name = "Raw JSON").toJson()
+            .put("rawConfig" + "Json", "{\"outbounds\":[]}")
+        val ech = tls.copy(id = "legacy-ech", name = "ECH").toJson()
+            .put("echEnabled", true)
+            .put("echPublicName", "public.example.com")
+        val profiles = JSONArray()
+            .put(tls.toJson())
+            .put(reality.toJson())
+            .put(none.toJson())
+            .put(raw)
+            .put(ech)
+        val active = JSONArray(listOf(tls.id, reality.id, none.id, "legacy-raw", "legacy-ech"))
+
+        try {
+            preferences.edit().clear()
+                .putInt("profileStateVersion", 2)
+                .putString("profiles", profiles.toString())
+                .putString("activeProfileIds", active.toString())
+                .commit()
+
+            val migrated = ProfileStore.load(context)
+            val byId = migrated.profiles.associateBy(AppConfig::id)
+
+            assertEquals(setOf(tls.id, reality.id), byId.keys)
+            assertEquals(tls, byId.getValue(tls.id))
+            assertEquals(reality, byId.getValue(reality.id))
+            assertEquals(setOf(tls.id, reality.id), migrated.activeIds)
+            assertFalse(preferences.getString("profiles", "").orEmpty().contains(none.id))
+            assertFalse(preferences.getString("profiles", "").orEmpty().contains("legacy-raw"))
+            assertFalse(preferences.getString("profiles", "").orEmpty().contains("legacy-ech"))
         } finally {
             preferences.edit().clear().commit()
             ProfileStore.save(context, original).getOrThrow()

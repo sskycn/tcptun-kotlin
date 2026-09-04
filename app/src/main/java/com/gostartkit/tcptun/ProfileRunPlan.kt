@@ -28,11 +28,7 @@ data class ProfileRunPlan(
         require(profiles.map(AppConfig::id).distinct().size == profiles.size) { "configured profiles must be unique" }
         require(activeIds.isNotEmpty()) { "at least one profile must be running" }
         require(activeIds.all { activeId -> profiles.any { it.id == activeId } }) { "running profile is not configured" }
-        if (profiles.size > 1) {
-            require(profiles.none { it.rawConfigJson.isNotBlank() }) {
-                "full JSON profiles cannot run with other profiles"
-            }
-        }
+        validateAndroidVpnConfidentiality()
         profiles.forEach { profile ->
             profile.validate()?.let { throw IllegalArgumentException("${profile.name}: $it") }
         }
@@ -72,6 +68,14 @@ data class ProfileRunPlan(
     }
 }
 
+internal fun ProfileRunPlan.validateAndroidVpnConfidentiality() {
+    profiles.forEach { profile ->
+        profile.validateAndroidVpnConfidentiality()?.let { error ->
+            throw IllegalArgumentException("${profile.name}: $error")
+        }
+    }
+}
+
 internal fun profileOutboundTag(profileId: String): String {
     val digest = MessageDigest.getInstance("SHA-256").digest(profileId.encodeToByteArray())
     return "profile-" + digest.take(12).joinToString("") { byte -> "%02x".format(byte) }
@@ -87,29 +91,7 @@ internal fun normalizeDefaultOutboundSelection(value: String): String {
 }
 
 internal fun AppConfig.runtimeOutboundTag(): String {
-    if (rawConfigJson.isBlank()) return profileOutboundTag(id)
-
-    requireSafeJsonNesting(rawConfigJson)
-    val root = JSONObject(rawConfigJson)
-    val configuredDefault = root.optJSONObject("route")
-        ?.optString("default_outbound")
-        ?.trim()
-        .orEmpty()
-    if (configuredDefault.isNotBlank()) return configuredDefault
-
-    root.optJSONArray("inbounds")?.let { inbounds ->
-        for (index in 0 until inbounds.length()) {
-            val outbound = inbounds.optJSONObject(index)?.optString("outbound")?.trim().orEmpty()
-            if (outbound.isNotBlank()) return outbound
-        }
-    }
-    val firstOutbound = root.optJSONArray("outbounds")
-        ?.optJSONObject(0)
-        ?.optString("tag")
-        ?.trim()
-        .orEmpty()
-    require(firstOutbound.isNotBlank()) { "raw profile has no controllable outbound tag" }
-    return firstOutbound
+    return profileOutboundTag(id)
 }
 
 internal fun ProfileRunPlan.toBridgeJson(
@@ -123,19 +105,6 @@ internal fun ProfileRunPlan.toBridgeJson(
     defaultOutbound: String = DefaultOutboundDynamicPool,
 ): String {
     val plan = normalized()
-    val rawProfile = plan.profiles.singleOrNull()?.takeIf { it.rawConfigJson.isNotBlank() }
-    if (rawProfile != null) {
-        return rawProfile.toBridgeJson(
-            localListenAddr = localListenAddr,
-            localProxyProtocol = localProxyProtocol,
-            verbose = verbose,
-            logLevel = logLevel,
-            localProxyUsers = localProxyUsers,
-            managedRouteRules = managedRouteRules,
-            routeLocalProxyTraffic = routeLocalProxyTraffic,
-        )
-    }
-
     val tags = plan.profiles.associate { it.id to profileOutboundTag(it.id) }
     require(tags.values.distinct().size == tags.size) { "running profiles generated duplicate outbound tags" }
     val singleProfileRoots = plan.profiles.associate { profile ->
