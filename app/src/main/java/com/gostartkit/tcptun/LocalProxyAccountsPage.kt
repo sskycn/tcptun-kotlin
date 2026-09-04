@@ -6,13 +6,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardOptions
@@ -27,7 +25,6 @@ import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -91,6 +88,13 @@ internal fun LocalProxyAccountsPage(onBack: () -> Unit) {
         editingUserIndex = null
         editingUsername = ""
         editingPassword = ""
+        editingPasswordVisible = false
+    }
+
+    fun openAddAccountEditor() {
+        editingUserIndex = -1
+        editingUsername = ""
+        editingPassword = generateLanProxyPassword()
         editingPasswordVisible = false
     }
 
@@ -231,7 +235,13 @@ internal fun LocalProxyAccountsPage(onBack: () -> Unit) {
     val settings = authoritativeSettings?.settings ?: return
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        topBar = { LocalProxyAccountsTopBar(onBack = ::leavePage) },
+        topBar = {
+            LocalProxyAccountsTopBar(
+                onBack = ::leavePage,
+                addEnabled = !saving && settings.localProxyUsers.size < MaxLocalProxyUsers,
+                onAdd = ::openAddAccountEditor,
+            )
+        },
         snackbarHost = { AutoDismissSnackbarHost(snackbarHostState) },
     ) { padding ->
         PullRefreshContainer(
@@ -255,15 +265,7 @@ internal fun LocalProxyAccountsPage(onBack: () -> Unit) {
             ) {
                 if (settings.localProxyUsers.isEmpty()) {
                     item {
-                        LocalProxyAccountsEmptyState(
-                            enabled = !saving,
-                            onAdd = {
-                                editingUserIndex = -1
-                                editingUsername = ""
-                                editingPassword = generateLanProxyPassword()
-                                editingPasswordVisible = false
-                            },
-                        )
+                        LocalProxyAccountsEmptyState()
                     }
                 }
                 itemsIndexed(settings.localProxyUsers) { index, user ->
@@ -289,24 +291,6 @@ internal fun LocalProxyAccountsPage(onBack: () -> Unit) {
                             }
                         },
                     )
-                }
-                if (settings.localProxyUsers.isNotEmpty()) {
-                    item {
-                        FilledTonalButton(
-                            onClick = {
-                                editingUserIndex = -1
-                                editingUsername = ""
-                                editingPassword = generateLanProxyPassword()
-                                editingPasswordVisible = false
-                            },
-                            enabled = !saving && settings.localProxyUsers.size < MaxLocalProxyUsers,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Icon(Icons.Rounded.Add, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text(stringResource(R.string.add_account))
-                        }
-                    }
                 }
                 if (settings.localProxyUsers.size >= MaxLocalProxyUsers) {
                     item {
@@ -411,18 +395,29 @@ internal fun LocalProxyAccountsPage(onBack: () -> Unit) {
 }
 
 @Composable
-private fun LocalProxyAccountsTopBar(onBack: () -> Unit) {
+private fun LocalProxyAccountsTopBar(
+    onBack: () -> Unit,
+    addEnabled: Boolean = false,
+    onAdd: (() -> Unit)? = null,
+) {
     AppTopBar(
         title = stringResource(R.string.proxy_accounts),
         onBack = onBack,
+        actions = {
+            onAdd?.let {
+                IconButton(onClick = it, enabled = addEnabled) {
+                    Icon(
+                        Icons.Rounded.Add,
+                        contentDescription = stringResource(R.string.add_account),
+                    )
+                }
+            }
+        },
     )
 }
 
 @Composable
-private fun LocalProxyAccountsEmptyState(
-    enabled: Boolean,
-    onAdd: () -> Unit,
-) {
+private fun LocalProxyAccountsEmptyState() {
     val colors = MaterialTheme.colorScheme
     Column(
         modifier = Modifier
@@ -449,9 +444,6 @@ private fun LocalProxyAccountsEmptyState(
             color = colors.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
-        FilledTonalButton(onClick = onAdd, enabled = enabled) {
-            Text(stringResource(R.string.add_account))
-        }
     }
 }
 
@@ -482,9 +474,13 @@ private fun LocalProxyAccountRow(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 88.dp)
-                        .clickable(enabled = enabled) {
-                            if (actionsRevealed) closeActions() else onEdit()
-                        }
+                        .then(
+                            if (actionsRevealed) {
+                                Modifier.clickable(enabled = enabled, onClick = closeActions)
+                            } else {
+                                Modifier
+                            },
+                        )
                         .testTag(localProxyAccountRowTestTag(index))
                         .padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,

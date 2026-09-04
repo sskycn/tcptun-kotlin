@@ -1,5 +1,6 @@
 package com.tcptun.client
 
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
@@ -57,7 +58,7 @@ class LocalProxyAccountsUiTest {
         composeRule.onNodeWithText("alice").assertIsDisplayed()
         composeRule.onNodeWithText("••••••••").assertDoesNotExist()
         composeRule.onNodeWithContentDescription(activity.getString(R.string.scan_qr_code)).assertDoesNotExist()
-        composeRule.onNodeWithText(activity.getString(R.string.add_account)).performClick()
+        composeRule.onNodeWithContentDescription(activity.getString(R.string.add_account)).performClick()
         composeRule.onNodeWithText(activity.getString(R.string.socks_username)).performTextInput("bob")
         composeRule.onNodeWithText(activity.getString(R.string.save)).performClick()
 
@@ -72,13 +73,13 @@ class LocalProxyAccountsUiTest {
     }
 
     @Test
-    fun accountRowClickOpensEditor() {
+    fun accountRowClickDoesNotOpenEditor() {
         val activity = composeRule.activity
         openProxyAccounts()
 
-        composeRule.onNodeWithTag(localProxyAccountRowTestTag(0)).performClick()
-        composeRule.onNodeWithText(activity.getString(R.string.edit_account)).assertIsDisplayed()
-        composeRule.onNodeWithText(activity.getString(R.string.socks_username)).assertIsDisplayed()
+        composeRule.onNodeWithTag(localProxyAccountRowTestTag(0)).assertHasNoClickAction()
+        composeRule.onNodeWithText(activity.getString(R.string.edit_account)).assertDoesNotExist()
+        composeRule.onNodeWithText(activity.getString(R.string.socks_username)).assertDoesNotExist()
     }
 
     @Test
