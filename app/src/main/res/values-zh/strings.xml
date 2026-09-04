@@ -227,10 +227,6 @@
     <string name="proxy_account_qr_code_description">代理账号 %1$s 的二维码</string>
     <string name="proxy_account_qr_code_failed">无法为该代理账号生成二维码。</string>
     <string name="proxy_account_bearer_secret_warning">此二维码或分享码包含代理账号密码，请仅分享给可信设备或人员。</string>
-    <string name="proxy_account_share_code">代理账号分享码</string>
-    <string name="copy_share_code">复制分享码</string>
-    <string name="proxy_account_share_code_copied">分享码已复制</string>
-    <string name="proxy_account_share_code_copy_failed">无法复制分享码。</string>
     <string name="share_proxy_account">分享代理账号</string>
     <string name="share_proxy_account_failed">无法分享该代理账号。</string>
     <string name="proxy_account_share_confirmation">分享账号“%1$s”？分享内容包含该账号的密码。</string>

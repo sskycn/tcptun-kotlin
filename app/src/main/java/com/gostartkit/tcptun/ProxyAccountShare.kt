@@ -4,25 +4,19 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.QrCode2
-import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -94,8 +88,6 @@ internal fun ProxyAccountShareConfirmationDialog(
 internal fun ProxyAccountQrCodeDialog(
     account: LocalProxyUser,
     onDismiss: () -> Unit,
-    onCopy: () -> Unit,
-    onShare: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
     val bitmapResult by produceState<Result<Bitmap>?>(initialValue = null, account) {
@@ -199,23 +191,8 @@ internal fun ProxyAccountQrCodeDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.error,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(top = 16.dp, bottom = 20.dp),
+                    modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    FilledTonalButton(onClick = onCopy, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Rounded.ContentCopy, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(stringResource(R.string.copy_share_code))
-                    }
-                    FilledTonalButton(onClick = onShare, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Rounded.Share, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(stringResource(R.string.share))
-                    }
-                }
                 TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.close))
                 }

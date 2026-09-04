@@ -106,7 +106,7 @@ class LocalProxyAccountsUiTest {
         composeRule.onNodeWithContentDescription(
             activity.getString(R.string.proxy_account_qr_code_description, "alice"),
         ).assertIsDisplayed()
-        composeRule.onNodeWithText(activity.getString(R.string.copy_share_code)).assertIsDisplayed()
+        composeRule.onNodeWithText(activity.getString(R.string.share)).assertDoesNotExist()
         composeRule.onNodeWithText(activity.getString(R.string.close)).performClick()
 
         composeRule.onAllNodesWithContentDescription(activity.getString(R.string.show_qr_code))[1].performClick()

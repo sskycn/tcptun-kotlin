@@ -67,9 +67,6 @@ internal fun LocalProxyAccountsPage(onBack: () -> Unit) {
     val snackbarHostState = remember { SnackbarHostState() }
     val saveFailedMessage = stringResource(R.string.proxy_accounts_save_failed)
     val accountRequiredMessage = stringResource(R.string.proxy_account_required_for_lan)
-    val shareCodeCopiedMessage = stringResource(R.string.proxy_account_share_code_copied)
-    val shareCodeCopyFailedMessage = stringResource(R.string.proxy_account_share_code_copy_failed)
-    val shareCodeClipboardLabel = stringResource(R.string.proxy_account_share_code)
     val shareFailedMessage = stringResource(R.string.share_proxy_account_failed)
     var authoritativeSettings by remember { mutableStateOf<RuntimeSettingsRead.Success?>(null) }
     var settingsUnavailable by remember { mutableStateOf<RuntimeSettingsRead.Unavailable?>(null) }
@@ -105,23 +102,6 @@ internal fun LocalProxyAccountsPage(onBack: () -> Unit) {
         qrUser = null
         sharingUser = null
         onBack()
-    }
-
-    fun copyShareCode(user: LocalProxyUser) {
-        scope.launch {
-            val copied = runRecoverableCatching {
-                val payload = withContext(Dispatchers.Default) { LocalProxyAccountCodec.encode(user) }
-                copyTextToClipboard(
-                    context = context,
-                    label = shareCodeClipboardLabel,
-                    text = payload,
-                    sensitive = true,
-                )
-            }.getOrDefault(false)
-            snackbarHostState.showDismissibleSnackbar(
-                if (copied) shareCodeCopiedMessage else shareCodeCopyFailedMessage,
-            )
-        }
     }
 
     fun shareConfirmed(user: LocalProxyUser) {
@@ -374,14 +354,6 @@ internal fun LocalProxyAccountsPage(onBack: () -> Unit) {
         ProxyAccountQrCodeDialog(
             account = user,
             onDismiss = { qrUser = null },
-            onCopy = {
-                qrUser = null
-                copyShareCode(user)
-            },
-            onShare = {
-                qrUser = null
-                sharingUser = user
-            },
         )
     }
 

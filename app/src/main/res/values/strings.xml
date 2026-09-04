@@ -230,10 +230,6 @@
     <string name="proxy_account_qr_code_description">Proxy account QR code for %1$s</string>
     <string name="proxy_account_qr_code_failed">This proxy account could not be turned into a QR code.</string>
     <string name="proxy_account_bearer_secret_warning">This QR code or share code contains the proxy account password. Only share it with trusted devices or people.</string>
-    <string name="proxy_account_share_code">Proxy account share code</string>
-    <string name="copy_share_code">Copy code</string>
-    <string name="proxy_account_share_code_copied">Share code copied</string>
-    <string name="proxy_account_share_code_copy_failed">The share code could not be copied.</string>
     <string name="share_proxy_account">Share proxy account</string>
     <string name="share_proxy_account_failed">The proxy account could not be shared.</string>
     <string name="proxy_account_share_confirmation">Share account “%1$s”? The share content includes its password.</string>
