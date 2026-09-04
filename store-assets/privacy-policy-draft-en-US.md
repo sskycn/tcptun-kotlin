@@ -1,14 +1,14 @@
 # TcpTun Privacy Policy
 
-Effective date: 2026-08-04
+Effective date: 2026-09-04
 
-> Before publication, replace the operator name and email in Section 1 with real information and publish this policy on a publicly accessible HTTPS page. This policy describes the TcpTun Android client only; the remote endpoints configured by users are not provided or operated by the policy operator.
+This policy describes the TcpTun Android client only. Remote endpoints configured by users are not provided or operated by the TcpTun project.
 
 ## 1. Operator and contact
 
-TcpTun is operated by `<legal developer or company name>`.
+The Android app is published under the developer identity shown on its Google Play listing and maintained by the TcpTun open-source project.
 
-Privacy contact: `<privacy@example.com>`
+Privacy inquiries: [TcpTun GitHub issues](https://github.com/sskycn/tcptun/issues). Do not include passwords, tokens, private profiles, or other secrets in a public issue.
 
 ## 2. What the app is
 
@@ -40,7 +40,7 @@ To provide its features, the app may process the following data only on the Andr
 - Profile text or profile links read when the user explicitly taps “Import from clipboard.” After a successful import, the app attempts to clear clipboard text that still matches the imported value;
 - Camera preview frames while the user opens the QR scanner. The frames are used to recognize a profile QR code on the device; the current app code contains no path that uploads camera frames to a TcpTun operator server.
 
-Profiles, routing rules, and some runtime settings are stored in the app-private Android `SharedPreferences` files. The current code does not separately encrypt these local credentials, so users should protect their device and profile files. Runtime logs and traffic-analysis events are primarily held in app memory. Before logs are shown in the app or written to visible Android Logcat while the UI is visible, sensitive fields are redacted. The app has no feature that uploads these items to an operator server.
+Non-secret profile fields, routing rules, and some runtime settings are stored in app-private Android `SharedPreferences`. Profile credentials are stored separately with AES-256-GCM encryption using a key protected by Android Keystore. Users should still protect their device and exported or shared profile data. Runtime logs and traffic-analysis events are primarily held in app memory. Before logs are shown in the app or written to visible Android Logcat while the UI is visible, sensitive fields are redacted. The app has no feature that uploads these items to an operator server.
 
 ## 5. VPN traffic, diagnostic connections, and third-party endpoints
 
@@ -50,7 +50,7 @@ When VPN mode is enabled, device traffic is sent to the remote endpoint selected
 
 The TcpTun operator does not own or operate these endpoints and does not receive endpoint traffic, account credentials, or server logs through TcpTun. A remote endpoint operator may see or retain connection time, source IP, destination information, traffic metadata, and content that is not protected by end-to-end encryption. What is visible, whether it is logged, and how long it is retained depend on the endpoint, the transport configuration, and the endpoint operator. Use only endpoints you trust and review their separate privacy policies.
 
-TcpTun does not guarantee that a user-provided profile is secure. The security of VLESS, VMess, Trojan, or native profiles depends on the selected transport, TLS/Reality and other parameters, and the remote endpoint configuration.
+TcpTun does not guarantee that a user-provided profile or endpoint is secure. Version 0.5.0 requires an encrypted TLS or REALITY tunnel for Android VPN profiles; overall security still depends on the profile parameters, device, and remote endpoint configuration.
 
 ### 5.2 Connectivity checks performed by the app
 
@@ -91,7 +91,7 @@ TcpTun is a general-purpose network tool and is not directed to children. We do 
 
 ## 10. Security statement
 
-The app uses Android app-private storage for local settings, but the current code does not separately encrypt credentials in profiles. Users should use trusted devices, endpoints, and transport settings, and should not share private profile data. No network tool can guarantee absolute security if the device, endpoint, or transport configuration is compromised.
+The app uses Android app-private storage for local settings and Android Keystore-backed AES-256-GCM encryption for stored profile credentials. Users should use trusted devices, endpoints, and transport settings, and should not share private profile data. No network tool can guarantee absolute security if the device, endpoint, or transport configuration is compromised.
 
 ## 11. Changes to this policy
 
@@ -99,4 +99,4 @@ We will update this page and its effective date when this policy changes. If a c
 
 ## 12. Contact
 
-For questions about this policy or TcpTun’s data practices, email `<privacy@example.com>`.
+For questions about this policy or TcpTun’s data practices, use the contact mechanism in Section 1. Do not post secrets in a public issue.

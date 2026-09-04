@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: gostartkit/tcptun-go
-          ref: c4959ca9edf4ecfcdd6370eb058615c8ad7c7ab6
+          ref: b454f9892a0d978c6ed5d2f6e05ab5989e995c26
           path: .ci/tcptun-go
           token: ${{ secrets.TCPTUN_GO_READ_TOKEN }}
           persist-credentials: false

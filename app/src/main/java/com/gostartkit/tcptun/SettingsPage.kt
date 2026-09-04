@@ -71,6 +71,7 @@ import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Lan
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.PrivacyTip
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Share
@@ -548,6 +549,38 @@ internal fun SettingsPage(
                             selectedDefaultOutboundLabel,
                         )
                         DiagnosticsLine(stringResource(R.string.vpn_traffic_mode), stringResource(R.string.tcp_udp))
+                    }
+                }
+            }
+            item {
+                SettingsCard {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        SectionTitle(
+                            icon = Icons.Rounded.PrivacyTip,
+                            title = stringResource(R.string.privacy_and_vpn),
+                        )
+                        Text(
+                            text = stringResource(R.string.privacy_policy_summary),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        val privacyPolicyOpenFailed = stringResource(R.string.privacy_policy_open_failed)
+                        TextButton(
+                            onClick = {
+                                openPrivacyPolicy(context).onFailure {
+                                    settingsScope.launch {
+                                        settingsSnackbarHostState.showDismissibleSnackbar(
+                                            privacyPolicyOpenFailed,
+                                        )
+                                    }
+                                }
+                            },
+                        ) {
+                            Text(stringResource(R.string.open_privacy_policy))
+                        }
                     }
                 }
             }

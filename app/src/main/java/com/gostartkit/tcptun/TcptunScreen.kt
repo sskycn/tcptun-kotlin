@@ -199,6 +199,9 @@ internal fun TcptunScreen(
     var pendingNotificationConfig by rememberSaveable(stateSaver = PendingRunPlanSaver) {
         mutableStateOf<ProfileRunPlan?>(null)
     }
+    var pendingDisclosureConfig by rememberSaveable(stateSaver = PendingRunPlanSaver) {
+        mutableStateOf<ProfileRunPlan?>(null)
+    }
     var editingProfile by rememberSaveable(stateSaver = PendingProfileSaver) {
         mutableStateOf<AppConfig?>(null)
     }
@@ -545,7 +548,7 @@ internal fun TcptunScreen(
         }
     }
 
-    fun launchPlan(plan: ProfileRunPlan) {
+    fun continueVpnLaunch(plan: ProfileRunPlan) {
         TcptunState.clearLogs()
         if (needsNotificationPermission(context)) {
             pendingNotificationConfig = plan
@@ -581,6 +584,14 @@ internal fun TcptunScreen(
                 )
             },
         )
+    }
+
+    fun launchPlan(plan: ProfileRunPlan) {
+        if (!hasAcceptedCurrentVpnDisclosure(appContext)) {
+            pendingDisclosureConfig = plan
+            return
+        }
+        continueVpnLaunch(plan)
     }
 
     suspend fun applyRunningMutation(
@@ -1042,6 +1053,36 @@ internal fun TcptunScreen(
 
     if (showLogs) {
         LogsDialog(onDismiss = { showLogs = false })
+    }
+
+    pendingDisclosureConfig?.let { plan ->
+        VpnDisclosureDialog(
+            onAccept = {
+                if (acceptCurrentVpnDisclosure(appContext)) {
+                    pendingDisclosureConfig = null
+                    continueVpnLaunch(plan)
+                } else {
+                    reportUiError(resources.getString(R.string.vpn_disclosure_save_failed))
+                }
+            },
+            onDecline = {
+                pendingDisclosureConfig = null
+                appContext.tcptunApplication().vpnPlanCommandScope.launch {
+                    runRecoverableCatching {
+                        rollbackInitialStartAfterDispatchFailure(appContext, plan)
+                    }.onFailure { error ->
+                        TcptunState.appendLog(
+                            "VPN disclosure decline rollback failed: ${failureDescription(error)}",
+                        )
+                    }
+                }
+            },
+            onOpenPrivacyPolicy = {
+                openPrivacyPolicy(context).onFailure {
+                    reportUiError(resources.getString(R.string.privacy_policy_open_failed))
+                }
+            },
+        )
     }
 
     profileQrCode?.let { profile ->

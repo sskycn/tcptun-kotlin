@@ -23,10 +23,12 @@
 - `play-console-policy-draft-en-US.md`：英文 Play Console / VPN / Data safety 填写辅助稿
 - `release-notes-v0.2.51-zh-CN.md`：v0.2.51 中文更新说明
 - `release-notes-v0.2.51-en-US.md`：v0.2.51 英文更新说明
+- `release-notes-v0.5.0-zh-CN.md`：v0.5.0 中文更新说明
+- `release-notes-v0.5.0-en-US.md`：v0.5.0 英文更新说明
 
 ## 注意事项
 
-1. 隐私政策中的开发者名称和联系邮箱必须替换成真实信息，并通过 HTTPS 公开访问；当前项目没有现成的应用内隐私政策链接入口。
+1. 公开隐私政策地址为 `https://tcptun.com/privacy/`；提交前必须部署本目录中的最新文案，并确认开发者身份和联系方式与 Play 商店页一致。应用已在首次 VPN 披露和设置页提供链接。
 2. TcpTun 不经营任何服务端。政策和商店文案已区分“开发者不收集”与“用户流量会发送到用户配置的远端节点”，不能笼统写成“网络完全不传输数据”。
 3. 当前代码包含 Google/Cloudflare 连通性探测，以及用户主动触发的 Google/GitHub/Cloudflare TCPing；这些行为已在政策和提交辅助稿中披露。
 4. Data safety 仍需在 Play Console 按最终 Release AAB 逐项填写，特别是第三方远端节点和诊断目标的网络处理，不要只复制“无开发者收集”。

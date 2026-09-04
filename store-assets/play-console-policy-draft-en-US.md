@@ -93,22 +93,15 @@ The current manifest does not request location, contacts, SMS, call-log, or stor
 
 Google Play’s VPN rules require an in-app prominent disclosure when `VpnService` accesses or collects personal or sensitive data. The disclosure must appear in the normal usage flow, explain how the data is used/shared, and obtain affirmative user consent. A privacy policy or store description alone is not a substitute.
 
-Suggested first-run disclosure (use as a separate card or dialog, not only in Settings):
+Implemented first-run disclosure (shown as a separate Material 3 dialog, not only in Settings):
 
-> TcpTun uses Android VPN to send your device’s network traffic, according to the selected profile, to a remote endpoint that you provide or choose. The TcpTun operator does not operate these endpoints and does not receive your traffic from the app; the endpoint operator may see or retain connection information under its own policy. TcpTun may also perform Google/Cloudflare connectivity probes through the current outbound connection. Use only endpoints you trust. Continuing to start the VPN means you understand and agree to this network-forwarding behavior.
+> TcpTun uses Android VpnService to access and route your device’s network traffic, including connection destinations and traffic content. Traffic is sent through an encrypted tunnel to the remote endpoint you choose. TcpTun does not operate these endpoints or receive your traffic, but the endpoint operator may see or retain connection information under its own policy. TcpTun may also perform Google and Cloudflare connectivity checks through the current connection. Use only endpoints you trust.
 
-Only after the user taps “Continue and start VPN” should the app request Android VPN permission and start the service. Keep a recording of this flow for the VPN declaration review video.
+Only after the user taps “Agree and continue” does the app save versioned consent, request Android VPN permission, and start the service. “Not now,” Back, and outside dismissal cancel the pending start. Keep a recording of this flow for the VPN declaration review video.
 
 ## 7. Privacy-policy URL
 
-Before publishing:
-
-1. Replace the legal operator name and real privacy email in the privacy policy;
-2. Publish the Chinese or English version at a public HTTPS URL;
-3. Enter that URL in Play Console under App content / Privacy policy;
-4. Make sure the URL requires no sign-in, remains available, and matches the final Release build.
-
-The current client code does not contain an existing privacy-policy page or link entry. If Play review requires an in-app accessible link, add one before release.
+The public privacy-policy URL is `https://tcptun.com/privacy/`. Before submission, deploy the updated repository policy text there, enter the URL in Play Console under App content / Privacy policy, and verify that it requires no sign-in and matches the final Release build. The app exposes this URL from the disclosure dialog and Settings.
 
 ## 8. Final release checks
 
@@ -117,6 +110,6 @@ The current client code does not contain an existing privacy-policy page or link
 - Traffic from the device to the VPN tunnel endpoint meets Google Play’s encryption requirement; if a “native” profile is unencrypted, do not use it as the default review path;
 - An in-app prominent disclosure, affirmative consent, and a no-consent/no-start path are implemented before VPN permission is requested;
 - Prepare a review video no longer than 90 seconds showing app launch, disclosure/consent, VPN permission, VPN start, and VPN stop;
-- The operator name, privacy email, and HTTPS policy URL have been replaced;
+- The developer identity, privacy contact mechanism, and HTTPS policy URL match the Play listing;
 - Complete every Data safety field for the final AAB instead of copying only “no developer collection”;
 - The VPN declaration clearly says that the app is a client tool and does not operate VPN servers.

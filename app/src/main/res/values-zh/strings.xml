@@ -336,4 +336,14 @@
     <string name="diag_bridge_commit">锁定 Core 提交</string>
     <string name="diag_route_counts">VPN 路由数量</string>
     <string name="diag_dns_routes">VPN DNS 路由</string>
+    <string name="vpn_disclosure_title">启动 VPN 前请确认</string>
+    <string name="vpn_disclosure_body">TcpTun 使用 Android VpnService 访问并转发你设备的网络流量，包括连接目标和流量内容。流量会通过加密隧道发送到你选择的远端节点。TcpTun 不运营这些节点，也不会接收你的流量；节点运营者可能按其政策查看或保存连接信息。TcpTun 还可能通过当前连接执行 Google 和 Cloudflare 连通性探测。请仅使用你信任的节点。</string>
+    <string name="vpn_disclosure_accept">同意并继续</string>
+    <string name="vpn_disclosure_decline">暂不</string>
+    <string name="vpn_disclosure_save_failed">无法保存你的同意记录，VPN 未启动。</string>
+    <string name="privacy_policy">隐私政策</string>
+    <string name="privacy_and_vpn">隐私与 VPN</string>
+    <string name="privacy_policy_summary">了解 TcpTun 如何处理本地配置、加密凭据、VPN 流量、远端节点和连通性探测。</string>
+    <string name="open_privacy_policy">打开隐私政策</string>
+    <string name="privacy_policy_open_failed">无法打开隐私政策。</string>
 </resources>

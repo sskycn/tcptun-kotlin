@@ -339,4 +339,14 @@
     <string name="diag_bridge_commit">Locked core commit</string>
     <string name="diag_route_counts">VPN route counts</string>
     <string name="diag_dns_routes">VPN DNS routes</string>
+    <string name="vpn_disclosure_title">Before you start the VPN</string>
+    <string name="vpn_disclosure_body">TcpTun uses Android VpnService to access and route your device’s network traffic, including connection destinations and traffic content. Traffic is sent through an encrypted tunnel to the remote endpoint you choose. TcpTun does not operate these endpoints or receive your traffic, but the endpoint operator may see or retain connection information under its own policy. TcpTun may also perform Google and Cloudflare connectivity checks through the current connection. Use only endpoints you trust.</string>
+    <string name="vpn_disclosure_accept">Agree and continue</string>
+    <string name="vpn_disclosure_decline">Not now</string>
+    <string name="vpn_disclosure_save_failed">Your consent could not be saved. The VPN was not started.</string>
+    <string name="privacy_policy">Privacy policy</string>
+    <string name="privacy_and_vpn">Privacy and VPN</string>
+    <string name="privacy_policy_summary">Learn how TcpTun handles local profiles, encrypted credentials, VPN traffic, remote endpoints, and connectivity checks.</string>
+    <string name="open_privacy_policy">Open privacy policy</string>
+    <string name="privacy_policy_open_failed">The privacy policy could not be opened.</string>
 </resources>

@@ -35,21 +35,18 @@ Features:
 • VPN, underlying-network, outbound-health, connection, and Go-core diagnostics
 • TCPing tests, in-app runtime logs, reconnect recovery, and Chinese/English UI
 
-TcpTun does not start an imported profile automatically. The user must select a profile and confirm Android's VPN permission prompt before a connection starts.
+TcpTun does not start an imported profile automatically. The user must select a profile, accept the in-app VPN data disclosure, and confirm Android's VPN permission prompt before a connection starts.
 
 When VPN mode is used, device traffic is sent to the remote service selected in the profile. Use only servers you trust, and review the server operator's privacy policy, logging practices, and transport configuration.
 
 While running, the app may use the current outbound connection for lightweight connectivity probes to Google and Cloudflare. When the user starts TCPing diagnostics, it tests port 443 on Google, GitHub, and Cloudflare. These requests are for connectivity diagnostics and are not sent to the TcpTun operator, but the selected endpoint and target sites may process connection metadata under their own policies.
 
-## What's new in v0.2.51
+## What's new in v0.5.0
 
-Initial release of TcpTun:
-
-• Manage profiles with manual, clipboard, QR, and system-link import, plus QR sharing
-• Structured native tcptun-go profiles with TLS or REALITY encryption
-• Android VPN transparent proxy for TCP/UDP, IPv4/IPv6, DNS, and fake-IP
-• Local SOCKS5/mixed proxy and routing by domains, IPs, CIDR, ranges, and apps
-• Dynamic outbounds, runtime switching, traffic analysis, rule generation, TCPing, health diagnostics, logs, recovery, and Chinese/English UI
+• Requires TLS or REALITY encryption for Android VPN profiles
+• Adds adaptive TCP/QUIC carriers and resumable Mux sessions
+• Adds home-network split tunneling and improved IPv4/IPv6 diagnostics
+• Improves local proxy accounts, connection recovery, and reliability
 
 ## App access / reviewer instructions
 
@@ -57,7 +54,7 @@ The app does not require an account, sign-in, registration, or subscription. Use
 
 1. Install and open TcpTun.
 2. Import the review-only test profile from a QR code or the clipboard.
-3. Tap the profile and confirm Android's VPN permission prompt.
+3. Tap the profile, review and accept the in-app VPN disclosure, then confirm Android's VPN permission prompt.
 4. Verify the VPN status, local proxy address, and basic connectivity.
 5. Open Diagnostics from the top-right menu to inspect VPN, network, and Go-core status.
 
@@ -84,6 +81,4 @@ This is a repository-based submission aid, not a replacement for the Play Consol
 
 ## Privacy policy URL
 
-After publishing the formal policy based on `privacy-policy-draft-en-US.md`, record the final URL here:
-
-`https://<your-domain>/privacy/tcptun-en-US`
+Public privacy policy URL: `https://tcptun.com/privacy/`
