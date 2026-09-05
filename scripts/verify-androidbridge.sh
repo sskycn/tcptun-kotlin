@@ -7,17 +7,30 @@ LOCK_FILE="${3:?bridge.lock path is required}"
 ASSERTED_COMMIT="${4:-}"
 
 reject() {
-  if [ "$MODE" = "strict" ]; then
-    printf 'Bridge verification failed: %s\n' "$*" >&2
-    exit 1
-  fi
-  printf 'WARNING: %s\n' "$*" >&2
-  exit 0
+  printf 'Bridge verification failed: %s\n' "$*" >&2
+  exit 1
 }
 
-[ -f "$AAR" ] || reject "androidbridge.aar is missing; run ./scripts/build-androidbridge.sh"
+[ "$MODE" = "strict" ] || reject "unsupported verification mode: $MODE"
+[ -f "$AAR" ] || reject "bundled androidbridge.aar is missing; restore app/libs/androidbridge.aar from Git"
 [ -f "$LOCK_FILE" ] || reject "bridge.lock is missing"
 command -v unzip >/dev/null 2>&1 || reject "unzip is required to verify androidbridge.aar"
+unzip -tqq "$AAR" >/dev/null 2>&1 || reject "androidbridge.aar is not a valid, intact ZIP archive"
+
+if ! AAR_ENTRIES="$(unzip -Z1 "$AAR" 2>/dev/null)"; then
+  reject "androidbridge.aar entries cannot be read"
+fi
+
+require_entry() {
+  printf '%s\n' "$AAR_ENTRIES" | grep -Fx "$1" >/dev/null || \
+    reject "androidbridge.aar is missing required entry $1"
+}
+
+require_entry classes.jar
+require_entry jni/armeabi-v7a/libgojni.so
+require_entry jni/arm64-v8a/libgojni.so
+require_entry jni/x86_64/libgojni.so
+require_entry bridge-version.properties
 
 lock_property() {
   local key="$1"

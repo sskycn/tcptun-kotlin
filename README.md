@@ -2,8 +2,8 @@
 
 Android VPN client for [sskycn/tcptun](https://github.com/sskycn/tcptun). The app owns the
 Android `VpnService`, TUN lifecycle, local SOCKS5/mixed listener, profile persistence, and
-Compose UI. The protocol core is provided by the generated `androidbridge.aar` from the
-neighboring `tcptun-go` checkout.
+Compose UI. The protocol core is provided by the version-controlled
+`app/libs/androidbridge.aar` bundled with this repository.
 
 ```text
 Android apps -> VpnService TUN -> tcptun-go native TUN inbound -> selected outbound
@@ -25,20 +25,25 @@ Local clients -> SOCKS5/mixed listener ------------------------> selected outbou
 
 ## Build
 
-Build the bridge when the neighboring Go checkout is available:
+The repository contains the locked Bridge binary, so ordinary Android development does not
+require a neighboring `tcptun-go` checkout, Go, or gomobile:
 
 ```bash
-./scripts/build-androidbridge.sh
-# or: TCPTUN_GO_DIR=/path/to/tcptun-go ./scripts/build-androidbridge.sh
+git clone https://github.com/sskycn/tcptun-kotlin.git
+cd tcptun-kotlin
 ./gradlew :app:assembleDebug
 ```
+
+`bridge.lock` pins the tcptun-go core commit and Bridge API version. The AAR's embedded
+`bridge-version.properties` records the actual build provenance, and Gradle strictly verifies
+that the two agree before build, test, lint, and release tasks.
 
 The default Android ABIs are `armeabi-v7a`, `arm64-v8a`, and `x86_64`. Debug builds use
 `com.tcptun.client.debug` and can coexist with a release installation.
 
 ## Quick start
 
-1. Build/install the bridge and debug APK.
+1. Build/install the debug APK.
 2. Add or import a profile.
 3. Tap a profile and approve the Android VPN prompt.
 4. Open the diagnostics page to inspect runtime state and recent logs.
@@ -61,9 +66,14 @@ See [docs/device-testing.md](docs/device-testing.md) for repeatable device valid
 
 ## Links
 
-- Go core: `../tcptun-go` locally, or the project repository configured by the release build.
-- Bridge wrapper: `scripts/build-androidbridge.sh`.
+- Bundled Bridge: `app/libs/androidbridge.aar`.
+- Bridge update tool for maintainers: `scripts/build-androidbridge.sh`.
 - Release entry point: `make publish VERSION=vX.Y.Z`.
+
+Updating the Bridge is a deliberate maintenance operation: choose a tcptun-go commit, update
+`bridge.lock`, build from a clean checkout at that exact commit, verify the embedded metadata,
+and review/commit `bridge.lock` and `app/libs/androidbridge.aar` together. Normal Gradle builds,
+CI, and the formal app release workflow never regenerate it.
 
 ## tcptun-go authentication
 

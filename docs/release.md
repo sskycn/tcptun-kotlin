@@ -12,12 +12,11 @@ It runs `testDebugUnitTest`, `lintDebug`, `lintRelease`,
 `compileDebugAndroidTestKotlin`, and `maintainabilityCheck`. Unit tests include the
 offline Java ABI contract for the checked-in `androidbridge.aar`.
 
-Strict Bridge provenance is deliberately separate because a formal release also
-requires a clean, pinned sibling `tcptun-go` checkout:
+The checked-in AAR is a reviewed release input. Strict provenance verification compares its
+embedded `bridge-version.properties` with `bridge.lock` and runs as part of the quality gate as
+well as release artifact tasks:
 
 ```bash
-./scripts/build-androidbridge.sh --verify-release
-./scripts/build-androidbridge.sh
 ./gradlew :app:verifyAndroidBridge
 ```
 
@@ -34,29 +33,21 @@ Run:
 make publish VERSION=vX.Y.Z
 ```
 
-To publish with a specific `tcptun-go` tag or commit, set `TCPTUN_GO_VERSION`:
-
-```bash
-make publish VERSION=vX.Y.Z TCPTUN_GO_VERSION=vA.B.C
-```
-
-The release script resolves the requested ref, rebuilds the Bridge from a temporary
-clean worktree, updates `bridge.lock`, and includes that lock change in the release
-commit. `TCPTUN_GO_DIR` can still be used to select the local Go checkout, and
-`TCPTUN_GO_REMOTE` selects the remote used to fetch the requested ref.
-
 For a local commit and tag without pushing:
 
 ```bash
 ./scripts/release.sh vX.Y.Z --no-push
 ```
 
-The formal script has no test-skip mode and rejects `ALLOW_UNPINNED_BRIDGE=1`. Before
-changing the version it verifies a clean worktree, required branch, remote alignment,
-nonexistent local/remote tag, signing configuration, `bridge.lock`, the clean pinned Go
-checkout, a reproducible AAR rebuild, and strict embedded provenance. It then runs
-`qualityGate`, strict Bridge verification, and `bundleRelease` before creating the
-release commit and annotated tag.
+The formal script has no test-skip mode. Before changing the version it verifies a clean
+worktree, required branch, remote alignment, nonexistent local/remote tag, signing configuration,
+and strict bundled-Bridge provenance. It then runs `qualityGate`, updates the app version,
+and runs `bundleRelease` before creating the release commit and annotated tag. It never checks out
+tcptun-go, invokes Go/gomobile, changes `bridge.lock`, or regenerates the AAR.
+
+Upgrading the Bridge is a separate maintainer workflow: choose a tcptun-go commit, update
+`bridge.lock`, run `scripts/build-androidbridge.sh` from a clean checkout at that exact commit,
+verify the result, and review/commit the lock and AAR together before starting an app release.
 
 ## Signed device-install helper
 
@@ -67,8 +58,8 @@ sh release.bash
 ```
 
 It requires signing and an attached device, and runs `qualityGate`, strict Bridge
-verification, and `assembleRelease`. `BUILD_BRIDGE=1` can rebuild from the latest
-configured `tcptun-go` branch in a temporary worktree before those gates.
+verification, and `assembleRelease`. The helper is unchanged and retains its explicit
+`BUILD_BRIDGE=1` maintainer option; the formal `make publish` workflow never uses it.
 
 Release builds enable R8/resource shrinking. `bundleRelease` also creates a native
 debug-symbol ZIP through `packageReleaseNativeSymbols`.

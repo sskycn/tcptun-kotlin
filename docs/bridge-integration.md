@@ -27,7 +27,28 @@ plus `EncodeProxyAccount`, `DecodeProxyAccount`, and `EncodeProxyAccountQRCode` 
 proxy account. The A1 methods use the strict `{username,password}` DTO only at the Bridge boundary;
 JSON is not the share wire.
 
-## Building the AAR
+## Bundled AAR and provenance
+
+`app/libs/androidbridge.aar` is a version-controlled release input. A fresh clone uses it directly
+for development, CI, and Android releases without a tcptun-go checkout or Go toolchain.
+
+`bridge.lock` pins the expected core commit and Bridge API version. The AAR embeds
+`bridge-version.properties` containing the full tcptun-go commit, `git describe` version,
+clean-tree flag, and Bridge API version. All important build/check paths run strict verification;
+a missing, damaged, dirty, or mismatched artifact is a build error.
+
+Verify the bundled artifact with:
+
+```bash
+./gradlew :app:verifyAndroidBridge
+./gradlew :app:verifyAndroidBridge -PexpectedCoreCommit=<full-tcptun-go-commit>
+```
+
+## Updating the AAR
+
+Changing the Bridge is an explicit maintainer operation, separate from normal app builds and
+releases. First select the desired tcptun-go commit and update `bridge.lock`, then use a clean
+checkout at exactly that commit:
 
 ```bash
 ./scripts/build-androidbridge.sh
@@ -35,21 +56,9 @@ TCPTUN_GO_DIR=/path/to/tcptun-go ./scripts/build-androidbridge.sh
 ```
 
 The wrapper defaults to `armeabi-v7a`, `arm64-v8a`, and `x86_64`, matching Gradle filters.
-The generated file is `app/libs/androidbridge.aar` and is ignored by Git.
-The wrapper embeds `bridge-version.properties` in the AAR after a successful build. It records
-the full tcptun-go commit, `git describe` version, and integer Bridge API version; no wall-clock
-timestamp is included so identical inputs remain reproducible.
-
-Verify a locally built artifact with:
-
-```bash
-./gradlew :app:verifyAndroidBridge
-./gradlew :app:verifyAndroidBridge -PexpectedCoreCommit=<full-tcptun-go-commit>
-```
-
-`assembleRelease` and `bundleRelease` depend on strict verification. Debug quality gates use a
-warning-only verifier so Android-only CI can test the Kotlin control plane without manufacturing a
-fake native artifact. Bridge and managed-device CI build the real AAR in a separate job.
+The wrapper replaces `app/libs/androidbridge.aar` and embeds its provenance metadata after a
+successful build. No wall-clock timestamp is included so identical inputs remain reproducible.
+Verify the result, then review and commit `bridge.lock` and the AAR together.
 
 ## Compatibility rules
 

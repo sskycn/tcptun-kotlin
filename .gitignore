@@ -18,7 +18,6 @@ signing.properties
 captures/
 .externalNativeBuild/
 .cxx/
-app/libs/androidbridge.aar
 app/libs/androidbridge-sources.jar
 *.apk
 *.ap_

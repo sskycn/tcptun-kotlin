@@ -34,6 +34,11 @@ class BridgeLockVerificationTest {
 
         val mismatched = createAar("0".repeat(40), api, dirty = false)
         assertFalse(verify(root, mismatched) == 0)
+
+        val damaged = temporaryFolder.newFile("damaged.aar").apply {
+            writeText("not a ZIP archive")
+        }
+        assertFalse(verify(root, damaged) == 0)
     }
 
     @Test
@@ -99,6 +104,16 @@ class BridgeLockVerificationTest {
     private fun createAar(sha: String, api: String, dirty: Boolean): File {
         val aar = temporaryFolder.newFile("bridge-${temporaryFolder.root.listFiles()?.size}.aar")
         ZipOutputStream(aar.outputStream()).use { zip ->
+            listOf(
+                "classes.jar",
+                "jni/armeabi-v7a/libgojni.so",
+                "jni/arm64-v8a/libgojni.so",
+                "jni/x86_64/libgojni.so",
+            ).forEach { name ->
+                zip.putNextEntry(ZipEntry(name))
+                zip.write(byteArrayOf(0))
+                zip.closeEntry()
+            }
             zip.putNextEntry(ZipEntry("bridge-version.properties"))
             zip.write(
                 buildString {

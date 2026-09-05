@@ -9,6 +9,7 @@ tasks.register("qualityGate") {
     group = "verification"
     description = "Runs all source-quality checks required by CI and formal releases."
     dependsOn(
+        ":app:verifyAndroidBridge",
         ":app:testDebugUnitTest",
         ":app:lintDebug",
         ":app:lintRelease",

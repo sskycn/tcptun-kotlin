@@ -7,7 +7,7 @@ case "${1:-}" in
   --verify-release) PREFLIGHT_MODE=release; shift ;;
 esac
 [ "$#" -eq 0 ] || {
-  echo "usage: scripts/build-androidbridge.sh [--verify-lock|--verify-release]" >&2
+  echo "usage (maintainers only): scripts/build-androidbridge.sh [--verify-lock|--verify-release]" >&2
   exit 2
 }
 

@@ -154,7 +154,7 @@ android {
 }
 
 dependencies {
-    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
+    implementation(files("libs/androidbridge.aar"))
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.camera.camera2)
@@ -218,32 +218,26 @@ val bridgeAar = layout.projectDirectory.file("libs/androidbridge.aar")
 val expectedCoreCommit = providers.gradleProperty("expectedCoreCommit")
     .orElse(providers.environmentVariable("EXPECTED_CORE_COMMIT"))
 
-fun registerBridgeVerification(name: String, strict: Boolean) = tasks.register<Exec>(name) {
+val verifyAndroidBridge = tasks.register<Exec>("verifyAndroidBridge") {
     group = "verification"
-    description = if (strict) {
-        "Verifies androidbridge.aar provenance and API compatibility."
-    } else {
-        "Warns when the debug androidbridge.aar has unverifiable provenance."
-    }
-    inputs.file(bridgeAar).optional()
+    description = "Verifies the bundled androidbridge.aar provenance and API compatibility."
+    inputs.file(bridgeAar)
     inputs.file(bridgeLock)
     inputs.property("expectedCoreCommit", expectedCoreCommit.orNull.orEmpty())
     commandLine(
         "bash",
         rootProject.layout.projectDirectory.file("scripts/verify-androidbridge.sh").asFile.absolutePath,
-        if (strict) "strict" else "warning",
+        "strict",
         bridgeAar.asFile.absolutePath,
         bridgeLock.asFile.absolutePath,
         expectedCoreCommit.orNull.orEmpty(),
     )
 }
 
-val verifyAndroidBridge = registerBridgeVerification("verifyAndroidBridge", strict = true)
-val verifyAndroidBridgeDebug = registerBridgeVerification("verifyAndroidBridgeDebug", strict = false)
-
 tasks.configureEach {
     when (name) {
         "assembleRelease", "bundleRelease" -> dependsOn(verifyAndroidBridge, requireReleaseSigning)
-        "assembleDebug", "testDebugUnitTest", "lintDebug" -> dependsOn(verifyAndroidBridgeDebug)
+        "assembleDebug", "testDebugUnitTest", "lintDebug", "lintRelease" ->
+            dependsOn(verifyAndroidBridge)
     }
 }

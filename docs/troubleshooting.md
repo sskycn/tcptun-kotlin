@@ -2,14 +2,17 @@
 
 ## AAR missing or Engine method unavailable
 
-Build the bridge from the neighboring Go checkout:
+The Bridge is tracked in Git. Restore and verify the bundled artifact:
 
 ```bash
-./scripts/build-androidbridge.sh
+git restore app/libs/androidbridge.aar
+./gradlew :app:verifyAndroidBridge --no-daemon
 ```
 
 Check that `app/libs/androidbridge.aar` contains the expected Android ABIs. The app reports
-missing AAR and missing Engine methods separately.
+missing AAR and missing Engine methods separately. Rebuilding via
+`scripts/build-androidbridge.sh` is a maintainer operation only when intentionally updating the
+locked Bridge.
 
 ## VPN remains in cleanup pending
 
