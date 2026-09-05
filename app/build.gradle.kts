@@ -215,6 +215,10 @@ tasks.named("check").configure {
 }
 
 val bridgeAar = layout.projectDirectory.file("libs/androidbridge.aar")
+check(bridgeAar.asFile.isFile) {
+    "Bundled Android Bridge AAR is missing: ${bridgeAar.asFile.absolutePath}. " +
+        "Restore the tracked app/libs/androidbridge.aar file from Git."
+}
 val expectedCoreCommit = providers.gradleProperty("expectedCoreCommit")
     .orElse(providers.environmentVariable("EXPECTED_CORE_COMMIT"))
 
@@ -236,6 +240,8 @@ val verifyAndroidBridge = tasks.register<Exec>("verifyAndroidBridge") {
 
 tasks.configureEach {
     when (name) {
+        "preDebugBuild", "preReleaseBuild", "preBenchmarkBuild" ->
+            dependsOn(verifyAndroidBridge)
         "assembleRelease", "bundleRelease" -> dependsOn(verifyAndroidBridge, requireReleaseSigning)
         "assembleDebug", "testDebugUnitTest", "lintDebug", "lintRelease" ->
             dependsOn(verifyAndroidBridge)

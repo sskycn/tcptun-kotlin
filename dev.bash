@@ -1,8 +1,6 @@
 #!/bin/bash
 set -e
 
-./scripts/build-androidbridge.sh
-
 ./gradlew installDebug
 
 # adb install app/build/outputs/apk/release/app-release.apk

@@ -35,10 +35,18 @@ class BridgeLockVerificationTest {
         val mismatched = createAar("0".repeat(40), api, dirty = false)
         assertFalse(verify(root, mismatched) == 0)
 
+        val apiMismatched = createAar(sha, (api.toInt() + 1).toString(), dirty = false)
+        assertFalse(verify(root, apiMismatched) == 0)
+
+        val missingMetadata = createAar(sha, api, dirty = false, includeMetadata = false)
+        assertFalse(verify(root, missingMetadata) == 0)
+
         val damaged = temporaryFolder.newFile("damaged.aar").apply {
             writeText("not a ZIP archive")
         }
         assertFalse(verify(root, damaged) == 0)
+
+        assertFalse(verify(root, valid, mode = "warning") == 0)
     }
 
     @Test
@@ -101,7 +109,12 @@ class BridgeLockVerificationTest {
         assertEquals(0, releasePreflight(fixture))
     }
 
-    private fun createAar(sha: String, api: String, dirty: Boolean): File {
+    private fun createAar(
+        sha: String,
+        api: String,
+        dirty: Boolean,
+        includeMetadata: Boolean = true,
+    ): File {
         val aar = temporaryFolder.newFile("bridge-${temporaryFolder.root.listFiles()?.size}.aar")
         ZipOutputStream(aar.outputStream()).use { zip ->
             listOf(
@@ -114,25 +127,32 @@ class BridgeLockVerificationTest {
                 zip.write(byteArrayOf(0))
                 zip.closeEntry()
             }
-            zip.putNextEntry(ZipEntry("bridge-version.properties"))
-            zip.write(
-                buildString {
-                    appendLine("coreCommit=$sha")
-                    appendLine("coreVersion=test${if (dirty) "-dirty" else ""}")
-                    appendLine("coreDirty=$dirty")
-                    appendLine("bridgeApiVersion=$api")
-                }.toByteArray(),
-            )
-            zip.closeEntry()
+            if (includeMetadata) {
+                zip.putNextEntry(ZipEntry("bridge-version.properties"))
+                zip.write(
+                    buildString {
+                        appendLine("coreCommit=$sha")
+                        appendLine("coreVersion=test${if (dirty) "-dirty" else ""}")
+                        appendLine("coreDirty=$dirty")
+                        appendLine("bridgeApiVersion=$api")
+                    }.toByteArray(),
+                )
+                zip.closeEntry()
+            }
         }
         return aar
     }
 
-    private fun verify(root: File, aar: File, assertedCommit: String? = null): Int = ProcessBuilder(
+    private fun verify(
+        root: File,
+        aar: File,
+        assertedCommit: String? = null,
+        mode: String = "strict",
+    ): Int = ProcessBuilder(
         buildList {
             add("bash")
             add(File(root, "scripts/verify-androidbridge.sh").absolutePath)
-            add("strict")
+            add(mode)
             add(aar.absolutePath)
             add(File(root, "bridge.lock").absolutePath)
             assertedCommit?.let(::add)

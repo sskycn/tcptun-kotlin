@@ -58,8 +58,8 @@ sh release.bash
 ```
 
 It requires signing and an attached device, and runs `qualityGate`, strict Bridge
-verification, and `assembleRelease`. The helper is unchanged and retains its explicit
-`BUILD_BRIDGE=1` maintainer option; the formal `make publish` workflow never uses it.
+verification, and `assembleRelease` against the bundled AAR. It does not update or rebuild the
+Bridge.
 
 Release builds enable R8/resource shrinking. `bundleRelease` also creates a native
 debug-symbol ZIP through `packageReleaseNativeSymbols`.
