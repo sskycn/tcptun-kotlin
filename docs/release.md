@@ -64,6 +64,30 @@ Bridge.
 Release builds enable R8/resource shrinking. `bundleRelease` also creates a native
 debug-symbol ZIP through `packageReleaseNativeSymbols`.
 
+## GitHub Releases
+
+Pushing an annotated tag in the `vX.Y.Z` format starts
+`.github/workflows/release.yml`. It builds signed APKs in parallel for
+`arm64-v8a`, `armeabi-v7a`, and `x86_64`, then publishes the APKs and SHA-256
+checksums to the matching GitHub Release. Tags containing a prerelease suffix,
+such as `v0.6.0-rc.1`, are published as prereleases.
+
+The repository must have these Actions Secrets configured before pushing a tag:
+
+- `TCPTUN_RELEASE_KEYSTORE_BASE64`: base64-encoded release `.jks` file.
+- `TCPTUN_RELEASE_STORE_PASSWORD`
+- `TCPTUN_RELEASE_KEY_ALIAS`
+- `TCPTUN_RELEASE_KEY_PASSWORD`
+
+For example, encode the keystore locally with:
+
+```bash
+base64 -i tcptun-release.jks | pbcopy
+```
+
+The workflow derives `versionName` and Android `versionCode` from the tag, so
+the tag should be created through the formal release process above.
+
 ## Compatibility checklist
 
 - Confirm the AAR ABI set matches Gradle filters.
