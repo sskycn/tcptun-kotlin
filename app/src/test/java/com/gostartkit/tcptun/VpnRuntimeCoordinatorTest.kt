@@ -1181,7 +1181,7 @@ class VpnRuntimeCoordinatorTest {
             assertTrue(completed.await(2, TimeUnit.SECONDS))
 
             assertEquals(listOf(1, 2), order)
-            assertEquals(0, coordinator.inFlight)
+            awaitInFlight(coordinator)
         } finally {
             executor.shutdownNow()
         }
