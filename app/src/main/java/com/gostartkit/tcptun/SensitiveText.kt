@@ -18,7 +18,7 @@ private val UriUserInfo = Regex(
 )
 
 private val OpaqueProfileUri = Regex(
-    """\b((?:vmess|ss|ssr)://)[a-z0-9_+/%=-]+""",
+    """\b((?:ss|ssr)://)[a-z0-9_+/%=-]+""",
     RegexOption.IGNORE_CASE,
 )
 

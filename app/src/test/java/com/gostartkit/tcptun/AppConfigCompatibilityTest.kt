@@ -154,20 +154,16 @@ class AppConfigCompatibilityTest {
     }
 
     @Test
-    fun removedStructuredProtocolsRemainReadableButAreRejected() {
-        listOf("vless", "vmess", "trojan").forEach { protocol ->
-            val profile = AppConfig(
-                name = protocol,
-                serverHost = "edge.example.com",
-                serverPort = "443",
-                protocol = protocol,
-                token = "legacy-credential",
-            )
+    fun rejectsUnsupportedTunnelProtocol() {
+        val profile = AppConfig(
+            name = "unsupported",
+            serverHost = "edge.example.com",
+            serverPort = "443",
+            protocol = "unsupported",
+            token = "credential",
+        )
 
-            assertEquals(protocol, profile.protocol)
-            assertEquals("legacy-credential", profile.token)
-            assertEquals("tcptun-go v0.5.0 no longer supports $protocol", profile.validate())
-        }
+        assertEquals("unsupported protocol: unsupported", profile.validate())
     }
 
     @Test
@@ -182,8 +178,8 @@ class AppConfigCompatibilityTest {
         val profile = resumableRealityProfile()
 
         assertEquals(
-            "tcptun-go v0.5.0 no longer supports vless",
-            profile.copy(protocol = "vless").validate(),
+            "unsupported protocol: unsupported",
+            profile.copy(protocol = "unsupported").validate(),
         )
         assertEquals(
             VpnTunnelConfidentialityError,

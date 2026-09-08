@@ -72,7 +72,7 @@ internal object ProfileDeepLinkCodec {
         if (profileUri != profileUri.trim()) error("non-canonical profile URI")
         if (profileUri.isBlank() || profileUri.length > MaxProfileUriLength) error("invalid profile payload length")
         val profileScheme = Uri.parse(profileUri).scheme?.lowercase(Locale.ROOT)
-        if (profileScheme !in SupportedProfileUriSchemes && profileScheme !in RemovedTunnelProtocols) {
+        if (profileScheme !in SupportedProfileUriSchemes) {
             error("unsupported profile URI")
         }
         profileUri

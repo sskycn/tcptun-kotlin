@@ -1189,7 +1189,7 @@ class AndroidBridgeContractTest {
     }
 
     @Test
-    fun strictConfigUsesNativeTokenAndRejectsRemovedProtocols() {
+    fun strictConfigUsesNativeTokenAndRejectsUnsupportedProtocols() {
         val token = "native-token"
         val localOnly = JSONObject(
             AppConfig(
@@ -1206,16 +1206,14 @@ class AndroidBridgeContractTest {
         assertEquals("[2001:db8::1]:443", localOnlyOutbounds.getJSONObject(0).getJSONArray("address").getString(0))
         assertEquals(2, localOnlyOutbounds.length())
 
-        RemovedTunnelProtocols.forEach { removed ->
-            assertTrue(runCatching {
-                AppConfig(
+        assertTrue(runCatching {
+            AppConfig(
                 serverHost = "192.0.2.1",
                 serverPort = "443",
-                    token = "legacy-credential",
-                    protocol = removed,
-                ).toBridgeJson(localListenAddr = "0.0.0.0:18082")
-            }.isFailure)
-        }
+                token = "credential",
+                protocol = "unsupported",
+            ).toBridgeJson(localListenAddr = "0.0.0.0:18082")
+        }.isFailure)
     }
 
     @Test

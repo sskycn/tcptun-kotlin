@@ -14,10 +14,6 @@ internal val LocalProxyProtocols = listOf(DefaultLocalProxyProtocol, "mixed")
 internal val LogLevels = listOf("debug", DefaultLogLevel, "warn", "error", "off")
 internal val AndroidTunNetworks = listOf("tcp", "udp")
 internal const val MaxProfileIdLength = 256
-internal val RemovedTunnelProtocols = setOf("vless", "vmess", "trojan")
-
-internal fun unsupportedTunnelProtocolMessage(protocol: String): String =
-    "tcptun-go v0.5.0 no longer supports ${protocol.trim().lowercase()}"
 
 /** Inbound tags matched by managed route rules. TUN always; local mixed/SOCKS when enabled. */
 internal fun managedRouteInboundTags(routeLocalProxyTraffic: Boolean): JSONArray =
@@ -198,11 +194,7 @@ data class AppConfig(
     ): String {
         validationError()?.let { error -> throw IllegalArgumentException(error) }
         require(protocol.trim().equals("native", ignoreCase = true)) {
-            if (protocol.trim().lowercase() in RemovedTunnelProtocols) {
-                unsupportedTunnelProtocolMessage(protocol)
-            } else {
-                "unsupported protocol: $protocol"
-            }
+            "unsupported protocol: $protocol"
         }
         val (listenHost, listenPort) = splitHostPort(localListenAddr)
         val normalizedListenAddr = joinHostPort(listenHost, listenPort)

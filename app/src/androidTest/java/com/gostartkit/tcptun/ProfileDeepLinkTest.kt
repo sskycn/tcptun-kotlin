@@ -141,12 +141,10 @@ class ProfileDeepLinkTest {
     }
 
     @Test
-    fun removedProtocolUrisFailWithoutConvertingCredentialsToNative() {
-        RemovedTunnelProtocols.forEach { protocol ->
-            val result = ProfileUriCodec.decode("$protocol://legacy-credential@example.com:443")
-            assertTrue(result.isFailure)
-            assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("no longer supports $protocol"))
-        }
+    fun unsupportedProfileUrisFailWithoutConvertingCredentialsToNative() {
+        val result = ProfileUriCodec.decode("unsupported://credential@example.com:443")
+
+        assertTrue(result.isFailure)
     }
 
     @Test

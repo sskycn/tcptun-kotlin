@@ -22,10 +22,6 @@ object ProfileUriCodec {
                     val profileUri = ProfileDeepLinkCodec.decode(trimmed).getOrThrow()
                     decode(profileUri).getOrThrow()
                 }
-                RemovedTunnelProtocols.any { trimmed.startsWith("$it://", ignoreCase = true) } -> {
-                    val protocol = trimmed.substringBefore(":").lowercase()
-                    error(unsupportedTunnelProtocolMessage(protocol))
-                }
                 trimmed.startsWith("native://", ignoreCase = true) -> decodeAuthorityProfile(trimmed)
                 else -> TcptunProfileCodec.decode(trimmed)
             }
@@ -108,7 +104,6 @@ object ProfileUriCodec {
         if (version.isNotBlank() && version != TcptunUriVersion) error("unsupported tcptun URI version: $version")
         val legacyProtocol = uri.getQueryParameter("protocol").orEmpty().trim().lowercase()
         if (legacyProtocol.isNotBlank() && legacyProtocol != "native") {
-            if (legacyProtocol in RemovedTunnelProtocols) error(unsupportedTunnelProtocolMessage(legacyProtocol))
             error("tcptun URI protocol must be native")
         }
         val type = uri.getQueryParameter("type").orEmpty()

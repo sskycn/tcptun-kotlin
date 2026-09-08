@@ -4,10 +4,8 @@ Supported direct schemes:
 
 - `native://`
 
-VLESS, VMess, and Trojan were removed from tcptun-go v0.4.0. Pasting or scanning one of those
-legacy URIs returns a protocol-specific unsupported error; its credential is never reinterpreted
-as a Native token. A legacy Native URI may contain `fp=` for compatibility, but the value is
-ignored and is absent from every new URI and T3 export.
+A legacy Native URI may contain `fp=` for compatibility, but the value is ignored and is absent
+from every new URI and T3 export.
 
 Native URIs use `carrier_mode=auto` and `carrier_prefer=adaptive|quic|tcp`. Unknown aliases fail
 closed. T3 represents auto mode and all three preference values for TLS and REALITY profiles.

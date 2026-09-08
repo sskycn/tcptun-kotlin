@@ -75,6 +75,11 @@ Updating the Bridge is a deliberate maintenance operation: choose a tcptun-go co
 and review/commit `bridge.lock` and `app/libs/androidbridge.aar` together. Normal Gradle builds,
 CI, and the formal app release workflow never regenerate it.
 
+## License
+
+Copyright © 2026 sskycn. This project is licensed under the GNU Affero General Public License,
+version 3.0 or later. See [LICENSE](LICENSE).
+
 ## tcptun-go authentication
 
 The Android bridge is generated from tcptun-go v0.5.0 commit
@@ -93,10 +98,8 @@ listener and mixed-protocol surfaces. Existing encrypted single-account settings
 automatically. Passwords remain in encrypted secret storage and listen-all cannot run without an
 account.
 
-tcptun-go v0.4.0 is Native-only for tunnel endpoints. Stored VLESS, VMess, and Trojan structured
-profiles remain readable but are marked unsupported and cannot start or export; they are never
-silently converted to Native. Legacy REALITY fingerprint values are ignored on read and are not
-written to storage, profile payloads, or runtime JSON. Arbitrary JSON profile import is rejected.
+Legacy REALITY fingerprint values are ignored on read and are not written to storage, profile
+payloads, or runtime JSON. Arbitrary JSON profile import is rejected.
 
 Android profiles are structured and Native-only. Every remote `VpnService` tunnel must use TLS or
 REALITY; `security=none`, Android ECH profiles, and legacy full Core JSON profiles are rejected or

@@ -15,13 +15,7 @@ internal fun AppConfig.validationError(): String? {
     if (serverHost.isBlank()) return "server address is required"
     val port = serverPort.toIntOrNull() ?: return "server port must be a number"
     if (port !in 1..65535) return "server port must be between 1 and 65535"
-    if (protocol != "native") {
-        return if (protocol.trim().lowercase() in RemovedTunnelProtocols) {
-            unsupportedTunnelProtocolMessage(protocol)
-        } else {
-            "unsupported protocol: $protocol"
-        }
-    }
+    if (protocol != "native") return "unsupported protocol: $protocol"
     if (transport !in AppConfig.Transports) return "unsupported transport: $transport"
     if (upstreamProtocol !in AppConfig.UpstreamProtocols) return "unsupported upstream protocol: $upstreamProtocol"
     if (token.isBlank()) return "native token is required"

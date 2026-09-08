@@ -64,7 +64,7 @@ available. Manual runs are still required for OEM lifecycle behavior.
 
 Test each of:
 
-- direct `native://` import and explicit rejection of legacy VLESS/VMess/Trojan URIs;
+- direct `native://` import;
 - QR import/export where the profile is representable;
 - `https://x.tcptun.com/v1#p=...` App Link;
 - invalid host/path/query/oversized/non-canonical links;

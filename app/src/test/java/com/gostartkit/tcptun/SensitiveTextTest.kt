@@ -24,12 +24,12 @@ class SensitiveTextTest {
 
     @Test
     fun redactsProfileUrisWithoutHidingOrdinaryEndpoints() {
-        val input = "native://token-value@example.com:443 vmess://YWJjZGVmZ2hpamts T3:Abcdefghijklmnop"
+        val input = "native://token-value@example.com:443 T3:Abcdefghijklmnop"
 
         val redacted = redactSensitiveText(input)
 
         assertEquals(
-            "native://<redacted>@example.com:443 vmess://<redacted> T3:<redacted>",
+            "native://<redacted>@example.com:443 T3:<redacted>",
             redacted,
         )
     }
